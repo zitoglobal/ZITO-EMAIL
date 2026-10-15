@@ -22,6 +22,7 @@ import { glossaryHash } from './glossary.js';
 import * as labels from './labels.js';
 import * as savedSearches from './saved_searches.js';
 import * as mailRules from './mail_rules.js';
+import * as contacts from './contacts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
@@ -1084,6 +1085,211 @@ app.delete(
 );
 
 app.get('/api/contacts', auth, (req, res) => res.json({ contacts: repo.searchContacts(req.user.id, String(req.query.q || '').trim()) }));
+
+// ---------- 联系人 / 客户主数据（切片 D） ----------
+app.get(
+  '/api/contact-persons',
+  auth,
+  wrap(async (req, res) => {
+    const data = contacts.listPersons(req.user.id, {
+      q: String(req.query.q || '').trim(),
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    res.json(data);
+  })
+);
+
+app.get(
+  '/api/contact-persons/resolve',
+  auth,
+  wrap(async (req, res) => {
+    const address = String(req.query.address || '').trim();
+    const data = contacts.resolveByAddress(req.user.id, address);
+    if (data.person) {
+      data.recent = contacts.recentForPerson(req.user.id, data.person.id, 5);
+    } else {
+      data.recent = [];
+    }
+    res.json(data);
+  })
+);
+
+app.get(
+  '/api/contact-persons/:id',
+  auth,
+  wrap(async (req, res) => {
+    const person = contacts.getPerson(req.user.id, Number(req.params.id));
+    if (!person) throw httpError(404, '联系人不存在');
+    const recent = contacts.recentForPerson(req.user.id, person.id, 8);
+    res.json({ person, recent });
+  })
+);
+
+app.post(
+  '/api/contact-persons',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      const person = contacts.createPerson(req.user.id, req.body || {});
+      emit(req.user.id, 'contacts', { action: 'create', id: person.id });
+      res.json({ person });
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.patch(
+  '/api/contact-persons/:id',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      const person = contacts.updatePerson(req.user.id, Number(req.params.id), req.body || {});
+      emit(req.user.id, 'contacts', { action: 'update', id: person.id });
+      res.json({ person });
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.delete(
+  '/api/contact-persons/:id',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      contacts.deletePerson(req.user.id, Number(req.params.id));
+      emit(req.user.id, 'contacts', { action: 'delete', id: Number(req.params.id) });
+      res.json({ ok: true });
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.post(
+  '/api/contact-persons/merge',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      const person = contacts.mergePersons(req.user.id, req.body?.fromId, req.body?.toId);
+      emit(req.user.id, 'contacts', { action: 'merge', id: person.id });
+      res.json({ person });
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.post(
+  '/api/contact-persons/:id/addresses',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      const person = contacts.addAddress(req.user.id, Number(req.params.id), req.body?.address, {
+        makePrimary: !!req.body?.makePrimary,
+      });
+      emit(req.user.id, 'contacts', { action: 'address', id: person.id });
+      res.json({ person });
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.delete(
+  '/api/contact-persons/:id/addresses/:addr',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      const person = contacts.removeAddress(req.user.id, Number(req.params.id), decodeURIComponent(req.params.addr));
+      emit(req.user.id, 'contacts', { action: 'address', id: person.id });
+      res.json({ person });
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.post(
+  '/api/contact-persons/:id/primary',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      const person = contacts.setPrimaryAddress(req.user.id, Number(req.params.id), req.body?.address);
+      res.json({ person });
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.post(
+  '/api/contact-persons/:id/tags',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      const person = contacts.setPersonTags(req.user.id, Number(req.params.id), {
+        add: req.body?.add || [],
+        remove: req.body?.remove || [],
+      });
+      res.json({ person });
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.get('/api/contact-tags', auth, (req, res) =>
+  res.json({ tags: contacts.listContactTags(req.user.id), colors: contacts.CONTACT_TAG_COLORS, presets: contacts.TRADE_CONTACT_TAG_PRESETS })
+);
+
+app.post(
+  '/api/contact-tags',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      const tag = contacts.createContactTag(req.user.id, req.body || {});
+      res.json({ tag, tags: contacts.listContactTags(req.user.id) });
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.delete(
+  '/api/contact-tags/:id',
+  auth,
+  wrap(async (req, res) => {
+    try {
+      const result = contacts.deleteContactTag(req.user.id, Number(req.params.id));
+      res.json(result);
+    } catch (e) {
+      if (e.status) throw httpError(e.status, e.message);
+      throw e;
+    }
+  })
+);
+
+app.post(
+  '/api/contact-tags/presets',
+  auth,
+  wrap(async (req, res) => {
+    const result = contacts.applyContactTagPresets(req.user.id);
+    res.json(result);
+  })
+);
+
 
 app.get('/api/templates', auth, (req, res) => res.json({ templates: repo.listTemplates(req.user.id) }));
 app.post(

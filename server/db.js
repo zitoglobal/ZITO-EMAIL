@@ -252,3 +252,82 @@ CREATE INDEX IF NOT EXISTS idx_mail_rules_user_pos ON mail_rules(user_id, enable
     db.exec('ALTER TABLE messages ADD COLUMN skip_inbox INTEGER NOT NULL DEFAULT 0');
   }
 }
+
+// ---------- 联系人 / 客户主数据（切片 D） ----------
+db.exec(`
+CREATE TABLE IF NOT EXISTS contact_persons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  display_name TEXT NOT NULL DEFAULT '',
+  company TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  primary_address TEXT NOT NULL COLLATE NOCASE,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contact_persons_user ON contact_persons(user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS contact_addresses (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  address TEXT NOT NULL COLLATE NOCASE,
+  person_id INTEGER NOT NULL REFERENCES contact_persons(id) ON DELETE CASCADE,
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'manual',
+  name TEXT NOT NULL DEFAULT '',
+  score INTEGER NOT NULL DEFAULT 0,
+  last_at INTEGER,
+  PRIMARY KEY (user_id, address)
+);
+CREATE INDEX IF NOT EXISTS idx_contact_addresses_person ON contact_addresses(person_id);
+
+CREATE TABLE IF NOT EXISTS contact_tags (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  color TEXT NOT NULL DEFAULT '#0a66ff',
+  created_at INTEGER NOT NULL,
+  UNIQUE(user_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS contact_tag_map (
+  person_id INTEGER NOT NULL REFERENCES contact_persons(id) ON DELETE CASCADE,
+  tag_id INTEGER NOT NULL REFERENCES contact_tags(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (person_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_contact_tag_map_tag ON contact_tag_map(tag_id);
+`);
+
+// 一次性：旧 contacts → Person（可重复执行，已有地址则跳过）
+{
+  const pending = db
+    .prepare(
+      `SELECT c.user_id, c.address, c.name, c.score, c.last_at
+       FROM contacts c
+       WHERE NOT EXISTS (
+         SELECT 1 FROM contact_addresses a WHERE a.user_id = c.user_id AND a.address = c.address COLLATE NOCASE
+       )`
+    )
+    .all();
+  if (pending.length) {
+    const insPerson = db.prepare(
+      `INSERT INTO contact_persons (user_id, display_name, company, note, primary_address, created_at, updated_at)
+       VALUES (?, ?, '', '', ?, ?, ?)`
+    );
+    const insAddr = db.prepare(
+      `INSERT INTO contact_addresses (user_id, address, person_id, is_primary, source, name, score, last_at)
+       VALUES (?, ?, ?, 1, 'auto', ?, ?, ?)`
+    );
+    const migrate = db.transaction((rows) => {
+      for (const r of rows) {
+        const addr = String(r.address || '').trim().toLowerCase();
+        if (!addr) continue;
+        const t = r.last_at || Date.now();
+        const name = String(r.name || '').trim();
+        const info = insPerson.run(r.user_id, name, addr, t, t);
+        insAddr.run(r.user_id, addr, Number(info.lastInsertRowid), name, r.score || 0, t);
+      }
+    });
+    migrate(pending);
+  }
+}

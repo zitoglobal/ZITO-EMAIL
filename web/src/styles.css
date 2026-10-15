@@ -1922,3 +1922,81 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .mail-rule-list-row.off { opacity: 0.55; }
 .mail-rule-order { display: flex; flex-direction: column; gap: 0; }
 .mail-rule-order .icon-btn { width: 26px; height: 22px; }
+
+/* ---------- 联系人 / 客户主数据（切片 D） ---------- */
+.contact-search {
+  display: flex; align-items: center; gap: 8px;
+  margin: 10px 0 12px; padding: 0 10px;
+  height: 36px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+}
+.contact-search input {
+  flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px;
+}
+.contact-layout {
+  display: grid; grid-template-columns: minmax(200px, 1fr) minmax(220px, 1.1fr);
+  gap: 12px; min-height: 320px; max-height: 480px;
+}
+@media (max-width: 720px) {
+  .contact-layout { grid-template-columns: 1fr; max-height: none; }
+}
+.contact-list-pane {
+  overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--panel, var(--bg));
+}
+.contact-detail-pane {
+  overflow: auto; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--panel, var(--bg));
+}
+.contact-row {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  padding: 10px 12px; border: 0; border-bottom: 1px solid var(--border);
+  background: transparent; color: inherit; text-align: left; cursor: pointer;
+}
+.contact-row:hover { background: var(--hover, rgba(0,0,0,.04)); }
+.contact-row.active { background: color-mix(in srgb, var(--accent, #0a66ff) 10%, transparent); }
+.contact-row-main { flex: 1; min-width: 0; }
+.contact-row-main b { display: block; font-size: 13px; font-weight: 600; }
+.contact-row-main small {
+  display: block; color: var(--muted); font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.contact-row-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.contact-row-meta .vip-ico { color: var(--vip, #ca8a04); }
+.contact-create-form {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;
+  padding: 10px; border: 1px dashed var(--border); border-radius: 12px;
+}
+.contact-create-form input { flex: 1 1 140px; min-width: 120px; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); }
+.contact-detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.contact-detail-head b { display: block; font-size: 14px; }
+.contact-detail-head small { color: var(--muted); font-size: 12px; }
+.contact-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+.contact-field input, .contact-field textarea, .customer-note {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; resize: vertical;
+}
+.contact-addr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.contact-addr-list li {
+  display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text);
+}
+.contact-addr-list .addr { flex: 1; min-width: 0; word-break: break-all; }
+.contact-addr-list.compact li { font-size: 11px; }
+.contact-tag-picks { display: flex; flex-wrap: wrap; gap: 6px; }
+.contact-tag-picks.compact { gap: 4px; }
+.chip-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--tag-c, #0a66ff) 35%, var(--border));
+  background: color-mix(in srgb, var(--tag-c, #0a66ff) 12%, transparent);
+  color: var(--text); font-size: 12px; cursor: pointer;
+}
+.chip-tag.on { border-color: var(--tag-c, #0a66ff); font-weight: 600; }
+.chip-tag.xs { font-size: 10px; padding: 1px 6px; }
+.contact-tag-catalog { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.contact-merge-row { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+.contact-merge-row select {
+  flex: 1; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font-size: 13px;
+}
+.avatar.lg { width: 40px; height: 40px; font-size: 14px; }
+.avatar.sm { width: 28px; height: 28px; font-size: 11px; }
+.btn-ghost.xs, .icon-btn.xs { height: 24px; padding: 0 6px; font-size: 11px; }
+.glossary-add.compact { margin-top: 6px; }
+.btn-ghost.danger, .btn-ghost.sm.danger { color: var(--danger, #dc2626); }

@@ -1343,6 +1343,7 @@ export default function App() {
             listItem={selectedId ? selectedItem : null}
             onRule={setCustomerRule}
             onOpenThread={(mid) => setSelectedId(mid)}
+            onOpenContacts={() => setModal({ type: 'settings', tab: 'contacts' })}
           />
         </aside>
       )}
@@ -1360,6 +1361,7 @@ export default function App() {
               onRule={setCustomerRule}
               onOpenThread={(mid) => { setCustomerOpen(false); setSelectedId(mid); }}
               onClose={() => setCustomerOpen(false)}
+              onOpenContacts={() => { setCustomerOpen(false); setModal({ type: 'settings', tab: 'contacts' }); }}
             />
           </div>
         </>
