@@ -151,6 +151,14 @@ function replyCandidates(userId, mailboxId, since) {
        LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
        WHERE b.user_id = @userId AND (@mb = 'all' OR m.mailbox_id = @mb) AND f.special_use = '\\Inbox'
          AND m.date >= @since AND m.from_addr != b.email
+         AND (
+           IFNULL(m.skip_inbox, 0) = 0
+           OR EXISTS (
+             SELECT 1 FROM sender_rules sr
+             WHERE sr.user_id = b.user_id AND sr.kind = 'vip'
+               AND (sr.key = lower(m.from_addr) OR (sr.key LIKE '@%' AND lower(m.from_addr) LIKE '%' || sr.key))
+           )
+         )
        ORDER BY m.date DESC LIMIT 800`
     )
     .all({ userId, mb: mailboxId, since });

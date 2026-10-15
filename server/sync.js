@@ -3,6 +3,7 @@ import * as repo from './repo.js';
 import { emit } from './events.js';
 import { now } from './db.js';
 import * as priority from './priority.js';
+import * as mailRules from './mail_rules.js';
 
 const SYNC_SPECIALS = ['\\Inbox', '\\Sent', '\\Drafts', '\\Archive', '\\Junk', '\\Trash'];
 const INITIAL_INBOX = 400;
@@ -207,10 +208,27 @@ class Engine {
     if (isInbox && inserted.length) {
       repo.addContacts(mb.user_id, inserted.filter((m) => m.category === 'people').map((m) => m.from), 1);
     }
+    // 邮件规则：仅增量新信；首次全量同步不对历史邮件生效
+    if (inserted.length && !firstSync) {
+      try {
+        const { deferred } = mailRules.applyRulesForInserted(mb.user_id, mb.id, inserted);
+        await flushRuleDeferred(mb, deferred);
+      } catch (e) {
+        console.warn('[mail-rules]', mb.id, e?.message || e);
+      }
+    }
     emit(mb.user_id, 'sync', { mailboxId: mb.id, folder: path, added: inserted.length });
     if (isInbox && !firstSync) {
+      const skipIds = new Set(
+        inserted.length
+          ? repo
+              .getMessagesForUser(mb.user_id, inserted.map((m) => m.id))
+              .filter((r) => r.skip_inbox)
+              .map((r) => r.id)
+          : []
+      );
       const fresh = inserted
-        .filter((m) => !m.seen)
+        .filter((m) => !m.seen && !skipIds.has(m.id))
         .map((m) => ({ id: m.id, subject: m.subject, from: m.from, category: m.category, ...priority.importance(mb.user_id, m) }))
         .sort((a, b) => b.important - a.important);
       if (fresh.length) {
@@ -244,6 +262,48 @@ class Engine {
         return repo.upsertMessages(mb.id, path, items).length;
       });
     });
+  }
+}
+
+
+/** 执行规则引擎产生的 IMAP 副作用（标旗 / 移动） */
+async function flushRuleDeferred(mb, deferred = []) {
+  if (!deferred?.length) return;
+  const flagGroups = new Map();
+  const moves = [];
+  for (const d of deferred) {
+    if (!d || d.mailboxId !== mb.id) continue;
+    if (d.kind === 'flags') {
+      const key = d.folder + '\0' + JSON.stringify(d.flags || {});
+      if (!flagGroups.has(key)) flagGroups.set(key, { folder: d.folder, flags: d.flags, uids: [] });
+      flagGroups.get(key).uids.push(d.uid);
+    } else if (d.kind === 'move') {
+      moves.push(d);
+    }
+  }
+  for (const g of flagGroups.values()) {
+    try {
+      await imap.setFlags(mb, g.folder, [...new Set(g.uids)], g.flags);
+    } catch (_) {}
+  }
+  for (const m of moves) {
+    try {
+      if (!repo.getFolder(mb.id, m.dest) || m.dest === m.folder) continue;
+      const client = await imap.getClient(mb);
+      const lock = await client.getMailboxLock(m.folder);
+      let result;
+      try {
+        result = await client.messageMove(String(m.uid), m.dest, { uid: true });
+      } finally {
+        lock.release();
+      }
+      const nu = result?.uidMap?.get?.(m.uid);
+      if (nu && m.messageId) {
+        repo.patchMessages([m.messageId], { folder: m.dest, uid: nu, snooze_until: null });
+      } else if (m.messageId) {
+        repo.deleteMessageRows([m.messageId]);
+      }
+    } catch (_) {}
   }
 }
 
