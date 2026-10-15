@@ -39,6 +39,12 @@ function followUpBody(person, signature) {
 
 function loadView() {
   try {
+    // 大师设计 P0-1：一次性把默认主页迁到「今日待办」（用户之后仍可手动切回收件箱并记住）
+    if (!localStorage.getItem('zm_craft_home_v1')) {
+      localStorage.setItem('zm_craft_home_v1', '1');
+      localStorage.setItem('zm_view', JSON.stringify(DEFAULT_VIEW));
+      return { ...DEFAULT_VIEW };
+    }
     return JSON.parse(localStorage.getItem('zm_view')) || DEFAULT_VIEW;
   } catch {
     return DEFAULT_VIEW;
@@ -619,6 +625,8 @@ export default function App() {
     } catch {
       // ignore
     }
+    // 登录后默认进入今日待办作战台
+    setView(DEFAULT_VIEW);
     setBoot('ready');
   }
 
@@ -626,6 +634,7 @@ export default function App() {
     setModal(null);
     if (res.warning) notify(res.warning, 'error', null, 10_000);
     else notify(`已绑定 ${res.mailbox.email}，正在同步邮件…`, 'success');
+    setView(DEFAULT_VIEW);
     await loadState();
   }
 

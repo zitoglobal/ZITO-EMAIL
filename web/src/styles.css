@@ -627,6 +627,60 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .focus-foot b { color: var(--muted); }
 .focus-empty > svg { color: var(--accent); border-style: solid; border-color: var(--accent-soft); background: var(--accent-soft); }
 
+/* ---------- 大师设计 P0 craft：为何优先 + 一键处理/催单（仅新类） ---------- */
+.folder-today .folder-name { font-weight: 700; letter-spacing: -0.2px; }
+.folder-today .count-pill { font-size: 11.5px; min-width: 22px; height: 20px; }
+.why-priority {
+  align-self: flex-start; max-width: 100%; display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px;
+  margin-top: 5px; padding: 2px 0; font-size: 11.5px; color: var(--muted); line-height: 1.45;
+}
+.why-priority .why-label {
+  flex: none; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; text-transform: none;
+  color: var(--accent-ink); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; line-height: 16px;
+}
+.focus-ctas {
+  display: flex; flex-direction: column; align-items: stretch; gap: 4px; flex: none; align-self: center;
+  margin-left: 4px; margin-right: 2px; opacity: 0.92; transition: opacity 0.12s var(--ease);
+}
+.mail-row.focus-row:hover .focus-ctas { opacity: 1; }
+.focus-cta {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 28px; padding: 0 10px;
+  border-radius: 8px; font-size: 12px; font-weight: 650; letter-spacing: -0.1px; white-space: nowrap;
+  background: var(--accent); color: var(--on-accent); border: 0; box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 28%, transparent);
+  transition: background 0.12s, transform 0.12s var(--ease), box-shadow 0.12s;
+}
+.focus-cta:hover { background: color-mix(in srgb, var(--accent) 88%, #000); transform: translateY(-0.5px); }
+.focus-cta:active { transform: translateY(0); }
+.focus-cta-nudge {
+  background: color-mix(in srgb, var(--warn) 88%, #fff); color: #fff;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--warn) 28%, transparent);
+}
+.focus-cta-nudge:hover { background: var(--warn); }
+.focus-cta-quiet {
+  height: 26px; padding: 0 7px; background: transparent; color: var(--muted); box-shadow: none; border: 1px solid var(--hairline);
+}
+.focus-cta-quiet:hover { background: var(--hover); color: var(--text); }
+.mail-row.focus-row { padding-right: 12px; gap: 8px; }
+.mail-row.focus-row .row-actions { right: 88px; }
+.focus-progress.done .fp-bar i { background: linear-gradient(90deg, var(--success), var(--cyan)); }
+.fp-pct { color: var(--accent-ink); font-variant-numeric: tabular-nums; }
+.focus-empty-stats {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 8px;
+  margin-top: 10px; padding: 8px 14px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--hairline);
+  font-size: 12.5px; color: var(--muted);
+}
+.focus-empty-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+.focus-empty-stats .dot { color: var(--faint); }
+.focus-empty-pct { color: var(--accent-ink); font-weight: 650; }
+.focus-empty-hint { margin-top: 10px; max-width: 320px; line-height: 1.6; }
+.focus-empty-hint kbd {
+  display: inline-block; min-width: 1.25em; padding: 0 5px; margin: 0 1px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--panel); font-size: 11px; font-family: inherit; color: var(--text);
+  font-variant-numeric: tabular-nums; line-height: 18px; text-align: center;
+}
+.focus-craft .focus-stats .stat b { font-variant-numeric: tabular-nums; }
+
+
 /* 阅读区：等待回复提示 + 发件人画像 */
 .await-banner {
   display: flex; align-items: center; gap: 12px; padding: 11px 12px 11px 14px; margin-bottom: 18px; border-radius: 12px;

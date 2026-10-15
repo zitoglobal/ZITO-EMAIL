@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Search, RefreshCw, Star, Paperclip, MailOpen, Mail, Trash2, Archive, FolderInput, X, Menu, CornerUpLeft, Loader2, Inbox, Clock, Pin,
-  ServerCrash, ShieldAlert, CheckCheck, Crown, Flame, Hourglass, Sparkles, CheckCircle2, Reply, BellOff,
+  ServerCrash, ShieldAlert, CheckCheck, Crown, Flame, Hourglass, Sparkles, CheckCircle2, Reply, BellOff, Send,
 } from 'lucide-react';
 import {
-  CATEGORIES, SIGNALS, avatarColor, displayName, folderLabel, formatListDate, formatShortDateTime, initials, snoozePresets, sortFolders, waitText,
+  CATEGORIES, SIGNALS, avatarColor, displayName, folderLabel, formatListDate, formatShortDateTime, initials, snoozePresets, sortFolders, waitText, whyPriority,
 } from '../utils.js';
 import TimeMenu from './TimeMenu.jsx';
 
@@ -43,6 +43,7 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
   const focus = variant !== 'mail';
   const person = follow ? m.follow?.to : isSent ? m.to?.[0] || m.from : m.from;
   const p = m.priority;
+  const why = focus ? whyPriority(m, variant) : '';
   return (
     <div
       className={
@@ -96,17 +97,42 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
         {focus && m.aiNote && (
           <div className="ai-note"><Sparkles size={11} /> {m.aiNote.note}</div>
         )}
-        {(!compact || focus) && <Chips m={m} variant={variant} />}
+        {(!compact || focus) && !(focus && why) && <Chips m={m} variant={variant} />}
+        {why && (
+          <div className="why-priority" title="为何出现在今日待办">
+            <span className="why-label">为何优先</span>{why}
+          </div>
+        )}
         {!focus && m.category !== 'people' && m.specialUse === '\\Inbox' && (
           <span className={'cat-tag ' + m.category}>{m.category === 'notification' ? '通知' : '订阅'}</span>
         )}
       </div>
 
+      {focus && (
+        <div className="focus-ctas" onClick={(e) => e.stopPropagation()}>
+          {variant === 'reply' && (
+            <button type="button" className="focus-cta" title="已处理，无需回复 (D)" onClick={() => onAction([m.id], 'done')}>
+              <CheckCircle2 size={14} /> 处理
+            </button>
+          )}
+          {follow && (
+            <>
+              <button type="button" className="focus-cta focus-cta-nudge" title="写跟进催单" onClick={() => onFollowUp?.(m)}>
+                <Send size={14} /> 催单
+              </button>
+              <button type="button" className="focus-cta focus-cta-quiet" title="无需跟进" onClick={() => onAction([m.id], 'nofollow')}>
+                <BellOff size={14} />
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="row-actions" onClick={(e) => e.stopPropagation()}>
-        {variant === 'reply' && (
+        {!focus && variant === 'reply' && (
           <button title="已处理，无需回复" onClick={() => onAction([m.id], 'done')}><CheckCircle2 size={15} /></button>
         )}
-        {follow && (
+        {!focus && follow && (
           <>
             <button title="写跟进邮件" onClick={() => onFollowUp?.(m)}><Reply size={15} /></button>
             <button title="无需跟进" onClick={() => onAction([m.id], 'nofollow')}><BellOff size={15} /></button>
