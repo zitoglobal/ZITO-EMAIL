@@ -224,7 +224,14 @@ function Triage({ settings, onSave, notify }) {
         「今日待办」会把需要你回复的客户邮件按 <b>客户等级 × 邮件意图 × 等待时长</b> 自动排序。你发过邮件的联系人（及其公司域名）自动识别为老客户；
         订单、付款、投诉、紧急、询盘、样品、物流等中英文关键词会提高优先级；通知和订阅邮件自动降权。
       </p>
-      <Choice icon={Hourglass} label="回复时限" value={settings.replySlaHours} onChange={set('replySlaHours')} options={[[4, '4 小时'], [8, '8 小时'], [24, '24 小时'], [48, '48 小时']]} />
+      <Choice icon={Hourglass} label="默认回复时限" value={settings.replySlaHours} onChange={set('replySlaHours')} options={[[4, '4 小时'], [8, '8 小时'], [24, '24 小时'], [48, '48 小时']]} />
+      <div className="sla-tier-block">
+        <div className="sla-tier-title"><Crown size={14} /> 分层 SLA（VIP / 客户 / 新询盘）</div>
+        <p className="set-desc muted-note">超时标红与排序会按层级使用不同时限；未单独设置时回落到默认值。</p>
+        <Choice icon={Crown} label="VIP 客户" value={settings.slaVipHours ?? 4} onChange={set('slaVipHours')} options={[[2, '2 小时'], [4, '4 小时'], [8, '8 小时'], [12, '12 小时']]} />
+        <Choice icon={Hourglass} label="老客户" value={settings.slaCustomerHours ?? 24} onChange={set('slaCustomerHours')} options={[[8, '8 小时'], [12, '12 小时'], [24, '24 小时'], [48, '48 小时']]} />
+        <Choice icon={Sparkles} label="新询盘" value={settings.slaNewInquiryHours ?? 8} onChange={set('slaNewInquiryHours')} options={[[4, '4 小时'], [8, '8 小时'], [12, '12 小时'], [24, '24 小时']]} />
+      </div>
       <Choice icon={Send} label="对方未回复多久提醒跟进" value={settings.followupDays} onChange={set('followupDays')} options={[[2, '2 天'], [3, '3 天'], [5, '5 天'], [7, '7 天']]} />
       <Toggle icon={BellRing} label="超时提醒" desc="客户邮件超过回复时限仍未处理时主动提醒（每封只提醒一次）" checked={settings.remindOverdue} onChange={set('remindOverdue')} />
 

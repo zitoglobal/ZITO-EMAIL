@@ -7,6 +7,27 @@ const DAY = 24 * HOUR;
 const REPLY_WINDOW = 14 * DAY;
 const FOLLOW_WINDOW = 21 * DAY;
 
+/** 分层 SLA：VIP / 老客户 / 新询盘可不同时限；其余回落到 replySlaHours */
+export function slaFor(settings = {}, tier, signals = []) {
+  const base = Number(settings.replySlaHours) || 24;
+  if (tier === 'vip') return Number(settings.slaVipHours) || Math.min(4, base);
+  if (tier === 'new' && (signals || []).includes('inquiry')) {
+    return Number(settings.slaNewInquiryHours) || Math.min(8, base);
+  }
+  if (tier === 'customer') return Number(settings.slaCustomerHours) || base;
+  return base;
+}
+
+export function slaByTier(settings = {}) {
+  const base = Number(settings.replySlaHours) || 24;
+  return {
+    vip: Number(settings.slaVipHours) || Math.min(4, base),
+    customer: Number(settings.slaCustomerHours) || base,
+    inquiry: Number(settings.slaNewInquiryHours) || Math.min(8, base),
+    default: base,
+  };
+}
+
 /** 公共邮箱域名：不能按域名归并为同一家公司 */
 const FREE_DOMAINS = new Set([
   'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com', 'yahoo.co.jp', 'yahoo.co.uk', 'ymail.com',
@@ -114,7 +135,7 @@ export function scoreRow(idx, row, { slaHours = 24, at = now() } = {}) {
   if (TIER_LABEL[tier]) reasons.push(tier === 'new' && signals.includes('inquiry') ? '新询盘' : TIER_LABEL[tier]);
   for (const s of signals) if (SIGNAL_LABEL[s] && s !== 'question') reasons.push(SIGNAL_LABEL[s]);
   if (!direct && to.length) reasons.push('抄送我');
-  return { score, level, tier, signals, reasons, waitingHours: Math.round(waitingHours * 10) / 10, overdue };
+  return { score, level, tier, signals, reasons, waitingHours: Math.round(waitingHours * 10) / 10, overdue, slaHours };
 }
 
 // ---------- 今日待办 ----------
@@ -157,6 +178,7 @@ const handled = (r) => r.answered || r.done_at || r.snooze_until || (r.my_last &
 export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {}) {
   const at = now();
   const slaHours = Number(settings.replySlaHours) || 24;
+  const tiers = slaByTier(settings);
   const followDays = Number(settings.followupDays) || 3;
   const today = Number(dayStart) || new Date(new Date().setHours(0, 0, 0, 0)).getTime();
   const idx = relationIndex(userId);
@@ -180,7 +202,8 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     seenThread.add(tk);
     if (!person || handled(r)) continue;
     if (r.category === 'notification' && tier !== 'vip' && tier !== 'customer') continue;
-    const p = scoreRow(idx, r, { slaHours, at });
+    const sigs = signalsFrom(r);
+    const p = scoreRow(idx, r, { slaHours: slaFor(settings, tier, sigs), at });
     reply.push({ ...rowToMessage(r), priority: { ...p, company: companyOf(idx, { address: r.from_addr, name: r.from_name }) } });
   }
   reply.sort((a, b) => b.priority.score - a.priority.score || b.date - a.date);
@@ -228,22 +251,23 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       todayIn,
       handledToday: repliedToday + doneToday,
     },
-    settings: { slaHours, followDays },
+    settings: { slaHours, followDays, slaByTier: tiers },
   };
 }
 
 /** 普通列表的轻量标注：客户等级、业务意图、是否待回复 */
 export function decorate(userId, rows, settings = {}) {
   const idx = relationIndex(userId);
-  const slaHours = Number(settings.replySlaHours) || 24;
   const at = now();
   return rows.map((r) => {
     const m = rowToMessage(r);
     if (r.special_use !== '\\Inbox') return m;
     const tier = tierOf(idx, r.from_addr, r.category);
+    const signals = signalsFrom(r);
+    const sla = slaFor(settings, tier, signals);
     const awaiting = ['vip', 'customer', 'new'].includes(tier) && !handled(r) && at - r.date < REPLY_WINDOW;
     const waitingHours = (at - r.date) / HOUR;
-    return { ...m, tier, awaiting, overdue: awaiting && waitingHours >= slaHours };
+    return { ...m, tier, awaiting, overdue: awaiting && waitingHours >= sla, slaHours: sla };
   });
 }
 
@@ -274,6 +298,15 @@ export function senderInfo(userId, address) {
     )
     .get(a, a, userId, a, `%"${a}"%`, `%"${a}"%`);
   const rule = ruleFor(idx, a);
+  const recent = db
+    .prepare(
+      `SELECT m.subject, m.date FROM messages m
+       JOIN mailboxes b ON b.id = m.mailbox_id
+       WHERE b.user_id = ? AND m.from_addr = ?
+       ORDER BY m.date DESC LIMIT 3`
+    )
+    .all(userId, a)
+    .map((r) => ({ subject: r.subject || '(无主题)', date: r.date }));
   return {
     tier,
     rule: rule ? { key: rule.key, kind: rule.kind, name: rule.name } : null,
@@ -282,6 +315,7 @@ export function senderInfo(userId, address) {
     sent: idx.wrote.get(a) || 0,
     lastReceived: st?.last_received || null,
     lastSent: st?.last_sent || null,
+    recentSubjects: recent,
   };
 }
 

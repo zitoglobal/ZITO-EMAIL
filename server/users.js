@@ -13,6 +13,9 @@ const DEFAULT_SETTINGS = {
   readingPane: 'right',
   conversationView: true,
   replySlaHours: 24,
+  slaVipHours: 4,
+  slaCustomerHours: 24,
+  slaNewInquiryHours: 8,
   followupDays: 3,
   remindOverdue: true,
 };

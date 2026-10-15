@@ -77,8 +77,8 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
           {m.answered && !focus && <CornerUpLeft size={12} className="muted-icon" />}
           {m.hasAttachments && <Paperclip size={12} className="muted-icon" />}
           {variant === 'reply' && p ? (
-            <span className={'date wait' + (p.overdue ? ' over' : '')} title={`收到于 ${formatShortDateTime(m.date)}`}>
-              <Hourglass size={11} /> {waitText(p.waitingHours)}
+            <span className={'date wait' + (p.overdue ? ' over' : '')} title={`收到于 ${formatShortDateTime(m.date)}${p.slaHours != null ? ` · 时限 ${p.slaHours}h` : ''}`}>
+              <Hourglass size={11} /> {waitText(p.waitingHours)}{p.slaHours != null ? <span className="sla-inline">/{p.slaHours}h</span> : null}
             </span>
           ) : follow ? (
             <span className="date wait follow" title={`发出于 ${formatShortDateTime(m.date)}`}><Hourglass size={11} /> {m.follow.days} 天未回</span>

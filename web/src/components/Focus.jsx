@@ -22,6 +22,7 @@ export default function Focus({
   const follow = messages.filter((m) => m._section === 'follow');
   const stats = data?.stats;
   const sla = data?.settings?.slaHours || 24;
+  const slaTier = data?.settings?.slaByTier || { vip: 4, customer: sla, inquiry: 8, default: sla };
   const followDays = data?.settings?.followDays || 3;
   const multi = Object.keys(mailboxMap).length > 1;
   const overdue = reply.filter((m) => m.priority?.overdue).length;
@@ -79,7 +80,7 @@ export default function Focus({
           <button className="stat" onClick={() => jump('fs-reply')}>
             <b>{reply.length}</b><span>待回复</span>
           </button>
-          <button className={'stat' + (overdue ? ' danger' : '')} onClick={() => jump('fs-reply')} title={`超过 ${sla} 小时未回复`}>
+          <button className={'stat' + (overdue ? ' danger' : '')} onClick={() => jump('fs-reply')} title={`分层时限：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h`}>
             <b>{overdue}</b><span>已超时</span>
           </button>
           <button className={'stat' + (follow.length ? ' warn' : '')} onClick={() => jump('fs-follow')}>
@@ -100,9 +101,14 @@ export default function Focus({
             <button className={groupMode !== 'customer' ? 'on' : ''} onClick={() => setGroupMode('priority')}>按优先级</button>
             <button className={groupMode === 'customer' ? 'on' : ''} onClick={() => setGroupMode('customer')}>按客户</button>
           </div>
-          <span className="focus-legend" title={'排序依据：客户等级（VIP / 老客户 / 新询盘）＋ 邮件意图（订单、付款、投诉、紧急…）＋ 等待时长'}>
+          <span className="focus-legend" title={`排序依据：客户等级 × 意图 × 等待时长。分层 SLA：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h · 默认 ${slaTier.default}h`}>
             <Info size={12} /> 智能排序
           </span>
+        </div>
+        <div className="focus-sla-strip" title="按客户层级分层的回复时限">
+          <span className="focus-sla-chip vip"><Crown size={11} /> VIP {slaTier.vip}h</span>
+          <span className="focus-sla-chip">客户 {slaTier.customer}h</span>
+          <span className="focus-sla-chip new">新询盘 {slaTier.inquiry}h</span>
         </div>
       </header>
 
@@ -137,7 +143,7 @@ export default function Focus({
         )}
 
         {reply.length > 0 && (
-          <SectionHead id="fs-reply" title="需要你回复" count={reply.length} hint={`超过 ${sla} 小时标红`} />
+          <SectionHead id="fs-reply" title="需要你回复" count={reply.length} hint={`VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 询盘 ${slaTier.inquiry}h`} />
         )}
         {reply.map((m) => {
           const k = m.priority.company?.key;
