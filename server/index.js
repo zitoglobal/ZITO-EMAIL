@@ -932,6 +932,36 @@ app.post(
 );
 
 app.post(
+  '/api/ai/note',
+  auth,
+  wrap(async (req, res) => {
+    const row = messageOf(req, req.body.id);
+    if (req.body.clear) {
+      db.prepare('UPDATE messages SET ai_note = NULL WHERE id = ?').run(row.id);
+      return res.json({ ok: true, aiNote: null });
+    }
+    const summaryText = String(req.body.summary || req.body.note || '').trim();
+    if (!summaryText) throw httpError(400, '缺少摘要内容');
+    const note = String(req.body.note || summaryText).trim().slice(0, 120);
+    const payload = {
+      note,
+      urgency: ['high', 'medium', 'low'].includes(req.body.urgency) ? req.body.urgency : 'medium',
+      at: Date.now(),
+      pinned: true,
+      source: String(req.body.source || 'summarize').slice(0, 32),
+    };
+    if (req.body.summary) payload.summary = String(req.body.summary).slice(0, 2000);
+    if (Array.isArray(req.body.keyPoints)) payload.keyPoints = req.body.keyPoints.map((x) => String(x).slice(0, 200)).slice(0, 8);
+    if (Array.isArray(req.body.actionItems)) payload.actionItems = req.body.actionItems.map((x) => String(x).slice(0, 200)).slice(0, 8);
+    if (req.body.category) payload.category = String(req.body.category).slice(0, 40);
+    if (Array.isArray(req.body.quickReplies)) payload.quickReplies = req.body.quickReplies.map((x) => String(x).slice(0, 120)).slice(0, 5);
+    if (req.body.replyLanguage) payload.replyLanguage = String(req.body.replyLanguage).slice(0, 40);
+    db.prepare('UPDATE messages SET ai_note = ? WHERE id = ?').run(JSON.stringify(payload), row.id);
+    res.json({ ok: true, aiNote: payload });
+  })
+);
+
+app.post(
   '/api/ai/triage',
   auth,
   wrap(async (req, res) => {

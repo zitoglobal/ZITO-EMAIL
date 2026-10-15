@@ -256,11 +256,14 @@ export default function Composer({ initial, mailboxes, aiEnabled, onSend, onSave
     setAiBusy(true);
     try {
       const sig = mailbox?.signature || '';
+      const full = initial.aiContext && instruction === (initial.aiInstruction || aiPrompt)
+        ? initial.aiContext
+        : (initial.aiContext ? `${initial.aiContext}\n回复意图：${instruction}` : instruction);
       if (initial.sourceId && initial.mode !== 'forward') {
-        const r = await api('/ai/reply', { method: 'POST', body: { id: initial.sourceId, instruction, tone, language: lang, signature: sig } });
+        const r = await api('/ai/reply', { method: 'POST', body: { id: initial.sourceId, instruction: full, tone, language: lang, signature: sig } });
         editor.current.innerHTML = textToHtml(r.body);
       } else {
-        const r = await api('/ai/compose', { method: 'POST', body: { prompt: instruction, tone, language: lang, to, signature: sig } });
+        const r = await api('/ai/compose', { method: 'POST', body: { prompt: full, tone, language: lang, to, signature: sig } });
         if (r.subject && !subject.trim()) setSubject(r.subject);
         editor.current.innerHTML = textToHtml(r.body || '');
       }
@@ -416,6 +419,7 @@ export default function Composer({ initial, mailboxes, aiEnabled, onSend, onSave
         <div className="ai-compose">
           <div className="ai-compose-head">
             <Sparkles size={14} /> {initial.sourceId && initial.mode !== 'forward' ? 'AI 回复助手（已结合整个会话上下文）' : 'AI 写信助手'}
+            {initial.aiContext && <span className="ai-context-tag">已带入摘要</span>}
             <button className="c-link" onClick={() => setAiOpen(false)}>收起</button>
           </div>
           <textarea

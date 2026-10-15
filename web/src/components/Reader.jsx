@@ -7,7 +7,7 @@ import {
 import { api } from '../api.js';
 import {
   addrString, avatarColor, displayName, folderLabel, formatFullDate, formatListDate, formatSize, hasRemoteImages, initials,
-  relativeTime, replyIdeas, snoozePresets, sortFolders, textToHtml, waitText,
+  relativeTime, replyIdeas, smartReplyInstruction, snoozePresets, sortFolders, summaryFromAiNote, textToHtml, waitText,
 } from '../utils.js';
 import { buildComposeState, signatureHtml, toPayload } from '../compose.js';
 import MailFrame from './MailFrame.jsx';
@@ -157,7 +157,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
 }
 
 export default function Reader({
-  id, listItem, settings, aiEnabled, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp,
+  id, listItem, settings, aiEnabled, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp, onAiNote,
 }) {
   const [thread, setThread] = useState(null);
   const [details, setDetails] = useState({});
@@ -170,6 +170,7 @@ export default function Reader({
   const [menu, setMenu] = useState(null);
   const [quick, setQuick] = useState('');
   const [quickBusy, setQuickBusy] = useState(false);
+  const [pinning, setPinning] = useState(false);
   const alive = useRef(0);
   const scroller = useRef();
 
@@ -192,6 +193,7 @@ export default function Reader({
     setShowTranslated(false);
     setMenu(null);
     setQuick('');
+    setPinning(false);
     setExpanded(new Set([id]));
     scroller.current?.scrollTo(0, 0);
 
@@ -234,7 +236,13 @@ export default function Reader({
 
   useEffect(() => {
     if (msg) onLoaded?.(msg);
-    if (msg && aiEnabled && settings.autoSummary && !summary && !summaryLoading) runSummary();
+    if (!msg) return;
+    const cached = summaryFromAiNote(msg.aiNote);
+    if (cached && !summary) {
+      setSummary(cached);
+      return;
+    }
+    if (aiEnabled && settings.autoSummary && !summary && !summaryLoading && !msg.aiNote?.summary) runSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msg?.id]);
 
@@ -266,6 +274,64 @@ export default function Reader({
       notify(e.message, 'error');
     } finally {
       setTranslating(false);
+    }
+  }
+
+  const noteSource = msg?.aiNote || listItem?.aiNote;
+  const isPinned = !!(noteSource?.pinned || noteSource?.summary);
+
+  function openSmartReply(intent = '') {
+    if (!msg) return;
+    const pack = summary || summaryFromAiNote(noteSource);
+    const short = intent || (pack?.summary ? `基于摘要写一封合适回复` : '根据邮件内容给出合适回复');
+    onCompose('reply', msg, {
+      aiInstruction: short,
+      aiContext: smartReplyInstruction(pack, intent),
+      openAi: true,
+    });
+  }
+
+  async function pinSummary() {
+    if (!id || !summary?.summary) return;
+    setPinning(true);
+    try {
+      const { aiNote } = await api('/ai/note', {
+        method: 'POST',
+        body: {
+          id,
+          note: String(summary.summary).slice(0, 120),
+          summary: summary.summary,
+          keyPoints: summary.keyPoints,
+          actionItems: summary.actionItems,
+          urgency: summary.urgency,
+          category: summary.category,
+          quickReplies: summary.quickReplies,
+          replyLanguage: summary.replyLanguage,
+          source: 'summarize',
+        },
+      });
+      setDetails((s) => (s[id] ? { ...s, [id]: { ...s[id], aiNote } } : s));
+      onAiNote?.(id, aiNote);
+      notify('已钉选到今日待办，列表可直接看到要点', 'success');
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setPinning(false);
+    }
+  }
+
+  async function unpinSummary() {
+    if (!id) return;
+    setPinning(true);
+    try {
+      await api('/ai/note', { method: 'POST', body: { id, clear: true } });
+      setDetails((s) => (s[id] ? { ...s, [id]: { ...s[id], aiNote: null } } : s));
+      onAiNote?.(id, null);
+      notify('已取消钉选');
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setPinning(false);
     }
   }
 
@@ -472,16 +538,33 @@ export default function Reader({
                   {translating ? <Loader2 size={14} className="spin" /> : showTranslated ? <Eye size={14} /> : <Languages size={14} />}
                   {showTranslated ? '查看原文' : '翻译成中文'}
                 </button>
-                <button className="ai-btn ghost" onClick={() => onCompose('reply', msg, { aiInstruction: '根据邮件内容给出合适回复' })} disabled={!msg}>
+                <button className="ai-btn ghost" onClick={() => openSmartReply()} disabled={!msg}>
                   <Reply size={14} /> AI 智能回复
                 </button>
               </div>
             )}
 
+            {!summary && noteSource?.note && (
+              <div className="ai-note-banner">
+                <Sparkles size={14} />
+                <span className="ai-note-banner-text">{noteSource.note}</span>
+                <button className="ai-btn ghost sm" onClick={() => openSmartReply(noteSource.note)} disabled={!msg}>
+                  <Reply size={13} /> 据此回复
+                </button>
+                {aiEnabled && (
+                  <button className="ai-btn ghost sm" onClick={runSummary} disabled={summaryLoading || !msg}>
+                    {summaryLoading ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} 完整摘要
+                  </button>
+                )}
+              </div>
+            )}
+
             {summary && (
-              <div className="ai-card">
+              <div className={'ai-card' + (isPinned ? ' pinned' : '')}>
                 <div className="ai-card-head">
                   <Sparkles size={15} /> AI 摘要
+                  {summary.fromCache && <span className="pill soft">已缓存</span>}
+                  {isPinned && <span className="pill soft"><Pin size={10} /> 已钉选</span>}
                   {summary.category && <span className="pill">{summary.category}</span>}
                   {URGENCY[summary.urgency] && <span className={'pill urgency ' + URGENCY[summary.urgency][1]}>{URGENCY[summary.urgency][0]}</span>}
                 </div>
@@ -497,12 +580,26 @@ export default function Reader({
                     <ul>{summary.actionItems.map((p, i) => <li key={i}><AlertTriangle size={12} /> {p}</li>)}</ul>
                   </div>
                 )}
+                <div className="ai-card-actions">
+                  <button className="ai-btn" onClick={() => openSmartReply()} disabled={!msg}>
+                    <Reply size={14} /> 生成回复
+                  </button>
+                  {isPinned ? (
+                    <button className="ai-btn ghost" onClick={unpinSummary} disabled={pinning}>
+                      {pinning ? <Loader2 size={14} className="spin" /> : <Pin size={14} />} 取消钉选
+                    </button>
+                  ) : (
+                    <button className="ai-btn ghost" onClick={pinSummary} disabled={pinning || !summary.summary}>
+                      {pinning ? <Loader2 size={14} className="spin" /> : <Pin size={14} />} 钉选到待办
+                    </button>
+                  )}
+                </div>
                 {summary.quickReplies?.length > 0 && (
                   <div className="quick-replies">
                     <div className="ai-sub">一键回复</div>
                     <div className="qr-list">
                       {summary.quickReplies.map((r, i) => (
-                        <button key={i} onClick={() => onCompose('reply', msg, { aiInstruction: r })}>{r}</button>
+                        <button key={i} onClick={() => openSmartReply(r)}>{r}</button>
                       ))}
                     </div>
                   </div>
