@@ -310,3 +310,31 @@ export function orderFocus(items, mode) {
 }
 
 export const hasRemoteImages = (html) => /<img[^>]+src\s*=\s*["']?\s*https?:|url\(\s*['"]?https?:|background\s*=\s*["']?https?:/i.test(html || '');
+
+/** 把摘要/待办拼成 Composer 的 AI 指令，形成「摘要 → 智能回复」肌肉记忆 */
+export function smartReplyInstruction(summary, intent = '') {
+  const parts = [];
+  if (summary?.summary) parts.push(`邮件摘要：${summary.summary}`);
+  if (summary?.actionItems?.length) parts.push(`待办事项：${summary.actionItems.slice(0, 5).join('；')}`);
+  if (summary?.keyPoints?.length) parts.push(`关键要点：${summary.keyPoints.slice(0, 3).join('；')}`);
+  if (summary?.category) parts.push(`邮件类别：${summary.category}`);
+  if (summary?.replyLanguage) parts.push(`请用${summary.replyLanguage}回复`);
+  if (intent) parts.push(`回复意图：${intent}`);
+  else parts.push('根据以上内容给出合适、专业的回复，未知信息用 [ ] 占位，不要编造价格或交期');
+  return parts.join('\n');
+}
+
+/** 从已钉选的 ai_note 还原完整摘要卡片（仅当钉选时存了 summary；triage 短注不走这里） */
+export function summaryFromAiNote(note) {
+  if (!note?.summary) return null;
+  return {
+    summary: note.summary,
+    keyPoints: note.keyPoints || [],
+    actionItems: note.actionItems || [],
+    urgency: note.urgency || 'medium',
+    category: note.category || '',
+    quickReplies: note.quickReplies || [],
+    replyLanguage: note.replyLanguage || '',
+    fromCache: true,
+  };
+}

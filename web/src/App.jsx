@@ -885,6 +885,13 @@ export default function App() {
           onBack={() => setSelectedId(null)}
           onFollowUp={followUp}
           notify={notify}
+          onAiNote={(mid, note) => {
+            setList((l) => ({
+              ...l,
+              messages: l.messages.map((m) => (m.id === mid ? { ...m, aiNote: note } : m)),
+              pinned: (l.pinned || []).map((m) => (m.id === mid ? { ...m, aiNote: note } : m)),
+            }));
+          }}
           onLoaded={(m) => {
             setCurrentMsg(m);
             if (!m.seen) loadState();

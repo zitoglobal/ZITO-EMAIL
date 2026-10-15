@@ -829,6 +829,21 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 }
 .ai-card-head { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; color: var(--accent-ink); }
 .ai-card-head .pill:first-of-type { margin-left: auto; }
+.ai-card.pinned { box-shadow: 0 10px 30px -14px rgba(10, 132, 255, 0.55), inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
+.ai-card-head .pill.soft {
+  margin-left: 0; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  background: var(--ai-soft); color: var(--accent-ink); display: inline-flex; align-items: center; gap: 3px;
+}
+.ai-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 2px; }
+.ai-btn.sm { height: 26px; padding: 0 10px; font-size: 12px; }
+.ai-note-banner {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; padding: 10px 14px;
+  border-radius: var(--r-lg); background: var(--ai-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  animation: fade-up 0.25s var(--ease);
+}
+.ai-note-banner > svg { flex: none; color: var(--ai-ink); }
+.ai-note-banner-text { flex: 1; min-width: 140px; font-size: 13.5px; line-height: 1.55; color: var(--accent-ink); font-weight: 500; }
 .ai-summary { margin: 10px 0 12px; line-height: 1.75; font-size: 14px; }
 .ai-points, .ai-actions ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; }
 .ai-points li, .ai-actions li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.6; }
@@ -938,6 +953,10 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 }
 .ai-compose-head { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--accent-ink); font-size: 12.5px; }
 .ai-compose-head .c-link { margin-left: auto; }
+.ai-context-tag {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-ink);
+}
 .ai-compose textarea {
   width: 100%; resize: none; padding: 9px 11px; font-size: 13px; line-height: 1.6; border: 1px solid var(--border); background: var(--panel);
   border-radius: 9px; outline: none;
