@@ -49,3 +49,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# 本机部署目标（含主机与密钥路径）
+deploy/deploy.local.env

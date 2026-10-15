@@ -13,11 +13,35 @@ import sys
 import tarfile
 import time
 
-HOST = 'root@47.82.99.116'
-KEY = r'c:\temp\mail.pem'
-DOMAIN = 'mail.zitoglobal.com'
-APP = '/opt/zito-mail'
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load_local_env():
+    path = os.path.join(ROOT, 'deploy', 'deploy.local.env')
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            k, _, v = line.partition('=')
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+
+
+_load_local_env()
+
+HOST = os.environ.get('ZITO_DEPLOY_HOST', '').strip()
+KEY = os.environ.get('ZITO_DEPLOY_KEY', '').strip()
+DOMAIN = os.environ.get('ZITO_DEPLOY_DOMAIN', 'mail.zitoglobal.com').strip()
+APP = os.environ.get('ZITO_DEPLOY_APP', '/opt/zito-mail').strip()
+if not HOST or not KEY:
+    sys.exit(
+        '缺少部署目标：请设置环境变量 ZITO_DEPLOY_HOST / ZITO_DEPLOY_KEY，'
+        '或复制 deploy/deploy.local.env.example 为 deploy/deploy.local.env 后填写。'
+    )
 PKG = os.path.join(os.environ.get('TEMP', r'c:\temp'), 'zito-mail.tgz')
 SSH = ['ssh', '-i', KEY, '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', HOST]
 

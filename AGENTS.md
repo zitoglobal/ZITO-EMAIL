@@ -8,10 +8,9 @@
 - 本地演示账号：`admin@zito.test` / `Passw0rd!`（仅本地数据库）
 - 不要读取或打印 `.env` 等凭据文件
 
-## 线上部署（阿里云香港）
-- **服务器**：`root@47.82.99.116`，SSH 密钥 `c:\temp\mail.pem`
-- **正式域名**：`https://mail.zitoglobal.com/`（DNS 在 DNSPod，需 A 记录指向 `47.82.99.116`）
-- **部署路径**：`/opt/zito-mail`，pm2 进程名 `zito-mail`，端口 3310；数据在 `/opt/zito-mail/data`，配置在 `/opt/zito-mail/.env`
-- **Nginx**：站点源文件 `deploy/nginx-zito-mail.conf` → `/etc/nginx/sites-available/zito-mail`；`/api/events` 必须保持 `proxy_buffering off`
-- 该服务器同时运行 `core.zitoglobal.com`（默认站点，占用 IP 访问及 8080/8765/8766 端口），不要改动其配置
-- **发布**：`python deploy/deploy.py app`；更新 Nginx 用 `nginx`；DNS 生效后签证书用 `cert`；查看状态用 `status`
+## 部署（概要）
+- 正式产品域名见 README（`mail.zitoglobal.com`）
+- 本机部署目标（SSH 主机、密钥路径等）**不要写进仓库**：复制 `deploy/deploy.local.env.example` 为 `deploy/deploy.local.env`（已 gitignore）后填写，再执行 `python deploy/deploy.py …`
+- Nginx 配置源文件：`deploy/nginx-zito-mail.conf`；`/api/events` 必须保持 `proxy_buffering off`
+- 常用命令：`python deploy/deploy.py app` / `nginx` / `cert` / `status`
+- 不要改动同机其它站点的 Nginx/进程配置
