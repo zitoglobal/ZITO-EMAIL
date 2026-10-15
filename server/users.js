@@ -1,5 +1,6 @@
 import { db, now } from './db.js';
 import { hashPassword, randomToken, sha256, verifyPassword } from './security.js';
+import { sanitizeGlossary } from './glossary.js';
 
 const SESSION_TTL = 30 * 24 * 3600 * 1000;
 
@@ -23,35 +24,6 @@ const DEFAULT_SETTINGS = {
   glossary: [],
 };
 
-const GLOSSARY_MAX = 50;
-const GLOSSARY_FIELD_MAX = 80;
-
-/** Trim, length-cap, and strip control/injection-ish chars from glossary rows. */
-export function sanitizeGlossary(raw) {
-  if (!Array.isArray(raw)) return [];
-  const out = [];
-  const seen = new Set();
-  for (const row of raw) {
-    if (!row || typeof row !== 'object') continue;
-    const src = String(row.src ?? '')
-      .replace(/[\u0000-\u001f\u007f]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, GLOSSARY_FIELD_MAX);
-    const dst = String(row.dst ?? '')
-      .replace(/[\u0000-\u001f\u007f]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, GLOSSARY_FIELD_MAX);
-    if (!src || !dst) continue;
-    const key = src.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ src, dst });
-    if (out.length >= GLOSSARY_MAX) break;
-  }
-  return out;
-}
 
 export function publicUser(u) {
   if (!u) return null;
@@ -171,3 +143,5 @@ export function listUsers() {
 export function deleteUser(id) {
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
 }
+
+export { sanitizeGlossary };

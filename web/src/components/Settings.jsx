@@ -8,6 +8,27 @@ import { api } from '../api.js';
 import { MAILBOX_COLORS, relativeTime } from '../utils.js';
 import MailboxForm from './MailboxForm.jsx';
 
+const TRADE_GLOSSARY_PRESET = [
+  { src: 'MOQ', dst: '最小起订量' },
+  { src: 'FOB', dst: '离岸价（船上交货）' },
+  { src: 'CIF', dst: '到岸价（成本+保险+运费）' },
+  { src: 'EXW', dst: '工厂交货价' },
+  { src: 'CFR', dst: '成本加运费' },
+  { src: 'Lab Dip', dst: '色样 / 确认色' },
+  { src: 'PP sample', dst: '产前样' },
+  { src: 'SMS', dst: '推销样' },
+  { src: 'Bulk', dst: '大货' },
+  { src: 'Lead time', dst: '交货周期' },
+  { src: 'PO', dst: '采购订单' },
+  { src: 'PI', dst: '形式发票' },
+  { src: 'SKU', dst: '货号 / 库存单位' },
+  { src: 'OEM', dst: '贴牌生产' },
+  { src: 'ODM', dst: '设计代工' },
+  { src: 'QC', dst: '质检' },
+  { src: 'T/T', dst: '电汇' },
+  { src: 'L/C', dst: '信用证' },
+];
+
 const TABS = [
   ['mailboxes', '邮箱账号', Mail],
   ['triage', '智能分拣', ListTodo],
@@ -174,14 +195,22 @@ function GlossaryEditor({ glossary, onSave }) {
   const rows = Array.isArray(glossary) ? glossary : [];
   const [draft, setDraft] = useState({ src: '', dst: '' });
 
+  function mergeEntries(extra) {
+    const map = new Map(rows.map((r) => [r.src.toLowerCase(), r]));
+    for (const e of extra) {
+      if (!e?.src || !e?.dst) continue;
+      map.set(String(e.src).toLowerCase(), { src: String(e.src).slice(0, 80), dst: String(e.dst).slice(0, 80) });
+    }
+    return [...map.values()].slice(0, 50);
+  }
+
   function add(e) {
     e.preventDefault();
     const src = draft.src.trim();
     const dst = draft.dst.trim();
     if (!src || !dst) return;
     if (rows.length >= 50) return;
-    const next = [...rows.filter((r) => r.src.toLowerCase() !== src.toLowerCase()), { src: src.slice(0, 80), dst: dst.slice(0, 80) }];
-    onSave({ glossary: next.slice(0, 50) });
+    onSave({ glossary: mergeEntries([{ src, dst }]) });
     setDraft({ src: '', dst: '' });
   }
 
@@ -189,10 +218,17 @@ function GlossaryEditor({ glossary, onSave }) {
     onSave({ glossary: rows.filter((r) => r.src !== src) });
   }
 
+  function applyPreset() {
+    onSave({ glossary: mergeEntries(TRADE_GLOSSARY_PRESET) });
+  }
+
   return (
     <div className="glossary-block">
       <div className="set-row glossary-head">
-        <span className="set-label"><BookMarked size={15} /> <span>翻译术语表<small>外贸专用词（MOQ、面料名、SKU 等），翻译与润色时优先套用，最多 50 条</small></span></span>
+        <span className="set-label"><BookMarked size={15} /> <span>翻译术语表<small>外贸专用词（MOQ、面料名、SKU 等），翻译 / 润色 / 写信时优先套用，最多 50 条</small></span></span>
+        <button type="button" className="btn-ghost sm" onClick={applyPreset} title="合并写入常用外贸术语；同名条目保留你已有的译文">
+          <Sparkles size={13} /> 一键外贸预设
+        </button>
       </div>
       {rows.length > 0 && (
         <div className="glossary-list">

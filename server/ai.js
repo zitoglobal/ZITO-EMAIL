@@ -1,3 +1,4 @@
+import { sanitizeGlossary } from './glossary.js';
 const BASE_URL = () =>
   (process.env.AI_BASE_URL || 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, '');
 const API_KEY = () => process.env.AI_API_KEY || '';
@@ -55,32 +56,6 @@ export function detectLang(text) {
   if (cjk > latin) return '中文';
   if (latin > 0) return 'English';
   return '其他';
-}
-
-function sanitizeGlossary(raw) {
-  if (!Array.isArray(raw)) return [];
-  const out = [];
-  const seen = new Set();
-  for (const row of raw) {
-    if (!row || typeof row !== 'object') continue;
-    const src = String(row.src ?? '')
-      .replace(/[\u0000-\u001f\u007f]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 80);
-    const dst = String(row.dst ?? '')
-      .replace(/[\u0000-\u001f\u007f]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 80);
-    if (!src || !dst) continue;
-    const key = src.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ src, dst });
-    if (out.length >= 50) break;
-  }
-  return out;
 }
 
 function glossaryHint(glossary) {
@@ -149,7 +124,7 @@ ${mailContext(mail)}`,
   return { body: text };
 }
 
-export async function compose({ prompt, tone = 'professional', language = '', to = '', signature = '' }) {
+export async function compose({ prompt, tone = 'professional', language = '', to = '', signature = '', glossary = [] }) {
   return chat(
     [
       { role: 'system', content: SYSTEM },
@@ -160,7 +135,7 @@ export async function compose({ prompt, tone = 'professional', language = '', to
 收件人：${to || '未指定'}
 语气：${TONES[tone] || tone}
 语言：${language || '根据需求判断，海外客户默认英文'}
-${signature ? `署名：${signature}` : ''}
+${signature ? `署名：${signature}` : ''}${glossaryHint(glossary)}
 不要编造具体价格、日期等信息，需要时用 [ ] 占位。`,
       },
     ],

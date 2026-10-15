@@ -404,3 +404,25 @@ export const dueSnoozes = () =>
   db
     .prepare('SELECT m.*, b.user_id FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id WHERE m.snooze_until IS NOT NULL AND m.snooze_until <= ?')
     .all(now());
+
+// ---------- AI 翻译缓存 ----------
+export function getTranslateCache(messagePk, target, gHash) {
+  return db
+    .prepare(
+      'SELECT subject, body, source_lang AS sourceLang, created_at AS createdAt FROM ai_translate_cache WHERE message_pk = ? AND target = ? AND glossary_hash = ?'
+    )
+    .get(messagePk, target, gHash);
+}
+
+export function setTranslateCache(messagePk, target, gHash, { subject, body, sourceLang }) {
+  db.prepare(
+    `INSERT INTO ai_translate_cache (message_pk, target, glossary_hash, subject, body, source_lang, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(message_pk, target, glossary_hash) DO UPDATE SET
+       subject = excluded.subject, body = excluded.body, source_lang = excluded.source_lang, created_at = excluded.created_at`
+  ).run(messagePk, target, gHash, subject || '', body || '', sourceLang || '', now());
+}
+
+export function errorMailboxCount() {
+  return db.prepare("SELECT COUNT(*) n FROM mailboxes WHERE status = 'error'").get().n;
+}

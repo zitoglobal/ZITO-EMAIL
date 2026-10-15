@@ -330,6 +330,8 @@ export default function Reader({
       const result = await api('/ai/translate', { method: 'POST', body: { id, target } });
       if (result?.sourceLang && sourceMatchesTarget(result.sourceLang, target)) {
         notify(target === 'English' ? '原文已是英文，无需翻译' : '原文已是中文，无需翻译');
+      } else if (result?.fromCache) {
+        notify('已使用翻译缓存');
       }
       setTranslated(result);
       setLastTranslateTarget(target);
@@ -689,6 +691,7 @@ export default function Reader({
               <div className="translated-body">
                 <div className="translated-tag">
                   <Languages size={13} /> AI 翻译
+                  {translated.fromCache && <span className="pill soft">已缓存</span>}
                   {translated.sourceLang && <span className="translated-meta">原文 · {translated.sourceLang}</span>}
                   {translated.subject && translated.subject !== base.subject && (
                     <span className="translated-meta">主题：{translated.subject}</span>

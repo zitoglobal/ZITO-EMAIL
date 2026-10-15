@@ -18,6 +18,7 @@ import { subscribe, emit, isOnline } from './events.js';
 import * as ai from './ai.js';
 import * as priority from './priority.js';
 import * as backup from './backup.js';
+import { glossaryHash } from './glossary.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
@@ -132,7 +133,18 @@ app.get('/api/health', (req, res) => {
   } catch (e) {
     console.error('[health]', e.message);
   }
-  const body = { ok: dbOk, db: dbOk ? 'up' : 'down', uptime: Math.round(process.uptime()) };
+  let errorMailboxes = 0;
+  try {
+    errorMailboxes = repo.errorMailboxCount();
+  } catch (_) {}
+  const body = {
+    ok: dbOk,
+    db: dbOk ? 'up' : 'down',
+    uptime: Math.round(process.uptime()),
+    aiConfigured: ai.aiConfigured(),
+    lastBackupAt: backup.lastBackupAt(),
+    errorMailboxes,
+  };
   res.status(dbOk ? 200 : 503).json(body);
 });
 
@@ -906,7 +918,22 @@ app.post(
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
     const target = req.body.target || settings.translateTarget || '简体中文';
-    res.json(await ai.translate(await mailForAi(req, req.body.id), target, settings.glossary));
+    const row = messageOf(req, req.body.id);
+    const gHash = glossaryHash(settings.glossary);
+    const cached = repo.getTranslateCache(row.id, target, gHash);
+    if (cached) {
+      return res.json({
+        subject: cached.subject,
+        body: cached.body,
+        sourceLang: cached.sourceLang,
+        fromCache: true,
+      });
+    }
+    const out = await ai.translate(await mailForAi(req, req.body.id), target, settings.glossary);
+    try {
+      repo.setTranslateCache(row.id, target, gHash, out);
+    } catch (_) {}
+    res.json({ ...out, fromCache: false });
   })
 );
 app.post(
@@ -918,7 +945,15 @@ app.post(
     res.json(await ai.draftReply(await mailForAi(req, req.body.id), { ...req.body, glossary: settings.glossary }));
   })
 );
-app.post('/api/ai/compose', auth, wrap(async (req, res) => (aiLimit(req), res.json(await ai.compose(req.body)))));
+app.post(
+  '/api/ai/compose',
+  auth,
+  wrap(async (req, res) => {
+    aiLimit(req);
+    const settings = users.settingsOf(req.user.id);
+    res.json(await ai.compose({ ...req.body, glossary: settings.glossary }));
+  })
+);
 app.post(
   '/api/ai/rewrite',
   auth,

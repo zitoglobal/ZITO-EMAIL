@@ -31,15 +31,32 @@ export async function backupOnce() {
   }
 }
 
+function listBackupFiles() {
+  try {
+    return fs
+      .readdirSync(BACKUP_DIR)
+      .filter((f) => /^mail-.*\.db$/.test(f))
+      .map((f) => {
+        const fp = path.join(BACKUP_DIR, f);
+        return { f, t: fs.statSync(fp).mtimeMs, p: fp };
+      })
+      .sort((a, b) => b.t - a.t);
+  } catch {
+    return [];
+  }
+}
+
+/** 最近一次成功备份的 mtime（ISO），无则 null — 供 /api/health */
+export function lastBackupAt() {
+  const files = listBackupFiles();
+  if (!files.length) return null;
+  return new Date(files[0].t).toISOString();
+}
+
 function prune() {
-  const files = fs
-    .readdirSync(BACKUP_DIR)
-    .filter((f) => /^mail-.*\.db$/.test(f))
-    .map((f) => ({ f, t: fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs }))
-    .sort((a, b) => b.t - a.t);
-  for (const { f } of files.slice(KEEP)) {
+  for (const { p } of listBackupFiles().slice(KEEP)) {
     try {
-      fs.unlinkSync(path.join(BACKUP_DIR, f));
+      fs.unlinkSync(p);
     } catch (_) {}
   }
 }
