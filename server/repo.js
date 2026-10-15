@@ -1,5 +1,6 @@
 import { db, now, tx } from './db.js';
 import { signalsOf } from './classify.js';
+import * as contactsCrm from './contacts.js';
 
 // ---------- 邮箱 ----------
 export const getMailbox = (userId, id) => db.prepare('SELECT * FROM mailboxes WHERE id = ? AND user_id = ?').get(id, userId);
@@ -407,26 +408,10 @@ export function pruneBodies(keep = 3000) {
   db.prepare('DELETE FROM bodies WHERE message_pk NOT IN (SELECT message_pk FROM bodies ORDER BY fetched_at DESC LIMIT ?)').run(keep);
 }
 
-// ---------- 联系人 ----------
-const upContact = db.prepare(`INSERT INTO contacts (user_id, address, name, score, last_at) VALUES (?, ?, ?, ?, ?)
-  ON CONFLICT(user_id, address) DO UPDATE SET score = score + excluded.score, last_at = excluded.last_at,
-  name = CASE WHEN excluded.name != '' THEN excluded.name ELSE name END`);
-export const addContacts = tx((userId, list, weight = 1) => {
-  for (const c of list) {
-    const address = String(c?.address || '').trim().toLowerCase();
-    if (!address || !/@/.test(address) || /no[-_.]?reply|mailer-daemon/i.test(address)) continue;
-    upContact.run(userId, address, String(c.name || '').replace(/^"|"$/g, '').trim(), weight, now());
-  }
-});
-export const searchContacts = (userId, q) =>
-  db
-    .prepare(
-      `SELECT address, name FROM contacts WHERE user_id = ? AND (address LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\')
-       ORDER BY score DESC, last_at DESC LIMIT 8`
-    )
-    .all(userId, like(q), like(q));
-export const isKnownContact = (userId, address) =>
-  !!db.prepare('SELECT 1 FROM contacts WHERE user_id = ? AND address = ? AND score >= 2').get(userId, String(address || '').toLowerCase());
+// ---------- 联系人（切片 D：委托 contacts 主数据，双写兼容） ----------
+export const addContacts = (userId, list, weight = 1) => contactsCrm.touchAddresses(userId, list, weight);
+export const searchContacts = (userId, q) => contactsCrm.searchContactsFlat(userId, q);
+export const isKnownContact = (userId, address) => contactsCrm.isKnownContact(userId, address);
 
 // ---------- 模板 ----------
 export const listTemplates = (userId) => db.prepare('SELECT * FROM templates WHERE user_id = ? ORDER BY name').all(userId);

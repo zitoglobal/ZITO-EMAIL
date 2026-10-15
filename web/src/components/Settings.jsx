@@ -9,6 +9,7 @@ import { api } from '../api.js';
 import { MAILBOX_COLORS, relativeTime } from '../utils.js';
 import MailboxForm from './MailboxForm.jsx';
 import MailRulesPanel from './MailRulesPanel.jsx';
+import ContactsPanel from './ContactsPanel.jsx';
 
 const TRADE_GLOSSARY_PRESET = [
   { src: 'MOQ', dst: '最小起订量' },
@@ -749,6 +750,7 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
             {tab === 'mailboxes' && <Mailboxes mailboxes={mailboxes} onChanged={onMailboxesChanged} onAdd={onAddMailbox} notify={notify} focusId={focusMailbox} />}
             {tab === 'triage' && <Triage settings={user.settings} onSave={onSettings} notify={notify} mailboxes={mailboxes} />}
             {tab === 'labels' && <LabelsPanel notify={notify} onChanged={onLabelsChanged} />}
+            {tab === 'contacts' && <ContactsPanel notify={notify} />}
             {tab === 'preferences' && <Preferences settings={user.settings} onSave={onSettings} aiEnabled={aiEnabled} />}
             {tab === 'templates' && <Templates notify={notify} />}
             {tab === 'account' && <Account user={user} onUserChange={onUserChange} onLogout={onLogout} notify={notify} />}
