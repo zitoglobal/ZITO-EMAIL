@@ -226,3 +226,29 @@ CREATE TABLE IF NOT EXISTS saved_searches (
 );
 CREATE INDEX IF NOT EXISTS idx_saved_searches_user_pos ON saved_searches(user_id, position);
 `);
+
+// ---------- 邮件规则（切片 C） ----------
+db.exec(`
+CREATE TABLE IF NOT EXISTS mail_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  position INTEGER NOT NULL DEFAULT 0,
+  stop_processing INTEGER NOT NULL DEFAULT 0,
+  conditions_json TEXT NOT NULL,
+  actions_json TEXT NOT NULL,
+  last_hit_at INTEGER,
+  last_hit_summary TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mail_rules_user_pos ON mail_rules(user_id, enabled, position);
+`);
+
+{
+  const msgCols2 = new Set(db.prepare('PRAGMA table_info(messages)').all().map((c) => c.name));
+  if (!msgCols2.has('skip_inbox')) {
+    db.exec('ALTER TABLE messages ADD COLUMN skip_inbox INTEGER NOT NULL DEFAULT 0');
+  }
+}

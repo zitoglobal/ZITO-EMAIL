@@ -21,6 +21,7 @@ import * as backup from './backup.js';
 import { glossaryHash } from './glossary.js';
 import * as labels from './labels.js';
 import * as savedSearches from './saved_searches.js';
+import * as mailRules from './mail_rules.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
@@ -123,6 +124,7 @@ function stateFor(user, dayStart) {
     folders: Object.fromEntries(mbs.map((m) => [m.id, repo.listFolders(m.id).map(folderPublic)])),
     counts: { ...repo.counts(user.id), focus: mbs.length ? priority.focus(user.id, settings, { dayStart }).stats : null },
     labels: labels.listLabels(user.id),
+    mailRulesCount: mailRules.listRules(user.id).filter((r) => r.enabled).length,
     savedSearches: savedSearches.listSavedSearches(user.id),
   };
 }
@@ -1029,6 +1031,55 @@ app.delete(
     savedSearches.deleteSavedSearch(req.user.id, Number(req.params.id));
     emit(req.user.id, 'saved-searches', { action: 'delete', id: Number(req.params.id) });
     res.json({ ok: true, savedSearches: savedSearches.listSavedSearches(req.user.id) });
+  })
+);
+
+
+// ---------- 邮件规则（切片 C） ----------
+app.get('/api/mail-rules', auth, (req, res) =>
+  res.json({
+    rules: mailRules.listRules(req.user.id),
+    conditionFields: mailRules.CONDITION_FIELD_OPTIONS,
+    actionTypes: mailRules.ACTION_TYPE_OPTIONS,
+  })
+);
+
+app.post(
+  '/api/mail-rules',
+  auth,
+  wrap(async (req, res) => {
+    const row = mailRules.createRule(req.user.id, req.body || {});
+    emit(req.user.id, 'mail-rules', { action: 'create', id: row.id });
+    res.json({ rule: row, rules: mailRules.listRules(req.user.id) });
+  })
+);
+
+app.put(
+  '/api/mail-rules/reorder',
+  auth,
+  wrap(async (req, res) => {
+    const list = mailRules.reorderRules(req.user.id, req.body?.ids || []);
+    res.json({ rules: list });
+  })
+);
+
+app.patch(
+  '/api/mail-rules/:id',
+  auth,
+  wrap(async (req, res) => {
+    const row = mailRules.updateRule(req.user.id, Number(req.params.id), req.body || {});
+    emit(req.user.id, 'mail-rules', { action: 'update', id: row.id });
+    res.json({ rule: row, rules: mailRules.listRules(req.user.id) });
+  })
+);
+
+app.delete(
+  '/api/mail-rules/:id',
+  auth,
+  wrap(async (req, res) => {
+    mailRules.deleteRule(req.user.id, Number(req.params.id));
+    emit(req.user.id, 'mail-rules', { action: 'delete', id: Number(req.params.id) });
+    res.json({ ok: true, rules: mailRules.listRules(req.user.id) });
   })
 );
 

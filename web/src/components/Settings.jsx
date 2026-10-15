@@ -8,6 +8,7 @@ import { LAYOUT_MODES } from '../layout.js';
 import { api } from '../api.js';
 import { MAILBOX_COLORS, relativeTime } from '../utils.js';
 import MailboxForm from './MailboxForm.jsx';
+import MailRulesPanel from './MailRulesPanel.jsx';
 
 const TRADE_GLOSSARY_PRESET = [
   { src: 'MOQ', dst: '最小起订量' },
@@ -293,7 +294,7 @@ function Preferences({ settings, onSave, aiEnabled }) {
   );
 }
 
-function Triage({ settings, onSave, notify }) {
+function Triage({ settings, onSave, notify, mailboxes = [] }) {
   const [rules, setRules] = useState(null);
   const [suggestions, setSuggestions] = useState(null);
   const [form, setForm] = useState({ key: '', name: '', kind: 'vip' });
@@ -389,6 +390,8 @@ function Triage({ settings, onSave, notify }) {
           <button className="icon-btn danger" onClick={() => del(r.key)} title="移除"><Trash2 size={14} /></button>
         </div>
       ))}
+
+      <MailRulesPanel notify={notify} mailboxes={mailboxes} />
     </>
   );
 }
@@ -744,7 +747,7 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
           </nav>
           <div className="modal-body settings-body">
             {tab === 'mailboxes' && <Mailboxes mailboxes={mailboxes} onChanged={onMailboxesChanged} onAdd={onAddMailbox} notify={notify} focusId={focusMailbox} />}
-            {tab === 'triage' && <Triage settings={user.settings} onSave={onSettings} notify={notify} />}
+            {tab === 'triage' && <Triage settings={user.settings} onSave={onSettings} notify={notify} mailboxes={mailboxes} />}
             {tab === 'labels' && <LabelsPanel notify={notify} onChanged={onLabelsChanged} />}
             {tab === 'preferences' && <Preferences settings={user.settings} onSave={onSettings} aiEnabled={aiEnabled} />}
             {tab === 'templates' && <Templates notify={notify} />}

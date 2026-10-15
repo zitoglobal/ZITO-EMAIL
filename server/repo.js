@@ -165,6 +165,7 @@ export function rowToMessage(r) {
     category: r.category,
     pinned: !!r.pinned,
     snoozeUntil: r.snooze_until,
+    skipInbox: !!r.skip_inbox,
     threadCount: r.thread_count || 1,
     specialUse: r.special_use,
     signals: r.signals ? r.signals.split(',') : [],
@@ -255,8 +256,8 @@ export function queryMessages(userId, { mailboxId, box = 'inbox', folder, catego
     where.push('f.special_use = @special');
     p.special = special;
   }
-  if (box === 'inbox') where.push('m.snooze_until IS NULL');
-  if (box === 'unread') where.push("m.seen = 0 AND f.special_use = '\\Inbox' AND m.snooze_until IS NULL");
+  if (box === 'inbox') where.push('m.snooze_until IS NULL AND IFNULL(m.skip_inbox, 0) = 0');
+  if (box === 'unread') where.push("m.seen = 0 AND f.special_use = '\\Inbox' AND m.snooze_until IS NULL AND IFNULL(m.skip_inbox, 0) = 0");
   if (box === 'flagged') where.push("m.flagged = 1 AND IFNULL(f.special_use, '') NOT IN ('\\Trash', '\\Junk')");
   if (box === 'snoozed') where.push('m.snooze_until IS NOT NULL');
   if (box === 'folder') {
