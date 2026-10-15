@@ -230,6 +230,15 @@ app.delete(
   })
 );
 
+/** VIP 建议：往来频次 + 业务信号，不自动写入规则 */
+app.get(
+  '/api/vip-suggestions',
+  auth,
+  wrap(async (req, res) => {
+    res.json({ suggestions: priority.vipSuggestions(req.user.id) });
+  })
+);
+
 app.patch(
   '/api/me',
   auth,
@@ -1082,7 +1091,7 @@ mailer.startScheduler();
 sync.startAll();
 backup.startBackupScheduler();
 
-/** 客户邮件超过回复时限仍未处理时主动提醒（每位用户每封邮件只提醒一次） */
+/** 客户邮件超过回复时限仍未处理时分阶段提醒（冷却后升级，最多 3 级） */
 function remindUser(u) {
   const settings = users.publicUser(u).settings;
   if (!settings.remindOverdue || !isOnline(u.id) || !repo.listMailboxes(u.id).length) return;

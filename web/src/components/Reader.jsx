@@ -24,6 +24,7 @@ function RelationCard({ info, onRule, slaHours }) {
   const muted = info.rule?.kind === 'muted';
   const target = info.company?.domain ? '@' + info.company.domain : null;
   const recent = info.recentSubjects || [];
+  const suggest = info.vipSuggest;
   return (
     <div className="relation-card">
       <div className="relation-card-main">
@@ -48,6 +49,20 @@ function RelationCard({ info, onRule, slaHours }) {
             ))}
           </div>
         )}
+        {suggest && !vip && (
+          <div className="vip-suggest">
+            <Crown size={12} />
+            <span>建议设为 VIP：{(suggest.reasons || []).join(' · ')}</span>
+            <button
+              type="button"
+              className="sl-btn vip"
+              onClick={() => onRule(suggest.key || target || info.address, 'vip', info.company?.name)}
+              title="确认后按 VIP SLA 优先分诊，不会自动升级"
+            >
+              确认 VIP
+            </button>
+          </div>
+        )}
       </div>
       <div className="relation-card-actions">
         {info.rule ? (
@@ -56,9 +71,11 @@ function RelationCard({ info, onRule, slaHours }) {
           </button>
         ) : (
           <>
-            <button className="sl-btn vip" onClick={() => onRule(target || info.address, 'vip', info.company?.name)} title={target ? `把 ${target} 的所有来信设为 VIP` : '设为 VIP 客户'}>
-              <Crown size={12} /> 设为 VIP{target ? '（公司）' : ''}
-            </button>
+            {!suggest && (
+              <button className="sl-btn vip" onClick={() => onRule(target || info.address, 'vip', info.company?.name)} title={target ? `把 ${target} 的所有来信设为 VIP` : '设为 VIP 客户'}>
+                <Crown size={12} /> 设为 VIP{target ? '（公司）' : ''}
+              </button>
+            )}
             {!muted && (
               <button className="sl-btn" onClick={() => onRule(info.address, 'muted')} title="此发件人的邮件不再进入今日待办">
                 <BellOff size={12} /> 静音
@@ -594,6 +611,15 @@ export default function Reader({
                 </div>
                 <button className="btn-ghost sm" onClick={() => act('nofollow')}><BellOff size={13} /> 无需跟进</button>
                 <button className="btn-primary sm" onClick={() => onFollowUp?.(listItem)}><Reply size={13} /> 写跟进</button>
+              </div>
+            )}
+            {!listItem?._section && listItem?.waitingOnThem && (
+              <div className="await-banner follow">
+                <Hourglass size={15} />
+                <div>
+                  <b>等对方回复</b>
+                  <small>{listItem.waitingDays != null && listItem.waitingDays >= 1 ? `已等待约 ${listItem.waitingDays} 天` : '你已回复，对方尚未回信'}</small>
+                </div>
               </div>
             )}
 

@@ -38,9 +38,32 @@ export function signalsOf(subject = '', snippet = '') {
 }
 
 const THANKS_ONLY = /^(hi|hello|dear)?[\s\S]{0,40}(thanks?|thank you|noted|well received|received with thanks|收到|谢谢|好的)[\s\S]{0,40}$/i;
-/** 我方发出的邮件是否值得跟进（排除纯致谢、确认收到类） */
+const SHORT_ACK = /^(ok|okay|got it|noted|thanks?|thank you|收到|好的|嗯|谢谢|已知晓|了解)[\s.!！。]*$/i;
+const FYI_ONLY = /^(fyi\b|for your (information|ref(erence)?)|仅供参考|请查收|通知[:：]?)/i;
+const NO_REPLY_NEEDED = /\b(no (need to )?reply|do not reply|please do not reply|无需回复|不用回复|请勿回复)\b/i;
+/** 仍值得跟进：报价/样品/等确认 */
+const KEEP_FOLLOW = /\b(quot(e|ation)|price|sample|swatch|lab ?dip|confirm|confirmation|await(ing)?|looking forward|please (reply|confirm|advise|check|review)|kindly (confirm|advise|reply))\b|报价|样品|色卡|确认样|请确认|请回复|请惠复|等您|敬请|候复|盼复/i;
+const KEEP_SIGNALS = new Set(['inquiry', 'sample', 'order', 'payment', 'question', 'urgent', 'complaint']);
+
+/**
+ * 我方发出的邮件是否值得跟进。
+ * 收紧：排除纯致谢 / FYI / 明确无需回复；保留报价、样品、等确认、业务意图。
+ */
 export function expectsReply(subject = '', snippet = '') {
+  const subj = String(subject || '').trim();
   const s = String(snippet || '').trim();
+  const text = `${subj}\n${s}`;
+  const sigs = signalsOf(subj, s);
+
+  if (sigs.some((k) => KEEP_SIGNALS.has(k))) return true;
+  if (KEEP_FOLLOW.test(text)) return true;
+
+  if (NO_REPLY_NEEDED.test(text)) return false;
+  if (FYI_ONLY.test(subj) || FYI_ONLY.test(s.slice(0, 100))) return false;
   if (s.length < 90 && THANKS_ONLY.test(s)) return false;
+  if (s.length < 60 && SHORT_ACK.test(s)) return false;
+  // 主题即致谢且正文很短
+  if (s.length < 120 && THANKS_ONLY.test(subj) && !/[?？]/.test(text)) return false;
+
   return true;
 }

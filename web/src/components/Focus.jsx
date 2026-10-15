@@ -1,7 +1,7 @@
 import React, { useMemo, useRef } from 'react';
-import { Menu, RefreshCw, Sparkles, Loader2, Crown, CornerDownRight, Send, PartyPopper, Info } from 'lucide-react';
+import { Menu, RefreshCw, Sparkles, Loader2, Crown, CornerDownRight, Send, PartyPopper, Info, AlertTriangle } from 'lucide-react';
 import { Row } from './MailList.jsx';
-import { avatarColor, greeting } from '../utils.js';
+import { avatarColor, greeting, waitText } from '../utils.js';
 
 function SectionHead({ id, title, count, hint }) {
   return (
@@ -110,6 +110,18 @@ export default function Focus({
           <span className="focus-sla-chip">客户 {slaTier.customer}h</span>
           <span className="focus-sla-chip new">新询盘 {slaTier.inquiry}h</span>
         </div>
+
+        {overdue > 0 && data?.overdueSummary && (
+          <button type="button" className="overdue-summary" onClick={() => jump('fs-reply')} title="跳转到超时待回复">
+            <AlertTriangle size={14} />
+            <span>
+              <b>{overdue}</b> 封已超时
+              {data.overdueSummary.oldestHours > 0 && <> · 最早已等 {waitText(data.overdueSummary.oldestHours)}</>}
+              {data.overdueSummary.byTier?.vip > 0 && <> · VIP {data.overdueSummary.byTier.vip}</>}
+            </span>
+            <small>点击处理</small>
+          </button>
+        )}
       </header>
 
       <div className="list-body" ref={body}>
