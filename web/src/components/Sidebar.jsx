@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Inbox, Send, FileText, Trash2, Archive, ShieldAlert, Star, Folder, PenSquare, Settings, Sparkles, ChevronRight, Plus, LogOut,
   MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, Hourglass, LayoutPanelLeft,
-  Columns3, Briefcase, BookOpen, Tag,
+  Columns3, Briefcase, BookOpen, Tag, Bookmark, MoreHorizontal, Pencil, Trash,
 } from 'lucide-react';
 import { avatarColor, folderDepth, folderLabel, initials, sortFolders } from '../utils.js';
 import { BrandIcon } from './Brand.jsx';
@@ -36,9 +36,11 @@ export default function Sidebar({
   user, mailboxes, folders, counts, view, onView, onCompose, onDigest, onSettings, onAddMailbox, onLogout, onCommand, onNewFolder, open, onClose,
   iconRail = false, layoutMode = 'standard', onLayoutMode, salesRailTip = false,
   labels = [], onCreateLabel,
+  savedSearches = [], onOpenSavedSearch, onCreateSavedSearch, onEditSavedSearch, onDeleteSavedSearch,
 }) {
   const [expanded, setExpanded] = useState(loadExpanded);
   const [menu, setMenu] = useState(false);
+  const [ssMenu, setSsMenu] = useState(null); // saved search id for ⋯ menu
   const multi = mailboxes.length > 1;
 
   const toggle = (id) => {
@@ -65,7 +67,8 @@ export default function Sidebar({
     view.box === v.box &&
     (view.mailboxId || 'all') === (v.mailboxId || 'all') &&
     (v.box !== 'folder' || view.folder === v.folder) &&
-    (v.box !== 'label' || Number(view.labelId) === Number(v.labelId));
+    (v.box !== 'label' || Number(view.labelId) === Number(v.labelId)) &&
+    (v.box !== 'smart' || Number(view.smartId) === Number(v.smartId));
 
   return (
     <aside className={'sidebar' + (open ? ' open' : '') + (iconRail ? ' icon-rail' : '')}>
@@ -158,6 +161,63 @@ export default function Sidebar({
             <Tag size={14} /> <span className="folder-name">管理标签</span>
           </button>
         )}
+
+        <div className="folder-group">
+          <span>智能文件夹</span>
+          <button
+            className="mini-btn"
+            title="新建智能文件夹"
+            onClick={() => onCreateSavedSearch?.()}
+          ><Plus size={14} /></button>
+        </div>
+        {!iconRail && !savedSearches.length && (
+          <button className="folder sub label-empty-hint" onClick={() => onCreateSavedSearch?.()} title="保存常用搜索">
+            <Bookmark size={15} />
+            <span className="folder-name muted-text">保存常用搜索，一键回到「有附件」「某客户」</span>
+          </button>
+        )}
+        {savedSearches.filter((s) => s.pinned !== false).map((s) => {
+          const v = { mailboxId: 'all', box: 'smart', smartId: s.id };
+          return (
+            <div key={s.id} className={'folder-row' + (isActive(v) ? ' active-row' : '')}>
+              <button
+                className={'folder sub' + (isActive(v) ? ' active' : '')}
+                onClick={() => onOpenSavedSearch ? onOpenSavedSearch(s) : go(v)}
+                title={s.query}
+                aria-label={`智能文件夹 ${s.name}`}
+              >
+                <Bookmark size={15} />
+                {!iconRail && <span className="folder-name">{s.name}</span>}
+              </button>
+              {!iconRail && (
+                <div className="folder-more-wrap">
+                  <button
+                    type="button"
+                    className="folder-more"
+                    title="管理"
+                    aria-label={`管理 ${s.name}`}
+                    onClick={(e) => { e.stopPropagation(); setSsMenu(ssMenu === s.id ? null : s.id); }}
+                  >
+                    <MoreHorizontal size={14} />
+                  </button>
+                  {ssMenu === s.id && (
+                    <div className="account-menu folder-ss-menu" onMouseLeave={() => setSsMenu(null)}>
+                      <button type="button" onClick={() => { setSsMenu(null); onEditSavedSearch?.(s); }}>
+                        <Pencil size={14} /> 重命名 / 编辑查询
+                      </button>
+                      <button type="button" onClick={() => { setSsMenu(null); onOpenSavedSearch?.(s); }}>
+                        <Search size={14} /> 打开并搜索
+                      </button>
+                      <button type="button" className="danger" onClick={() => { setSsMenu(null); onDeleteSavedSearch?.(s); }}>
+                        <Trash size={14} /> 删除
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
 
         <div className="folder-group">
           <span>邮箱账号</span>

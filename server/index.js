@@ -20,6 +20,7 @@ import * as priority from './priority.js';
 import * as backup from './backup.js';
 import { glossaryHash } from './glossary.js';
 import * as labels from './labels.js';
+import * as savedSearches from './saved_searches.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
@@ -122,6 +123,7 @@ function stateFor(user, dayStart) {
     folders: Object.fromEntries(mbs.map((m) => [m.id, repo.listFolders(m.id).map(folderPublic)])),
     counts: { ...repo.counts(user.id), focus: mbs.length ? priority.focus(user.id, settings, { dayStart }).stats : null },
     labels: labels.listLabels(user.id),
+    savedSearches: savedSearches.listSavedSearches(user.id),
   };
 }
 
@@ -478,6 +480,14 @@ app.get(
     if (opts.box === 'label') {
       const lid = Number(opts.labelId);
       if (!Number.isInteger(lid) || !labels.getLabel(req.user.id, lid)) throw httpError(404, '标签不存在');
+    }
+    if (opts.box === 'smart') {
+      const sid = Number(req.query.smartId);
+      if (!Number.isInteger(sid)) throw httpError(400, '缺少智能文件夹');
+      const ss = savedSearches.getSavedSearch(req.user.id, sid);
+      if (!ss) throw httpError(404, '智能文件夹不存在');
+      // 智能文件夹 = 保存的查询；服务端以存档 query 为准，客户端 q 可作覆盖预览
+      if (!opts.q) opts.q = ss.query;
     }
     const settings = users.publicUser(req.user).settings;
     opts.map = (rows) => priority.decorate(req.user.id, rows, settings);
@@ -965,6 +975,60 @@ app.post(
     const result = labels.setMessageLabels(req.user.id, ids || [], { add: add || [], remove: remove || [] });
     emit(req.user.id, 'sync', { local: true, labels: true });
     res.json(result);
+  })
+);
+
+// ---------- 保存的搜索 / 智能文件夹（切片 B） ----------
+app.get('/api/saved-searches', auth, (req, res) =>
+  res.json({ savedSearches: savedSearches.listSavedSearches(req.user.id), presets: savedSearches.TRADE_SEARCH_PRESETS })
+);
+
+app.post(
+  '/api/saved-searches',
+  auth,
+  wrap(async (req, res) => {
+    const row = savedSearches.createSavedSearch(req.user.id, req.body || {});
+    emit(req.user.id, 'saved-searches', { action: 'create', id: row.id });
+    res.json({ savedSearch: row, savedSearches: savedSearches.listSavedSearches(req.user.id) });
+  })
+);
+
+app.put(
+  '/api/saved-searches/reorder',
+  auth,
+  wrap(async (req, res) => {
+    const list = savedSearches.reorderSavedSearches(req.user.id, req.body?.ids || []);
+    res.json({ savedSearches: list });
+  })
+);
+
+app.post(
+  '/api/saved-searches/presets',
+  auth,
+  wrap(async (req, res) => {
+    const result = savedSearches.applyTradePresets(req.user.id);
+    emit(req.user.id, 'saved-searches', { action: 'presets' });
+    res.json(result);
+  })
+);
+
+app.patch(
+  '/api/saved-searches/:id',
+  auth,
+  wrap(async (req, res) => {
+    const row = savedSearches.updateSavedSearch(req.user.id, Number(req.params.id), req.body || {});
+    emit(req.user.id, 'saved-searches', { action: 'update', id: row.id });
+    res.json({ savedSearch: row, savedSearches: savedSearches.listSavedSearches(req.user.id) });
+  })
+);
+
+app.delete(
+  '/api/saved-searches/:id',
+  auth,
+  wrap(async (req, res) => {
+    savedSearches.deleteSavedSearch(req.user.id, Number(req.params.id));
+    emit(req.user.id, 'saved-searches', { action: 'delete', id: Number(req.params.id) });
+    res.json({ ok: true, savedSearches: savedSearches.listSavedSearches(req.user.id) });
   })
 );
 

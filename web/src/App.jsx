@@ -16,6 +16,7 @@ import Waiting from './components/Waiting.jsx';
 import CustomerPanel from './components/CustomerPanel.jsx';
 import ColumnSplitter from './components/ColumnSplitter.jsx';
 import Palette from './components/Palette.jsx';
+import SaveSearchModal from './components/SaveSearchModal.jsx';
 import { SMART_VIEWS, dayStart, displayName, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
 import { buildComposeState, signatureHtml, toForm } from './compose.js';
 import {
@@ -82,6 +83,9 @@ export default function App() {
   const [folders, setFolders] = useState({});
   const [counts, setCounts] = useState({ unifiedUnread: 0, snoozed: 0, scheduled: 0 });
   const [labels, setLabels] = useState([]);
+  const [savedSearches, setSavedSearches] = useState([]);
+  const [saveSearchModal, setSaveSearchModal] = useState(null); // { mode, name, query, id? }
+  const [searchPresets, setSearchPresets] = useState([]);
 
   const [view, setViewState] = useState(loadView);
   const [category, setCategory] = useState('all');
@@ -228,6 +232,7 @@ export default function App() {
     setFolders(s.folders);
     setCounts(s.counts);
     if (s.labels) setLabels(s.labels);
+    if (s.savedSearches) setSavedSearches(s.savedSearches);
   }, []);
 
   const loadState = useCallback(async () => {
@@ -244,6 +249,15 @@ export default function App() {
         setUser(d.user);
         setAi(d.ai);
         applyState(d);
+        // 恢复智能文件夹视图时同步查询串
+        try {
+          const v = JSON.parse(localStorage.getItem('zm_view') || 'null');
+          if (v?.box === 'smart' && v.smartId && d.savedSearches?.length) {
+            const ss = d.savedSearches.find((x) => Number(x.id) === Number(v.smartId));
+            if (ss) setQ(ss.query);
+            else setViewState(DEFAULT_VIEW);
+          }
+        } catch { /* ignore */ }
         setBoot('ready');
       })
       .catch(() => setBoot('auth'));
@@ -255,6 +269,16 @@ export default function App() {
     if (view.mailboxId !== 'all' && !mailboxMap[view.mailboxId]) setView(DEFAULT_VIEW);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boot, mailboxes]);
+
+  useEffect(() => {
+    if (boot !== 'ready') return;
+    api('/saved-searches')
+      .then((d) => {
+        if (d.savedSearches) setSavedSearches(d.savedSearches);
+        if (d.presets) setSearchPresets(d.presets);
+      })
+      .catch(() => {});
+  }, [boot]);
 
   function setView(v) {
     setViewState(v);
@@ -309,6 +333,7 @@ export default function App() {
               box: view.box,
               folder: view.folder,
               labelId: view.box === 'label' ? view.labelId : undefined,
+              smartId: view.box === 'smart' ? view.smartId : undefined,
               category: showCategories && category !== 'all' && !q ? category : undefined,
               q,
               deep: deep && q ? 1 : undefined,
@@ -551,6 +576,61 @@ export default function App() {
     setLabels(d.labels || []);
     notify('标签已创建');
     return d.label;
+  }
+
+  function openSavedSearch(ss) {
+    if (!ss) return;
+    const v = { mailboxId: 'all', box: 'smart', smartId: ss.id };
+    setViewState(v);
+    localStorage.setItem('zm_view', JSON.stringify(v));
+    setSelectedId(null);
+    setChecked(new Set());
+    setCategory('all');
+    setQ(ss.query);
+    setDeep(false);
+  }
+
+  async function submitSaveSearch({ name, query }) {
+    if (saveSearchModal?.mode === 'edit' && saveSearchModal.id) {
+      const d = await api(`/saved-searches/${saveSearchModal.id}`, { method: 'PATCH', body: { name, query } });
+      setSavedSearches(d.savedSearches || []);
+      notify('已更新智能文件夹');
+      if (view.box === 'smart' && Number(view.smartId) === Number(saveSearchModal.id)) {
+        setQ(query);
+      }
+    } else {
+      const d = await api('/saved-searches', { method: 'POST', body: { name, query, pinned: true } });
+      setSavedSearches(d.savedSearches || []);
+      notify('已保存到侧栏');
+      if (d.savedSearch) openSavedSearch(d.savedSearch);
+    }
+    setSaveSearchModal(null);
+  }
+
+  async function deleteSavedSearch(ss) {
+    if (!ss) return;
+    if (!confirm(`删除智能文件夹「${ss.name}」？邮件不会被删除。`)) return;
+    try {
+      const d = await api(`/saved-searches/${ss.id}`, { method: 'DELETE' });
+      setSavedSearches(d.savedSearches || []);
+      notify('已删除智能文件夹');
+      if (view.box === 'smart' && Number(view.smartId) === Number(ss.id)) {
+        setView(DEFAULT_VIEW);
+      }
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
+  async function updateSavedSearchQuery(ss, query) {
+    try {
+      const d = await api(`/saved-searches/${ss.id}`, { method: 'PATCH', body: { query } });
+      setSavedSearches(d.savedSearches || []);
+      notify('已更新智能文件夹');
+      setQ(query);
+    } catch (e) {
+      notify(e.message, 'error');
+    }
   }
 
   async function toggleMessageLabels(ids, { add = [], remove = [] } = {}) {
@@ -810,6 +890,7 @@ export default function App() {
     setMailboxes([]);
     setFolders({});
     setLabels([]);
+    setSavedSearches([]);
     setComposers([]);
     setModal(null);
     setList({ messages: [], pinned: [], nextCursor: null });
@@ -965,16 +1046,25 @@ export default function App() {
 
   const singleMb = mailboxes.length === 1;
   const activeLabel = view.box === 'label' ? labels.find((l) => Number(l.id) === Number(view.labelId)) : null;
+  const activeSavedSearch = view.box === 'smart' ? savedSearches.find((s) => Number(s.id) === Number(view.smartId)) : null;
   const title =
     view.box === 'folder'
       ? folderLabel(currentFolder) || view.folder
       : view.box === 'label'
         ? (activeLabel?.name || '标签')
-        : view.box === 'inbox' && singleMb
-          ? '收件箱'
-          : SMART_VIEWS[view.box] || '收件箱';
+        : view.box === 'smart'
+          ? (activeSavedSearch?.name || '智能文件夹')
+          : view.box === 'inbox' && singleMb
+            ? '收件箱'
+            : SMART_VIEWS[view.box] || '收件箱';
   const subtitle =
-    view.box === 'folder' ? (singleMb ? '' : mailboxMap[view.mailboxId]?.email) : !singleMb ? `${mailboxes.length} 个邮箱` : '';
+    view.box === 'smart'
+      ? (activeSavedSearch?.query || '')
+      : view.box === 'folder'
+        ? (singleMb ? '' : mailboxMap[view.mailboxId]?.email)
+        : !singleMb
+          ? `${mailboxes.length} 个邮箱`
+          : '';
   const checkedRows = allItems.filter((m) => checked.has(m.id));
   const checkedMb = new Set(checkedRows.map((m) => m.mailboxId));
   const moveFolders = checkedMb.size === 1 ? folders[[...checkedMb][0]] : null;
@@ -1031,6 +1121,11 @@ export default function App() {
         salesRailTip={layoutMode === 'sales' && viewportW < LAYOUT_LIMITS.salesRailMinViewport}
         labels={labels}
         onCreateLabel={() => setModal({ type: 'settings', tab: 'labels' })}
+        savedSearches={savedSearches}
+        onOpenSavedSearch={openSavedSearch}
+        onCreateSavedSearch={() => setSaveSearchModal({ mode: 'create', name: '', query: q || '' })}
+        onEditSavedSearch={(s) => setSaveSearchModal({ mode: 'edit', id: s.id, name: s.name, query: s.query })}
+        onDeleteSavedSearch={deleteSavedSearch}
       />
       {sidebarOpen && <div className="sidebar-mask" onClick={() => setSidebarOpen(false)} />}
 
@@ -1158,6 +1253,10 @@ export default function App() {
           q={q}
           deep={deep}
           onSearch={(nq, d) => {
+            if (!nq && view.box === 'smart') {
+              setView({ mailboxId: 'all', box: 'inbox' });
+              return;
+            }
             setQ(nq);
             setDeep(!!d && !!nq);
             setSelectedId(null);
@@ -1177,6 +1276,9 @@ export default function App() {
           labels={labels}
           onToggleLabels={toggleMessageLabels}
           onCreateLabel={async (n) => { await createLabelQuick(n); }}
+          activeSavedSearch={activeSavedSearch}
+          onSaveSearch={(query) => setSaveSearchModal({ mode: 'create', name: '', query })}
+          onUpdateSavedSearch={updateSavedSearchQuery}
         />
       )}
 
@@ -1330,6 +1432,23 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {saveSearchModal && (
+        <SaveSearchModal
+          open={!!saveSearchModal}
+          mode={saveSearchModal.mode}
+          initialName={saveSearchModal.name}
+          initialQuery={saveSearchModal.query}
+          presets={searchPresets.length ? searchPresets : [
+            { name: '有附件', query: 'has:attachment' },
+            { name: 'VIP 未读', query: 'is:vip is:unread' },
+            { name: '未读询盘', query: 'is:unread subject:询价' },
+            { name: '待开票标签', query: 'label:待开票' },
+          ]}
+          onClose={() => setSaveSearchModal(null)}
+          onSubmit={submitSaveSearch}
+        />
       )}
 
       <Palette
