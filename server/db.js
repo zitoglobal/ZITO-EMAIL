@@ -173,3 +173,17 @@ export const now = () => Date.now();
 export function tx(fn) {
   return db.transaction(fn);
 }
+
+// ---------- AI 翻译缓存（message + target + glossaryHash） ----------
+db.exec(`
+CREATE TABLE IF NOT EXISTS ai_translate_cache (
+  message_pk INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  target TEXT NOT NULL,
+  glossary_hash TEXT NOT NULL,
+  subject TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  source_lang TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (message_pk, target, glossary_hash)
+);
+`);
