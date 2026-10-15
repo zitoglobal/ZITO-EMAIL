@@ -14,9 +14,18 @@ import Settings from './components/Settings.jsx';
 import Focus from './components/Focus.jsx';
 import Waiting from './components/Waiting.jsx';
 import CustomerPanel from './components/CustomerPanel.jsx';
+import ColumnSplitter from './components/ColumnSplitter.jsx';
 import Palette from './components/Palette.jsx';
 import { SMART_VIEWS, dayStart, displayName, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
 import { buildComposeState, signatureHtml, toForm } from './compose.js';
+import {
+  LAYOUT_LIMITS,
+  effectiveWidths,
+  loadLayoutLocal,
+  normalizeLayoutMode,
+  saveLayoutLocal,
+  widthsFromSettings,
+} from './layout.js';
 
 const PAGE = 50;
 const DEFAULT_VIEW = { mailboxId: 'all', box: 'today' };
@@ -84,9 +93,19 @@ export default function App() {
   const [groupMode, setGroupModeState] = useState(() => localStorage.getItem('zm_group') || 'priority');
   const [aiBusy, setAiBusy] = useState(false);
   const [waitingTab, setWaitingTab] = useState('mine');
-  const [customerOpen, setCustomerOpen] = useState(false); // drawer on narrow
-  const [customerWide, setCustomerWide] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1600px)').matches);
+  const [customerOpen, setCustomerOpen] = useState(false); // drawer when rail hidden
   const [customerCtx, setCustomerCtx] = useState(null); // { address, sender, slaHours }
+  const [viewportW, setViewportW] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1440));
+  const localLayout = useMemo(() => loadLayoutLocal(), []);
+  const [layoutMode, setLayoutModeState] = useState(() => localLayout?.mode || 'standard');
+  const [layoutWidths, setLayoutWidths] = useState(() => localLayout?.widths || {
+    sidebar: LAYOUT_LIMITS.sidebar.def,
+    list: LAYOUT_LIMITS.list.def,
+    customer: LAYOUT_LIMITS.customer.def,
+  });
+  const layoutSaveTimer = useRef(null);
+  const layoutWidthsRef = useRef(layoutWidths);
+  layoutWidthsRef.current = layoutWidths;
   const groupRef = useRef(groupMode);
   groupRef.current = groupMode;
 
@@ -112,6 +131,7 @@ export default function App() {
   }, []);
   const dismiss = (id) => setToasts((t) => t.filter((x) => x.id !== id));
 
+  const railAllowed = layoutMode === 'sales' && viewportW >= LAYOUT_LIMITS.salesRailMinViewport;
   const openCustomer = useCallback((address, detailOrSender) => {
     const sender = detailOrSender?.sender
       ? { ...detailOrSender.sender, address: address || detailOrSender.sender.address }
@@ -125,8 +145,8 @@ export default function App() {
       slaHours,
       detail: detailOrSender?.sender ? detailOrSender : null,
     });
-    if (!customerWide) setCustomerOpen(true);
-  }, [customerWide, selectedItem]);
+    if (!(layoutMode === 'sales' && viewportW >= LAYOUT_LIMITS.salesRailMinViewport)) setCustomerOpen(true);
+  }, [layoutMode, viewportW, selectedItem]);
 
   async function setCustomerRule(key, kind, name) {
     try {
@@ -167,12 +187,20 @@ export default function App() {
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
 
   useEffect(() => {
-    const mq = matchMedia('(min-width: 1600px)');
-    const apply = () => setCustomerWide(mq.matches);
-    apply();
-    mq.addEventListener('change', apply);
-    return () => mq.removeEventListener('change', apply);
-  }, []); // customerWide mq
+    const onResize = () => setViewportW(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // 从用户设置恢复布局（与 localStorage 双写，设置优先）
+  useEffect(() => {
+    if (!user?.settings) return;
+    const s = user.settings;
+    if (s.layoutMode) setLayoutModeState(normalizeLayoutMode(s.layoutMode));
+    if (s.layoutSidebar != null || s.layoutList != null || s.layoutCustomer != null) {
+      setLayoutWidths(widthsFromSettings(s));
+    }
+  }, [user?.id]); // 仅登录/切换用户时灌入
 
 
   useEffect(() => {
@@ -648,6 +676,21 @@ export default function App() {
 
   // ---------- 账号 ----------
   async function saveSettings(patch) {
+    if ('layoutMode' in patch || 'layoutSidebar' in patch || 'layoutList' in patch || 'layoutCustomer' in patch) {
+      const mode = normalizeLayoutMode(patch.layoutMode ?? layoutMode);
+      if ('layoutMode' in patch) setLayoutModeState(mode);
+      const prev = layoutWidthsRef.current;
+      const w = widthsFromSettings({
+        layoutSidebar: patch.layoutSidebar ?? prev.sidebar,
+        layoutList: patch.layoutList ?? prev.list,
+        layoutCustomer: patch.layoutCustomer ?? prev.customer,
+      });
+      if ('layoutSidebar' in patch || 'layoutList' in patch || 'layoutCustomer' in patch) {
+        layoutWidthsRef.current = w;
+        setLayoutWidths(w);
+      }
+      saveLayoutLocal(mode, w);
+    }
     setUser((u) => ({ ...u, settings: { ...u.settings, ...patch } }));
     try {
       const r = await api('/me/settings', { method: 'PUT', body: patch });
@@ -659,6 +702,45 @@ export default function App() {
     } catch (e) {
       notify(e.message, 'error');
     }
+  }
+
+  function persistLayout(nextMode, nextWidths) {
+    const mode = normalizeLayoutMode(nextMode);
+    const widths = nextWidths || layoutWidthsRef.current;
+    saveLayoutLocal(mode, widths);
+    if (layoutSaveTimer.current) clearTimeout(layoutSaveTimer.current);
+    layoutSaveTimer.current = setTimeout(() => {
+      saveSettings({
+        layoutMode: mode,
+        layoutSidebar: widths.sidebar,
+        layoutList: widths.list,
+        layoutCustomer: widths.customer,
+      });
+    }, 450);
+  }
+
+  function setLayoutMode(mode) {
+    const next = normalizeLayoutMode(mode);
+    setLayoutModeState(next);
+    persistLayout(next, layoutWidthsRef.current);
+  }
+
+  function patchLayoutWidth(key, deltaOrReset) {
+    setLayoutWidths((prev) => {
+      const lim = LAYOUT_LIMITS[key];
+      let nextVal;
+      if (deltaOrReset === 'reset') nextVal = lim.def;
+      else nextVal = prev[key] + deltaOrReset;
+      nextVal = Math.min(lim.max, Math.max(lim.min, Math.round(nextVal)));
+      const next = { ...prev, [key]: nextVal };
+      layoutWidthsRef.current = next;
+      saveLayoutLocal(layoutMode, next);
+      return next;
+    });
+  }
+
+  function commitLayoutWidths() {
+    persistLayout(layoutMode, layoutWidthsRef.current);
   }
 
   async function logout() {
@@ -836,8 +918,30 @@ export default function App() {
   const syncing = mailboxes.filter((m) => m.status === 'syncing' || m.status === 'new');
   const syncAlert = syncBad.length || syncing.length;
 
+  const showCustomerRail = railAllowed && !!selectedId && view.box !== 'scheduled';
+  const eff = effectiveWidths(layoutMode, layoutWidths);
+  const desktopLayout = viewportW > 900;
+  const appStyle = desktopLayout
+    ? {
+        '--col-sidebar': `${eff.sidebar}px`,
+        '--col-list': `${eff.list}px`,
+        '--col-customer': `${layoutWidths.customer}px`,
+      }
+    : undefined;
+
   return (
-    <div className={'app zm-has-mob' + (selectedId ? ' has-selection' : '') + (settings.density === 'compact' ? ' compact' : '') + (syncAlert ? ' has-sync-strip' : '') + (customerWide && selectedId ? ' has-customer-rail' : '')}>
+    <div
+      className={
+        'app zm-has-mob'
+        + (selectedId ? ' has-selection' : '')
+        + (settings.density === 'compact' ? ' compact' : '')
+        + (syncAlert ? ' has-sync-strip' : '')
+        + (showCustomerRail ? ' has-customer-rail' : '')
+        + ` layout-${layoutMode}`
+      }
+      style={appStyle}
+      data-layout={layoutMode}
+    >
       <Sidebar
         user={user}
         mailboxes={mailboxes}
@@ -854,8 +958,46 @@ export default function App() {
         onNewFolder={newFolder}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        iconRail={layoutMode === 'focus' && desktopLayout}
+        layoutMode={layoutMode}
+        onLayoutMode={setLayoutMode}
       />
       {sidebarOpen && <div className="sidebar-mask" onClick={() => setSidebarOpen(false)} />}
+
+      {desktopLayout && layoutMode !== 'focus' && (
+        <ColumnSplitter
+          label="调整侧栏宽度"
+          style={{ left: eff.sidebar }}
+          onDrag={(d) => {
+            if (d === 'reset') patchLayoutWidth('sidebar', 'reset');
+            else patchLayoutWidth('sidebar', d);
+          }}
+          onDragEnd={commitLayoutWidths}
+        />
+      )}
+      {desktopLayout && (
+        <ColumnSplitter
+          label="调整列表宽度"
+          style={{ left: eff.sidebar + eff.list }}
+          onDrag={(d) => {
+            if (d === 'reset') patchLayoutWidth('list', 'reset');
+            else patchLayoutWidth('list', d);
+          }}
+          onDragEnd={commitLayoutWidths}
+        />
+      )}
+      {desktopLayout && showCustomerRail && (
+        <ColumnSplitter
+          label="调整客户栏宽度"
+          style={{ left: `calc(100% - ${layoutWidths.customer}px)` }}
+          onDrag={(d) => {
+            // 拖客户栏左边：向右变窄（delta 为正 → 宽度减小）
+            if (d === 'reset') patchLayoutWidth('customer', 'reset');
+            else patchLayoutWidth('customer', -d);
+          }}
+          onDragEnd={commitLayoutWidths}
+        />
+      )}
 
       {syncAlert ? (
         <div className={'mb-sync-strip' + (syncBad.length ? ' err' : '')} role="status">
@@ -987,7 +1129,7 @@ export default function App() {
               sender,
               slaHours: selectedItem?.priority?.slaHours,
             });
-            if (!customerWide) setCustomerOpen(true);
+            if (!railAllowed) setCustomerOpen(true);
           }}
           onOpenSettings={(tab) => setModal({ type: 'settings', tab: tab || 'preferences' })}
           onAiNote={(mid, note) => {
@@ -1012,7 +1154,7 @@ export default function App() {
       )}
 
 
-      {customerWide && selectedId && (
+      {showCustomerRail && (
         <aside className="customer-rail" aria-label="客户栏">
           <CustomerPanel
             mode="rail"
@@ -1025,7 +1167,7 @@ export default function App() {
         </aside>
       )}
 
-      {!customerWide && customerOpen && (
+      {!showCustomerRail && customerOpen && (
         <>
           <div className="customer-drawer-mask" onClick={() => setCustomerOpen(false)} />
           <div className="customer-drawer" role="dialog" aria-modal="true" aria-label="客户">

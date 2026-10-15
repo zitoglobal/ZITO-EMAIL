@@ -4,6 +4,13 @@ import { sanitizeGlossary } from './glossary.js';
 
 const SESSION_TTL = 30 * 24 * 3600 * 1000;
 
+const LAYOUT_MODES = new Set(['standard', 'sales', 'focus']);
+const clampInt = (n, min, max, fallback) => {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(x)));
+};
+
 const DEFAULT_SETTINGS = {
   theme: 'light',
   autoSummary: false,
@@ -22,7 +29,19 @@ const DEFAULT_SETTINGS = {
   translateTarget: '简体中文',
   autoTranslate: false,
   glossary: [],
+  /** 布局：standard 标准三栏 / sales 销售台 / focus 专注读信 */
+  layoutMode: 'standard',
+  layoutSidebar: 252,
+  layoutList: 360,
+  layoutCustomer: 280,
 };
+
+function sanitizeLayout(merged) {
+  if ('layoutMode' in merged) merged.layoutMode = LAYOUT_MODES.has(merged.layoutMode) ? merged.layoutMode : 'standard';
+  if ('layoutSidebar' in merged) merged.layoutSidebar = clampInt(merged.layoutSidebar, 180, 320, 252);
+  if ('layoutList' in merged) merged.layoutList = clampInt(merged.layoutList, 280, 520, 360);
+  if ('layoutCustomer' in merged) merged.layoutCustomer = clampInt(merged.layoutCustomer, 240, 380, 280);
+}
 
 
 export function publicUser(u) {
@@ -38,6 +57,7 @@ export function publicUser(u) {
       if (s.translateTarget !== 'English' && s.translateTarget !== '英文') s.translateTarget = '简体中文';
       else s.translateTarget = 'English';
       s.autoTranslate = !!s.autoTranslate;
+      sanitizeLayout(s);
       return s;
     })(),
   };
@@ -90,9 +110,11 @@ export function updateSettings(userId, patch) {
     merged.translateTarget = t === 'English' || t === '英文' ? 'English' : '简体中文';
   }
   if ('autoTranslate' in merged) merged.autoTranslate = !!merged.autoTranslate;
+  sanitizeLayout(merged);
   db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(merged), userId);
   const settings = { ...DEFAULT_SETTINGS, ...merged };
   settings.glossary = sanitizeGlossary(settings.glossary);
+  sanitizeLayout(settings);
   return settings;
 }
 

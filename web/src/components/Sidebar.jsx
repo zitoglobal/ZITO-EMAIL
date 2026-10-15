@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import {
   Inbox, Send, FileText, Trash2, Archive, ShieldAlert, Star, Folder, PenSquare, Settings, Sparkles, ChevronRight, Plus, LogOut,
-  MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, Hourglass,
+  MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, Hourglass, LayoutPanelLeft,
 } from 'lucide-react';
 import { avatarColor, folderDepth, folderLabel, initials, sortFolders } from '../utils.js';
 import { BrandIcon } from './Brand.jsx';
+import { LAYOUT_MODES } from '../layout.js';
 
 const ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Trash': Trash2, '\\Archive': Archive, '\\Junk': ShieldAlert, '\\Flagged': Star, '\\All': Layers };
 
@@ -30,6 +31,7 @@ function loadExpanded() {
 
 export default function Sidebar({
   user, mailboxes, folders, counts, view, onView, onCompose, onDigest, onSettings, onAddMailbox, onLogout, onCommand, onNewFolder, open, onClose,
+  iconRail = false, layoutMode = 'standard', onLayoutMode,
 }) {
   const [expanded, setExpanded] = useState(loadExpanded);
   const [menu, setMenu] = useState(false);
@@ -58,12 +60,12 @@ export default function Sidebar({
   const isActive = (v) => view.box === v.box && (view.mailboxId || 'all') === (v.mailboxId || 'all') && (v.box !== 'folder' || view.folder === v.folder);
 
   return (
-    <aside className={'sidebar' + (open ? ' open' : '')}>
+    <aside className={'sidebar' + (open ? ' open' : '') + (iconRail ? ' icon-rail' : '')}>
       <div className="brand">
-        <BrandIcon size={30} />
-        <span className="brand-name">ZITO<small>智能邮箱</small></span>
+        <BrandIcon size={iconRail ? 26 : 30} />
+        {!iconRail && <span className="brand-name">ZITO<small>智能邮箱</small></span>}
         <div className="user-wrap">
-          <button className="user-btn" onClick={() => setMenu((v) => !v)} title={user.email}>
+          <button className="user-btn" onClick={() => setMenu((v) => !v)} title={user.email} aria-label="账户菜单">
             <span className="avatar xs" style={{ background: avatarColor(user.email) }}>{initials({ name: user.name, address: user.email })}</span>
           </button>
           {menu && (
@@ -80,14 +82,14 @@ export default function Sidebar({
         </div>
       </div>
 
-      <button className="compose-btn" onClick={() => onCompose()}>
-        <PenSquare size={17} /> 写邮件
+      <button className="compose-btn" onClick={() => onCompose()} title="写邮件" aria-label="写邮件">
+        <PenSquare size={17} />{!iconRail && ' 写邮件'}
       </button>
-      <button className="cmd-btn" onClick={onCommand}>
-        <Search size={14} /> 搜索与命令 <kbd>Ctrl K</kbd>
+      <button className="cmd-btn" onClick={onCommand} title="搜索与命令" aria-label="搜索与命令">
+        <Search size={14} />{!iconRail && <> 搜索与命令 <kbd>Ctrl K</kbd></>}
       </button>
-      <button className="digest-btn" onClick={onDigest}>
-        <Sparkles size={16} /> AI 今日简报
+      <button className="digest-btn" onClick={onDigest} title="AI 今日简报" aria-label="AI 今日简报">
+        <Sparkles size={16} />{!iconRail && ' AI 今日简报'}
       </button>
 
       <nav className="folders">
@@ -96,7 +98,7 @@ export default function Sidebar({
           const Icon = s.icon;
           const v = { mailboxId: 'all', box: s.box };
           return (
-            <button key={s.box} className={'folder' + (isActive(v) ? ' active' : '') + (s.box === 'today' ? ' folder-today' : '')} onClick={() => go(v)}>
+            <button key={s.box} className={'folder' + (isActive(v) ? ' active' : '') + (s.box === 'today' ? ' folder-today' : '')} onClick={() => go(v)} title={multi || s.box !== 'inbox' ? s.label : '收件箱'} aria-label={multi || s.box !== 'inbox' ? s.label : '收件箱'}>
               <Icon size={17} />
               <span className="folder-name" title={s.box === 'waiting' ? '等我回复 · 等对方回复' : undefined}>{multi || s.box !== 'inbox' ? s.label : '收件箱'}</span>
               {(s.box === 'today' || s.box === 'waiting') && counts.focus?.overdue > 0 ? (
@@ -167,7 +169,30 @@ export default function Sidebar({
         })}
       </nav>
 
-      <button className="folder settings-link" onClick={() => onSettings('preferences')}>
+      {onLayoutMode && (
+        <div className="layout-mode-switch" role="group" aria-label="布局模式">
+          {!iconRail && (
+            <div className="layout-mode-label"><LayoutPanelLeft size={13} /> 布局</div>
+          )}
+          <div className="layout-mode-btns">
+            {LAYOUT_MODES.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                className={layoutMode === m.id ? 'on' : ''}
+                title={m.hint}
+                aria-pressed={layoutMode === m.id}
+                aria-label={m.label}
+                onClick={() => onLayoutMode(m.id)}
+              >
+                {iconRail ? m.label.slice(0, 1) : m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button className="folder settings-link" onClick={() => onSettings('preferences')} title="设置" aria-label="设置">
         <Settings size={17} /> <span className="folder-name">设置</span>
       </button>
     </aside>
