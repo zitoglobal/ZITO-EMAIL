@@ -17,35 +17,55 @@ import TimeMenu from './TimeMenu.jsx';
 const URGENCY = { high: ['紧急', 'high'], medium: ['一般', 'medium'], low: ['不急', 'low'] };
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
 
-function SenderLine({ info, onRule }) {
+function RelationCard({ info, onRule, slaHours }) {
   if (!info || info.tier === 'self' || info.tier === 'bulk') return null;
   const vip = info.rule?.kind === 'vip';
   const muted = info.rule?.kind === 'muted';
   const target = info.company?.domain ? '@' + info.company.domain : null;
+  const recent = info.recentSubjects || [];
   return (
-    <div className="sender-line">
-      {TIER_TEXT[info.tier] && <span className={'tag tier-' + info.tier}>{info.tier === 'vip' && <Crown size={10} />} {TIER_TEXT[info.tier]}</span>}
-      {info.company?.domain && <span className="sl-item">{info.company.name}</span>}
-      <span className="sl-item">来信 {info.received} 封</span>
-      {info.sent > 0 && <span className="sl-item">你发过 {info.sent} 封</span>}
-      {info.lastSent && <span className="sl-item">上次给 TA 发信 {relativeTime(info.lastSent)}</span>}
-      <span className="spacer" />
-      {info.rule ? (
-        <button className="sl-btn" onClick={() => onRule(info.rule.key, null)} title={`规则：${info.rule.key}`}>
-          {vip ? <><Crown size={12} /> 取消 VIP</> : <><Bell size={12} /> 取消静音</>}
-        </button>
-      ) : (
-        <>
-          <button className="sl-btn vip" onClick={() => onRule(target || info.address, 'vip', info.company?.name)} title={target ? `把 ${target} 的所有来信设为 VIP` : '设为 VIP 客户'}>
-            <Crown size={12} /> 设为 VIP{target ? '（整个公司）' : ''}
-          </button>
-          {!muted && (
-            <button className="sl-btn" onClick={() => onRule(info.address, 'muted')} title="此发件人的邮件不再进入今日待办">
-              <BellOff size={12} /> 静音
-            </button>
+    <div className="relation-card">
+      <div className="relation-card-main">
+        <div className="relation-card-badges">
+          {TIER_TEXT[info.tier] && (
+            <span className={'tag tier-' + info.tier}>{info.tier === 'vip' && <Crown size={10} />} {TIER_TEXT[info.tier]}</span>
           )}
-        </>
-      )}
+          {slaHours != null && ['vip', 'customer', 'new'].includes(info.tier) && (
+            <span className="relation-sla" title="该层级的回复时限"><Hourglass size={11} /> SLA {slaHours}h</span>
+          )}
+          {info.company?.domain && <span className="relation-co">{info.company.name} · {info.company.domain}</span>}
+        </div>
+        <div className="relation-card-stats sender-line">
+          <span className="sl-item">来信 {info.received} 封</span>
+          {info.sent > 0 && <span className="sl-item">你发过 {info.sent} 封</span>}
+          {info.lastSent && <span className="sl-item">上次给 TA 发信 {relativeTime(info.lastSent)}</span>}
+        </div>
+        {recent.length > 0 && (
+          <div className="relation-recent" title="最近往来主题">
+            {recent.map((r, i) => (
+              <span key={i} className="relation-topic">{r.subject}</span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="relation-card-actions">
+        {info.rule ? (
+          <button className="sl-btn" onClick={() => onRule(info.rule.key, null)} title={`规则：${info.rule.key}`}>
+            {vip ? <><Crown size={12} /> 取消 VIP</> : <><Bell size={12} /> 取消静音</>}
+          </button>
+        ) : (
+          <>
+            <button className="sl-btn vip" onClick={() => onRule(target || info.address, 'vip', info.company?.name)} title={target ? `把 ${target} 的所有来信设为 VIP` : '设为 VIP 客户'}>
+              <Crown size={12} /> 设为 VIP{target ? '（公司）' : ''}
+            </button>
+            {!muted && (
+              <button className="sl-btn" onClick={() => onRule(info.address, 'muted')} title="此发件人的邮件不再进入今日待办">
+                <BellOff size={12} /> 静音
+              </button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -78,7 +98,7 @@ function Attachments({ msg }) {
   );
 }
 
-function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule }) {
+function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours }) {
   const [allowImages, setAllowImages] = useState(false);
   const loading = expanded && !detail;
   const isDraft = item.specialUse === '\\Drafts';
@@ -123,7 +143,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
           {mailbox && <div className="meta-mb"><span className="mb-dot" style={{ background: mailbox.color }} />{mailbox.email}</div>}
         </div>
       </div>
-      {m && primary && <SenderLine info={m.sender && { ...m.sender, address: item.from?.address }} onRule={onRule} />}
+      {m && primary && <RelationCard info={m.sender && { ...m.sender, address: item.from?.address }} onRule={onRule} slaHours={slaHours} />}
 
       {loading && <div className="reader-loading sm"><Loader2 size={16} className="spin" /> 正在加载…</div>}
       {detail?.error && <div className="list-error">{detail.error}</div>}
@@ -513,7 +533,10 @@ export default function Reader({
                 <Hourglass size={15} />
                 <div>
                   <b>{listItem.priority.overdue ? '已超过回复时限' : '等待你回复'} · 已等 {waitText(listItem.priority.waitingHours)}</b>
-                  <small>{listItem.priority.reasons.join(' · ')}</small>
+                  <small>
+                    {listItem.priority.reasons.join(' · ')}
+                    {listItem.priority.slaHours != null ? ` · 时限 ${listItem.priority.slaHours}h` : ''}
+                  </small>
                 </div>
                 <button className="btn-ghost sm" onClick={() => act('done')}><CheckCircle2 size={13} /> 无需回复</button>
                 <button className="btn-primary sm" onClick={() => onCompose('reply', msg)} disabled={!msg}><Reply size={13} /> 回复</button>
@@ -631,6 +654,7 @@ export default function Reader({
                       onCompose={onCompose}
                       onRule={setRule}
                       mailbox={mailboxMap[it.mailboxId]}
+                      slaHours={listItem?.priority?.slaHours}
                     />
                   </div>
                 ))}

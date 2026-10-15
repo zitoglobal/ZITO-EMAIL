@@ -235,9 +235,10 @@ export function whyPriority(m, variant = 'reply') {
   if (variant === 'reply' && m?.priority) {
     const p = m.priority;
     const parts = [...(p.reasons || [])];
+    if (p.slaHours != null) parts.push(`时限 ${p.slaHours}h`);
     if (p.overdue) parts.push(`已等 ${waitText(p.waitingHours)}`);
     else if (p.waitingHours >= 1) parts.push(`已等 ${waitText(p.waitingHours)}`);
-    return [...new Set(parts.filter(Boolean))].slice(0, 4).join(' · ');
+    return [...new Set(parts.filter(Boolean))].slice(0, 5).join(' · ');
   }
   if (variant === 'follow' && m?.follow) {
     const f = m.follow;

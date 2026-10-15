@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, X, LogOut, Keyboard } from 'lucide-react';
+import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, PenSquare, AlertCircle, RefreshCw } from 'lucide-react';
 import { api, qs } from './api.js';
 import Auth, { HeroBrand } from './components/Auth.jsx';
 import { BrandIcon } from './components/Brand.jsx';
@@ -776,9 +776,12 @@ export default function App() {
   const checkedMb = new Set(checkedRows.map((m) => m.mailboxId));
   const moveFolders = checkedMb.size === 1 ? folders[[...checkedMb][0]] : null;
   const unreadInList = allItems.filter((m) => !m.seen).map((m) => m.id);
+  const syncBad = mailboxes.filter((m) => m.status === 'error');
+  const syncing = mailboxes.filter((m) => m.status === 'syncing' || m.status === 'new');
+  const syncAlert = syncBad.length || syncing.length;
 
   return (
-    <div className={'app' + (selectedId ? ' has-selection' : '') + (settings.density === 'compact' ? ' compact' : '')}>
+    <div className={'app zm-has-mob' + (selectedId ? ' has-selection' : '') + (settings.density === 'compact' ? ' compact' : '') + (syncAlert ? ' has-sync-strip' : '')}>
       <Sidebar
         user={user}
         mailboxes={mailboxes}
@@ -797,6 +800,23 @@ export default function App() {
         onClose={() => setSidebarOpen(false)}
       />
       {sidebarOpen && <div className="sidebar-mask" onClick={() => setSidebarOpen(false)} />}
+
+      {syncAlert ? (
+        <div className={'mb-sync-strip' + (syncBad.length ? ' err' : '')} role="status">
+          {syncBad.length ? (
+            <>
+              <AlertCircle size={14} />
+              <span>{syncBad.length === 1 ? `${syncBad[0].email} 同步失败` : `${syncBad.length} 个邮箱同步失败`}</span>
+              <button type="button" className="mb-sync-link" onClick={() => setModal({ type: 'settings', tab: 'mailboxes', mb: syncBad[0]?.id })}>去设置</button>
+            </>
+          ) : (
+            <>
+              <RefreshCw size={14} className="spin" />
+              <span>正在同步 {syncing.length} 个邮箱…</span>
+            </>
+          )}
+        </div>
+      ) : null}
 
       {view.box === 'scheduled' ? (
         <Outbox
@@ -976,6 +996,33 @@ export default function App() {
         onDone={() => { setPalette(false); selectedId && doAction([selectedId], selectedItem?._section === 'follow' ? 'nofollow' : 'done'); }}
         onSnooze={() => { setPalette(false); selectedId && doAction([selectedId], 'snooze', { until: snoozePresets()[1].at }); }}
       />
+
+      <nav className="zm-mob-nav" aria-label="移动主导航">
+        <button
+          type="button"
+          className={view.box === 'today' ? 'on' : ''}
+          onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'today' }); setSidebarOpen(false); }}
+        >
+          <ListTodo size={20} strokeWidth={1.75} />
+          <span>待办</span>
+        </button>
+        <button
+          type="button"
+          className={view.box === 'inbox' ? 'on' : ''}
+          onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'inbox' }); setSidebarOpen(false); }}
+        >
+          <Inbox size={20} strokeWidth={1.75} />
+          <span>收件</span>
+        </button>
+        <button
+          type="button"
+          className="zm-mob-compose"
+          onClick={() => { setSidebarOpen(false); openCompose(); }}
+        >
+          <PenSquare size={20} strokeWidth={1.75} />
+          <span>写信</span>
+        </button>
+      </nav>
 
       <div className="toasts">
         {toasts.map((t) => (
