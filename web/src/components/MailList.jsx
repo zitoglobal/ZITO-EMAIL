@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Search, RefreshCw, Star, Paperclip, MailOpen, Mail, Trash2, Archive, FolderInput, X, Menu, CornerUpLeft, Loader2, Inbox, Clock, Pin,
-  ServerCrash, ShieldAlert, CheckCheck, Crown, Flame, Hourglass, Sparkles, CheckCircle2, Reply, BellOff, Send,
+  ServerCrash, ShieldAlert, CheckCheck, Crown, Flame, Hourglass, Sparkles, CheckCircle2, Reply, BellOff, Send, Tag,
 } from 'lucide-react';
+import LabelMenu from './LabelMenu.jsx';
 import {
   CATEGORIES, SIGNALS, avatarColor, displayName, folderLabel, formatListDate, formatShortDateTime, initials, snoozePresets, sortFolders, waitText, whyPriority,
 } from '../utils.js';
@@ -12,6 +13,7 @@ const QUICK_FILTERS = [
   { token: 'is:unread', label: '未读' },
   { token: 'is:starred', label: '星标' },
   { token: 'has:attachment', label: '有附件' },
+  { token: 'is:vip', label: 'VIP' },
 ];
 
 function remindChip(stage) {
@@ -54,8 +56,21 @@ function Chips({ m, variant }) {
       m.signals?.filter((s) => SIGNALS[s]).slice(0, 1).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
     }
   }
-  const shown = chips.slice(0, 3);
-  return shown.length ? <div className="row-tags" title={chips.length > 3 ? '更多状态已收起' : undefined}>{shown}</div> : null;
+  const userLabels = Array.isArray(m.labels) ? m.labels : [];
+  const labelShown = userLabels.slice(0, 2).map((l) => (
+    <span key={'lb' + l.id} className="tag user-label" style={{ '--lc': l.color }}>
+      <span className="label-dot xs" style={{ background: l.color }} />
+      {l.name}
+    </span>
+  ));
+  const labelMore = userLabels.length > 2 ? (
+    <span key="lb+" className="tag user-label more" title={userLabels.slice(2).map((l) => l.name).join('、')}>
+      +{userLabels.length - 2}
+    </span>
+  ) : null;
+  const all = [...chips, ...labelShown, ...(labelMore ? [labelMore] : [])];
+  const shown = all.slice(0, 4);
+  return shown.length ? <div className="row-tags" title={all.length > 4 ? '更多状态已收起' : undefined}>{shown}</div> : null;
 }
 
 export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp }) {
@@ -201,11 +216,13 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
 export default function MailList({
   title, subtitle, view, mailboxMap, messages, pinned, loading, loadingMore, hasMore, onLoadMore, selectedId, onSelect,
   checked, setChecked, category, setCategory, showCategories, q, deep, onSearch, onRefresh, refreshing, onAction, moveFolders,
+  labels = [], onToggleLabels, onCreateLabel,
   onMenu, error, compact, onMarkAllRead,
 }) {
   const [input, setInput] = useState(q);
   const [moveOpen, setMoveOpen] = useState(false);
   const [bulkSnooze, setBulkSnooze] = useState(false);
+  const [bulkLabel, setBulkLabel] = useState(false);
   const searchRef = useRef();
   const sentinel = useRef();
   const lastChecked = useRef(null);
@@ -346,6 +363,22 @@ export default function MailList({
                   )}
                 </div>
               )}
+              {onToggleLabels && (
+                <div className="move-wrap">
+                  <button title="标签" onClick={() => setBulkLabel((v) => !v)}><Tag size={15} /></button>
+                  {bulkLabel && (
+                    <LabelMenu
+                      labels={labels}
+                      selectedIds={[]}
+                      onClose={() => setBulkLabel(false)}
+                      onToggle={(l, on) => {
+                        onToggleLabels(ids, on ? { add: [l.id] } : { remove: [l.id] });
+                      }}
+                      onCreate={onCreateLabel ? async (n) => { await onCreateLabel(n); } : undefined}
+                    />
+                  )}
+                </div>
+              )}
               <button className="text" onClick={() => setChecked(new Set())}>取消</button>
             </div>
           ) : (
@@ -375,7 +408,7 @@ export default function MailList({
         {!loading && !all.length && !error && (
           <div className="empty">
             <Inbox size={42} strokeWidth={1.2} />
-            <p>{q ? '没有找到匹配的邮件' : view.box === 'snoozed' ? '没有稍后处理的邮件' : '这里空空如也'}</p>
+            <p>{q ? '没有找到匹配的邮件' : view.box === 'snoozed' ? '没有稍后处理的邮件' : view.box === 'label' ? '这个标签下还没有邮件' : '这里空空如也'}</p>
             {q && !deep && <button className="link-btn" onClick={() => onSearch(q, true)}>在服务器上搜索全文</button>}
           </div>
         )}

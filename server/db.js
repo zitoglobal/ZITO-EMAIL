@@ -188,3 +188,25 @@ CREATE TABLE IF NOT EXISTS ai_translate_cache (
   PRIMARY KEY (message_pk, target, glossary_hash)
 );
 `);
+
+// ---------- 用户标签（切片 A） ----------
+db.exec(`
+CREATE TABLE IF NOT EXISTS labels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  color TEXT NOT NULL DEFAULT '#0a66ff',
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  UNIQUE(user_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_labels_user_pos ON labels(user_id, position);
+
+CREATE TABLE IF NOT EXISTS message_labels (
+  message_pk INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  label_id INTEGER NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (message_pk, label_id)
+);
+CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label_id);
+`);

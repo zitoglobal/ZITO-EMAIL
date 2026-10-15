@@ -29,6 +29,18 @@ import {
 
 const PAGE = 50;
 const DEFAULT_VIEW = { mailboxId: 'all', box: 'today' };
+
+function mergeLocalLabels(current = [], add = [], remove = [], allLabels = []) {
+  const byId = new Map((current || []).map((l) => [l.id, l]));
+  for (const id of remove.map(Number)) byId.delete(id);
+  for (const id of add.map(Number)) {
+    if (byId.has(id)) continue;
+    const meta = allLabels.find((l) => l.id === id);
+    if (meta) byId.set(id, { id: meta.id, name: meta.name, color: meta.color });
+  }
+  return [...byId.values()];
+}
+
 const REMOVING = new Set(['archive', 'trash', 'spam', 'notspam', 'move', 'delete']);
 const ACTION_TEXT = {
   archive: '已归档', trash: '已移到已删除', spam: '已标记为垃圾邮件', notspam: '已移回收件箱', move: '已移动', delete: '已彻底删除', snooze: '已设为稍后提醒',
@@ -69,6 +81,7 @@ export default function App() {
   const [mailboxes, setMailboxes] = useState([]);
   const [folders, setFolders] = useState({});
   const [counts, setCounts] = useState({ unifiedUnread: 0, snoozed: 0, scheduled: 0 });
+  const [labels, setLabels] = useState([]);
 
   const [view, setViewState] = useState(loadView);
   const [category, setCategory] = useState('all');
@@ -214,6 +227,7 @@ export default function App() {
     setMailboxes(s.mailboxes);
     setFolders(s.folders);
     setCounts(s.counts);
+    if (s.labels) setLabels(s.labels);
   }, []);
 
   const loadState = useCallback(async () => {
@@ -294,6 +308,7 @@ export default function App() {
               mailboxId: view.mailboxId || 'all',
               box: view.box,
               folder: view.folder,
+              labelId: view.box === 'label' ? view.labelId : undefined,
               category: showCategories && category !== 'all' && !q ? category : undefined,
               q,
               deep: deep && q ? 1 : undefined,
@@ -520,6 +535,50 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [view, q, selectedId, currentMsg, notify, loadState, loadList]
   );
+
+
+  async function refreshLabels() {
+    try {
+      const d = await api('/labels');
+      setLabels(d.labels || []);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function createLabelQuick(name, color) {
+    const d = await api('/labels', { method: 'POST', body: { name, color } });
+    setLabels(d.labels || []);
+    notify('标签已创建');
+    return d.label;
+  }
+
+  async function toggleMessageLabels(ids, { add = [], remove = [] } = {}) {
+    if (!ids?.length) return;
+    try {
+      const res = await api('/messages/labels', { method: 'POST', body: { ids, add, remove } });
+      const by = res.labelsByMessage || {};
+      setList((l) => {
+        const map = (m) => (by[m.id] ? { ...m, labels: by[m.id] } : ids.includes(m.id) && (add.length || remove.length) ? { ...m, labels: mergeLocalLabels(m.labels, add, remove, labels) } : m);
+        return { ...l, messages: l.messages.map(map), pinned: l.pinned.map(map) };
+      });
+      setCurrentMsg((cm) => {
+        if (!cm || !ids.includes(cm.id)) return cm;
+        const next = by[cm.id] || mergeLocalLabels(cm.labels, add, remove, labels);
+        return { ...cm, labels: next };
+      });
+      // 若在标签视图撕掉当前标签，静默刷新列表
+      if (view.box === 'label' && remove.map(Number).includes(Number(view.labelId))) {
+        loadList({ silent: true });
+      }
+      refreshLabels();
+      if (add.length && !remove.length) notify('已添加标签');
+      else if (remove.length && !add.length) notify('已移除标签');
+      else notify('标签已更新');
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
 
   async function selectMessage(m) {
     if (isDraftsView || m.specialUse === '\\Drafts') {
@@ -750,6 +809,7 @@ export default function App() {
     setUser(null);
     setMailboxes([]);
     setFolders({});
+    setLabels([]);
     setComposers([]);
     setModal(null);
     setList({ messages: [], pinned: [], nextCursor: null });
@@ -904,12 +964,15 @@ export default function App() {
   }
 
   const singleMb = mailboxes.length === 1;
+  const activeLabel = view.box === 'label' ? labels.find((l) => Number(l.id) === Number(view.labelId)) : null;
   const title =
     view.box === 'folder'
       ? folderLabel(currentFolder) || view.folder
-      : view.box === 'inbox' && singleMb
-        ? '收件箱'
-        : SMART_VIEWS[view.box] || '收件箱';
+      : view.box === 'label'
+        ? (activeLabel?.name || '标签')
+        : view.box === 'inbox' && singleMb
+          ? '收件箱'
+          : SMART_VIEWS[view.box] || '收件箱';
   const subtitle =
     view.box === 'folder' ? (singleMb ? '' : mailboxMap[view.mailboxId]?.email) : !singleMb ? `${mailboxes.length} 个邮箱` : '';
   const checkedRows = allItems.filter((m) => checked.has(m.id));
@@ -966,6 +1029,8 @@ export default function App() {
         layoutMode={layoutMode}
         onLayoutMode={setLayoutMode}
         salesRailTip={layoutMode === 'sales' && viewportW < LAYOUT_LIMITS.salesRailMinViewport}
+        labels={labels}
+        onCreateLabel={() => setModal({ type: 'settings', tab: 'labels' })}
       />
       {sidebarOpen && <div className="sidebar-mask" onClick={() => setSidebarOpen(false)} />}
 
@@ -1105,10 +1170,13 @@ export default function App() {
           error={listError}
           compact={settings.density === 'compact'}
           onMarkAllRead={
-            unreadInList.length && ['inbox', 'unread', 'folder'].includes(view.box)
+            unreadInList.length && ['inbox', 'unread', 'folder', 'label'].includes(view.box)
               ? () => doAction(unreadInList, 'read')
               : null
           }
+          labels={labels}
+          onToggleLabels={toggleMessageLabels}
+          onCreateLabel={async (n) => { await createLabelQuick(n); }}
         />
       )}
 
@@ -1138,6 +1206,9 @@ export default function App() {
             if (!railAllowed) setCustomerOpen(true);
           }}
           onOpenSettings={(tab) => setModal({ type: 'settings', tab: tab || 'preferences' })}
+          labels={labels}
+          onToggleLabels={toggleMessageLabels}
+          onCreateLabel={async (n) => { await createLabelQuick(n); }}
           onAiNote={(mid, note) => {
             setList((l) => ({
               ...l,
@@ -1235,6 +1306,7 @@ export default function App() {
           onAddMailbox={() => setModal({ type: 'add' })}
           onLogout={logout}
           aiEnabled={ai}
+          onLabelsChanged={(list) => setLabels(list || [])}
         />
       )}
       {modal?.type === 'add' && (

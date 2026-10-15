@@ -19,6 +19,7 @@ import * as ai from './ai.js';
 import * as priority from './priority.js';
 import * as backup from './backup.js';
 import { glossaryHash } from './glossary.js';
+import * as labels from './labels.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
@@ -120,6 +121,7 @@ function stateFor(user, dayStart) {
     mailboxes: mbs.map(repo.publicMailbox),
     folders: Object.fromEntries(mbs.map((m) => [m.id, repo.listFolders(m.id).map(folderPublic)])),
     counts: { ...repo.counts(user.id), focus: mbs.length ? priority.focus(user.id, settings, { dayStart }).stats : null },
+    labels: labels.listLabels(user.id),
   };
 }
 
@@ -206,7 +208,10 @@ app.get(
   wrap(async (req, res) => {
     const mailboxId = req.query.mailboxId || 'all';
     if (mailboxId !== 'all') mailboxOf(req, mailboxId);
-    res.json(priority.focus(req.user.id, users.publicUser(req.user).settings, { mailboxId, dayStart: req.query.dayStart }));
+    const data = priority.focus(req.user.id, users.publicUser(req.user).settings, { mailboxId, dayStart: req.query.dayStart });
+    data.reply = labels.attachLabels(req.user.id, data.reply || []);
+    data.followups = labels.attachLabels(req.user.id, data.followups || []);
+    res.json(data);
   })
 );
 
@@ -465,10 +470,15 @@ app.get(
       box: String(req.query.box || 'inbox'),
       folder: req.query.folder ? String(req.query.folder) : undefined,
       category: req.query.category,
+      labelId: req.query.labelId,
       q: String(req.query.q || '').trim(),
       cursor: req.query.cursor,
       limit: Math.min(100, Math.max(10, Number(req.query.limit) || 50)),
     };
+    if (opts.box === 'label') {
+      const lid = Number(opts.labelId);
+      if (!Number.isInteger(lid) || !labels.getLabel(req.user.id, lid)) throw httpError(404, '标签不存在');
+    }
     const settings = users.publicUser(req.user).settings;
     opts.map = (rows) => priority.decorate(req.user.id, rows, settings);
     if (opts.mailboxId !== 'all') mailboxOf(req, opts.mailboxId);
@@ -499,7 +509,9 @@ app.get(
 
     const pinned =
       !opts.cursor && !opts.q && opts.box === 'inbox' ? repo.queryMessages(req.user.id, { ...opts, onlyPinned: true, limit: 50 }).messages : [];
-    res.json({ ...result, pinned });
+    result.messages = labels.attachLabels(req.user.id, result.messages);
+    const pinnedLabeled = labels.attachLabels(req.user.id, pinned);
+    res.json({ ...result, pinned: pinnedLabeled });
   })
 );
 
@@ -576,8 +588,10 @@ app.get(
       throw e;
     }
     if (req.query.markSeen !== '0') markSeen(row);
+    const base = repo.rowToMessage({ ...row, seen: 1 });
+    const [withLabels] = labels.attachLabels(req.user.id, [base]);
     res.json({
-      ...repo.rowToMessage({ ...row, seen: 1 }),
+      ...withLabels,
       ...body.meta,
       html: body.html,
       text: body.text,
@@ -592,7 +606,7 @@ app.get(
   auth,
   wrap(async (req, res) => {
     const row = messageOf(req);
-    res.json({ messages: repo.threadMessages(req.user.id, row).map(repo.rowToMessage) });
+    res.json({ messages: labels.attachLabels(req.user.id, repo.threadMessages(req.user.id, row).map(repo.rowToMessage)) });
   })
 );
 
@@ -890,6 +904,70 @@ app.post(
 );
 
 // ---------- 联系人 / 模板 ----------
+
+// ---------- 用户标签（切片 A） ----------
+app.get('/api/labels', auth, (req, res) => res.json({ labels: labels.listLabels(req.user.id), colors: labels.LABEL_COLORS, presets: labels.TRADE_LABEL_PRESETS }));
+
+app.post(
+  '/api/labels',
+  auth,
+  wrap(async (req, res) => {
+    const row = labels.createLabel(req.user.id, req.body || {});
+    emit(req.user.id, 'labels', { action: 'create', id: row.id });
+    res.json({ label: row, labels: labels.listLabels(req.user.id) });
+  })
+);
+
+app.put(
+  '/api/labels/reorder',
+  auth,
+  wrap(async (req, res) => {
+    const list = labels.reorderLabels(req.user.id, req.body?.ids || []);
+    res.json({ labels: list });
+  })
+);
+
+app.post(
+  '/api/labels/presets',
+  auth,
+  wrap(async (req, res) => {
+    const result = labels.applyTradePresets(req.user.id);
+    emit(req.user.id, 'labels', { action: 'presets' });
+    res.json(result);
+  })
+);
+
+app.patch(
+  '/api/labels/:id',
+  auth,
+  wrap(async (req, res) => {
+    const row = labels.updateLabel(req.user.id, Number(req.params.id), req.body || {});
+    emit(req.user.id, 'labels', { action: 'update', id: row.id });
+    res.json({ label: row, labels: labels.listLabels(req.user.id) });
+  })
+);
+
+app.delete(
+  '/api/labels/:id',
+  auth,
+  wrap(async (req, res) => {
+    labels.deleteLabel(req.user.id, Number(req.params.id));
+    emit(req.user.id, 'labels', { action: 'delete', id: Number(req.params.id) });
+    res.json({ ok: true, labels: labels.listLabels(req.user.id) });
+  })
+);
+
+app.post(
+  '/api/messages/labels',
+  auth,
+  wrap(async (req, res) => {
+    const { ids, add, remove } = req.body || {};
+    const result = labels.setMessageLabels(req.user.id, ids || [], { add: add || [], remove: remove || [] });
+    emit(req.user.id, 'sync', { local: true, labels: true });
+    res.json(result);
+  })
+);
+
 app.get('/api/contacts', auth, (req, res) => res.json({ contacts: repo.searchContacts(req.user.id, String(req.query.q || '').trim()) }));
 
 app.get('/api/templates', auth, (req, res) => res.json({ templates: repo.listTemplates(req.user.id) }));

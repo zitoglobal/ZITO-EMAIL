@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   X, Trash2, Plus, Moon, Sun, Bell, Sparkles, RefreshCw, ArrowUp, ArrowDown, Server, Loader2, AlertCircle, CheckCircle2, Mail,
   SlidersHorizontal, FileStack, User, Users, Pencil, LogOut, Image, Undo2, MessagesSquare, Rows3, KeyRound, ListTodo, Hourglass, Send,
-  BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft,
+  BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft, Tag,
 } from 'lucide-react';
 import { LAYOUT_MODES } from '../layout.js';
 import { api } from '../api.js';
@@ -33,11 +33,15 @@ const TRADE_GLOSSARY_PRESET = [
 const TABS = [
   ['mailboxes', '邮箱账号', Mail],
   ['triage', '智能分拣', ListTodo],
+  ['labels', '标签', Tag],
   ['preferences', '偏好设置', SlidersHorizontal],
   ['templates', '邮件模板', FileStack],
   ['account', '账户与安全', User],
   ['team', '团队成员', Users],
 ];
+
+const DEFAULT_LABEL_COLORS = ['#0a66ff', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#0d9488', '#475569', '#0891b2'];
+
 
 function MailboxCard({ mb, index, total, onMove, onChanged, notify, focus }) {
   const [name, setName] = useState(mb.name || '');
@@ -581,7 +585,147 @@ function Team({ me, notify }) {
   );
 }
 
-export default function Settings({ user, mailboxes, tab: initialTab, focusMailbox, onClose, notify, onUserChange, onSettings, onMailboxesChanged, onAddMailbox, onLogout, aiEnabled }) {
+
+function LabelsPanel({ notify, onChanged }) {
+  const [list, setList] = useState(null);
+  const [colors, setColors] = useState(DEFAULT_LABEL_COLORS);
+  const [name, setName] = useState('');
+  const [color, setColor] = useState(DEFAULT_LABEL_COLORS[0]);
+  const [busy, setBusy] = useState('');
+  const [editId, setEditId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editColor, setEditColor] = useState('');
+
+  async function load() {
+    try {
+      const d = await api('/labels');
+      setList(d.labels || []);
+      if (d.colors?.length) setColors(d.colors);
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function create(e) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setBusy('create');
+    try {
+      const d = await api('/labels', { method: 'POST', body: { name: name.trim(), color } });
+      setList(d.labels);
+      setName('');
+      notify('标签已创建');
+      onChanged?.(d.labels);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function saveEdit(id) {
+    setBusy('edit');
+    try {
+      const d = await api(`/labels/${id}`, { method: 'PATCH', body: { name: editName.trim(), color: editColor } });
+      setList(d.labels);
+      setEditId(null);
+      notify('已保存');
+      onChanged?.(d.labels);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function remove(l) {
+    if (!window.confirm(`删除标签「${l.name}」？\n标签将从所有邮件移除，邮件本身不会删除。`)) return;
+    try {
+      const d = await api(`/labels/${l.id}`, { method: 'DELETE' });
+      setList(d.labels);
+      notify('标签已删除');
+      onChanged?.(d.labels);
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+  }
+
+  async function presets() {
+    setBusy('presets');
+    try {
+      const d = await api('/labels/presets', { method: 'POST', body: {} });
+      setList(d.labels);
+      const n = d.created?.length || 0;
+      notify(n ? `已添加 ${n} 个推荐标签` : '推荐标签已存在');
+      onChanged?.(d.labels);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <>
+      <div className="set-row">
+        <div>
+          <b>邮件标签</b>
+          <small>用标签整理询盘、样品、大货，不影响文件夹。可与搜索 label:名称 配合。</small>
+        </div>
+        <button type="button" className="btn-ghost sm" disabled={busy === 'presets'} onClick={presets}>
+          {busy === 'presets' ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />} 添加外贸推荐
+        </button>
+      </div>
+
+      <form className="glossary-add label-create-form" onSubmit={create}>
+        <span className="label-dot lg" style={{ background: color }} />
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="新标签名称" maxLength={40} />
+        <div className="label-color-picks" role="group" aria-label="颜色">
+          {colors.map((c) => (
+            <button key={c} type="button" className={'label-color-swatch' + (color === c ? ' on' : '')} style={{ background: c }} aria-label={c} onClick={() => setColor(c)} />
+          ))}
+        </div>
+        <button type="submit" className="btn-primary sm" disabled={busy === 'create' || !name.trim()}>创建</button>
+      </form>
+
+      {!list && <div className="muted">加载中…</div>}
+      {list && !list.length && (
+        <div className="empty-inline">还没有标签。可点「添加外贸推荐」一键创建询盘、样品、大货等。</div>
+      )}
+      {list?.map((l) => (
+        <div key={l.id} className="tpl-row label-manage-row">
+          {editId === l.id ? (
+            <>
+              <span className="label-dot" style={{ background: editColor }} />
+              <input value={editName} onChange={(e) => setEditName(e.target.value)} maxLength={40} />
+              <div className="label-color-picks">
+                {colors.map((c) => (
+                  <button key={c} type="button" className={'label-color-swatch' + (editColor === c ? ' on' : '')} style={{ background: c }} onClick={() => setEditColor(c)} />
+                ))}
+              </div>
+              <button type="button" className="btn-primary sm" onClick={() => saveEdit(l.id)}>保存</button>
+              <button type="button" className="btn-ghost sm" onClick={() => setEditId(null)}>取消</button>
+            </>
+          ) : (
+            <>
+              <span className="label-dot" style={{ background: l.color }} />
+              <div>
+                <b>{l.name}</b>
+                <small>{l.count || 0} 封邮件</small>
+              </div>
+              <button type="button" className="icon-btn" title="编辑" onClick={() => { setEditId(l.id); setEditName(l.name); setEditColor(l.color); }}><Pencil size={14} /></button>
+              <button type="button" className="icon-btn danger" title="删除" onClick={() => remove(l)}><Trash2 size={14} /></button>
+            </>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
+export default function Settings({ user, mailboxes, tab: initialTab, focusMailbox, onClose, notify, onUserChange, onSettings, onMailboxesChanged, onAddMailbox, onLogout, aiEnabled, onLabelsChanged }) {
   const [tab, setTab] = useState(initialTab || 'mailboxes');
   const tabs = TABS.filter(([k]) => k !== 'team' || user.role === 'admin');
 
@@ -601,6 +745,7 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
           <div className="modal-body settings-body">
             {tab === 'mailboxes' && <Mailboxes mailboxes={mailboxes} onChanged={onMailboxesChanged} onAdd={onAddMailbox} notify={notify} focusId={focusMailbox} />}
             {tab === 'triage' && <Triage settings={user.settings} onSave={onSettings} notify={notify} />}
+            {tab === 'labels' && <LabelsPanel notify={notify} onChanged={onLabelsChanged} />}
             {tab === 'preferences' && <Preferences settings={user.settings} onSave={onSettings} aiEnabled={aiEnabled} />}
             {tab === 'templates' && <Templates notify={notify} />}
             {tab === 'account' && <Account user={user} onUserChange={onUserChange} onLogout={onLogout} notify={notify} />}

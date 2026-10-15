@@ -114,7 +114,11 @@ export const SMART_VIEWS = {
   archive: '归档',
   junk: '垃圾邮件',
   trash: '已删除',
+  label: '标签',
 };
+
+export const LABEL_COLOR_FALLBACK = '#0a66ff';
+
 
 export function escapeHtml(s = '') {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);

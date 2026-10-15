@@ -1773,3 +1773,64 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .vip-suggest-row .btn-primary.sm { flex: none; white-space: nowrap; }
 [data-theme='dark'] .vip-suggest { background: #392c0e; border-color: #5c4814; }
 [data-theme='dark'] .vip-suggest svg { color: #f2c35b; }
+
+
+/* ---------- 用户标签（切片 A） ---------- */
+.label-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 12%, transparent);
+}
+.label-dot.xs { width: 8px; height: 8px; }
+.label-dot.lg { width: 14px; height: 14px; }
+.tag.user-label {
+  background: color-mix(in srgb, var(--lc, var(--accent)) 14%, var(--panel));
+  color: color-mix(in srgb, var(--lc, var(--accent)) 70%, var(--ink));
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 7.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag.user-label.more { max-width: none; opacity: 0.85; }
+.folder-chip.user-label-chip {
+  border-color: color-mix(in srgb, var(--lc, var(--accent)) 35%, var(--border));
+  background: color-mix(in srgb, var(--lc, var(--accent)) 10%, var(--panel));
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.label-menu { min-width: 220px; max-width: 280px; }
+.label-menu-empty { padding: 10px 12px; font-size: 12px; color: var(--muted); line-height: 1.45; }
+.label-menu-list { max-height: 240px; overflow: auto; }
+.label-menu-list button {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+}
+.label-menu-list button.on { background: var(--hover); }
+.label-menu-create {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; border-top: 1px solid var(--border);
+}
+.label-menu-create input {
+  flex: 1; min-width: 0; border: none; background: transparent;
+  font: inherit; color: var(--ink); outline: none;
+}
+.muted-text { color: var(--muted); font-weight: 500; }
+.label-empty-hint { opacity: 0.85; }
+.label-create-form { flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.label-color-picks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.label-color-swatch {
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent;
+  padding: 0; cursor: pointer;
+}
+.label-color-swatch.on { border-color: var(--ink); box-shadow: 0 0 0 1px var(--panel); }
+.label-manage-row { align-items: center; gap: 10px; }
+.label-manage-row input { flex: 1; min-width: 100px; }
+.empty-inline { padding: 16px 4px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.sidebar .folder .label-dot { margin-right: 2px; }
