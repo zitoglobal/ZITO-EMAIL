@@ -45,6 +45,54 @@ function mailContext(m) {
 
 const SYSTEM = '你是 ZITO 智能邮箱的 AI 助理，服务于一家外贸服装企业。你专业、简洁、准确，不编造邮件中没有的事实。';
 
+/** Heuristic language tag for mail body: '中文' | 'English' | '其他'. */
+export function detectLang(text) {
+  const s = String(text || '').slice(0, 4000);
+  const cjk = (s.match(/[\u4e00-\u9fff]/g) || []).length;
+  const latin = (s.match(/[A-Za-z]/g) || []).length;
+  if (cjk >= 8 && cjk >= latin * 0.4) return '中文';
+  if (latin >= 20 && latin > cjk * 2) return 'English';
+  if (cjk > latin) return '中文';
+  if (latin > 0) return 'English';
+  return '其他';
+}
+
+function sanitizeGlossary(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const src = String(row.src ?? '')
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80);
+    const dst = String(row.dst ?? '')
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80);
+    if (!src || !dst) continue;
+    const key = src.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ src, dst });
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+function glossaryHint(glossary) {
+  const entries = sanitizeGlossary(glossary);
+  if (!entries.length) return '';
+  return (
+    '\n\n术语表（请严格按对应关系使用，不要改写术语本身）：\n' +
+    entries.map((e) => `- ${e.src} → ${e.dst}`).join('\n')
+  );
+}
+
+
 export async function summarize(mail) {
   return chat(
     [
@@ -78,7 +126,7 @@ const TONES = {
   persuasive: '有说服力的销售口吻',
 };
 
-export async function draftReply(mail, { instruction = '', tone = 'professional', language = '', signature = '' } = {}) {
+export async function draftReply(mail, { instruction = '', tone = 'professional', language = '', signature = '', glossary = [] } = {}) {
   const lang = language || '与原邮件相同的语言';
   const text = await chat(
     [
@@ -91,7 +139,7 @@ export async function draftReply(mail, { instruction = '', tone = 'professional'
 - 语言：${lang}
 - 回复意图：${instruction || '根据邮件内容给出合适回复'}
 - 只输出正文（含称呼和结尾敬语），不要输出主题行，不要用 Markdown，不要编造价格、日期等未知信息，需要时用 [ ] 占位
-${signature ? `- 结尾署名使用：${signature}` : ''}
+${signature ? `- 结尾署名使用：${signature}` : ''}${glossaryHint(glossary)}
 
 ${mailContext(mail)}`,
       },
@@ -130,30 +178,35 @@ const REWRITE = {
   zh: '把这段邮件文字翻译成简体中文',
 };
 
-export async function rewrite(text, mode) {
+export async function rewrite(text, mode, glossary = []) {
   const task = REWRITE[mode] || mode;
   const out = await chat(
     [
       { role: 'system', content: SYSTEM },
-      { role: 'user', content: `${task}。只输出结果文本，不要解释，不要 Markdown。\n\n${String(text).slice(0, 8000)}` },
+      {
+        role: 'user',
+        content: `${task}。只输出结果文本，不要解释，不要 Markdown。${glossaryHint(glossary)}\n\n${String(text).slice(0, 8000)}`,
+      },
     ],
     { temperature: 0.4 }
   );
   return { text: out };
 }
 
-export async function translate(mail, target = '简体中文') {
+export async function translate(mail, target = '简体中文', glossary = []) {
+  const guessed = detectLang(mail.text || mail.body || '');
   const out = await chat(
     [
       { role: 'system', content: SYSTEM },
       {
         role: 'user',
-        content: `把下面邮件的主题和正文翻译成${target}，输出 JSON：{"subject":"...","body":"..."}。保留段落结构。\n\n${mailContext(mail)}`,
+        content: `把下面邮件的主题和正文翻译成${target}，输出 JSON：{"subject":"...","body":"...","sourceLang":"原邮件主要语言，如 English / 中文"}。保留段落结构。${glossaryHint(glossary)}\n\n${mailContext(mail)}`,
       },
     ],
     { json: true, temperature: 0.2, maxTokens: 3000 }
   );
-  return out;
+  const sourceLang = out.sourceLang || guessed;
+  return { subject: out.subject || '', body: out.body || '', sourceLang };
 }
 
 /** 待回复邮件逐封给出「一句话要做什么」 */

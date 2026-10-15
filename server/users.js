@@ -18,7 +18,40 @@ const DEFAULT_SETTINGS = {
   slaNewInquiryHours: 8,
   followupDays: 3,
   remindOverdue: true,
+  translateTarget: '简体中文',
+  autoTranslate: false,
+  glossary: [],
 };
+
+const GLOSSARY_MAX = 50;
+const GLOSSARY_FIELD_MAX = 80;
+
+/** Trim, length-cap, and strip control/injection-ish chars from glossary rows. */
+export function sanitizeGlossary(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const src = String(row.src ?? '')
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, GLOSSARY_FIELD_MAX);
+    const dst = String(row.dst ?? '')
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, GLOSSARY_FIELD_MAX);
+    if (!src || !dst) continue;
+    const key = src.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ src, dst });
+    if (out.length >= GLOSSARY_MAX) break;
+  }
+  return out;
+}
 
 export function publicUser(u) {
   if (!u) return null;
@@ -27,7 +60,14 @@ export function publicUser(u) {
     email: u.email,
     name: u.name,
     role: u.role,
-    settings: { ...DEFAULT_SETTINGS, ...JSON.parse(u.settings || '{}') },
+    settings: (() => {
+      const s = { ...DEFAULT_SETTINGS, ...JSON.parse(u.settings || '{}') };
+      s.glossary = sanitizeGlossary(s.glossary);
+      if (s.translateTarget !== 'English' && s.translateTarget !== '英文') s.translateTarget = '简体中文';
+      else s.translateTarget = 'English';
+      s.autoTranslate = !!s.autoTranslate;
+      return s;
+    })(),
   };
 }
 
@@ -72,8 +112,16 @@ export function updateSettings(userId, patch) {
   const u = db.prepare('SELECT settings FROM users WHERE id = ?').get(userId);
   const merged = { ...JSON.parse(u.settings || '{}'), ...patch };
   for (const k of Object.keys(merged)) if (!(k in DEFAULT_SETTINGS)) delete merged[k];
+  if ('glossary' in merged) merged.glossary = sanitizeGlossary(merged.glossary);
+  if ('translateTarget' in merged) {
+    const t = String(merged.translateTarget || '').trim();
+    merged.translateTarget = t === 'English' || t === '英文' ? 'English' : '简体中文';
+  }
+  if ('autoTranslate' in merged) merged.autoTranslate = !!merged.autoTranslate;
   db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(merged), userId);
-  return { ...DEFAULT_SETTINGS, ...merged };
+  const settings = { ...DEFAULT_SETTINGS, ...merged };
+  settings.glossary = sanitizeGlossary(settings.glossary);
+  return settings;
 }
 
 export const settingsOf = (userId) => publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(userId))?.settings || { ...DEFAULT_SETTINGS };

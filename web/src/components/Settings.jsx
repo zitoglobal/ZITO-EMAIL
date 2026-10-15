@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   X, Trash2, Plus, Moon, Sun, Bell, Sparkles, RefreshCw, ArrowUp, ArrowDown, Server, Loader2, AlertCircle, CheckCircle2, Mail,
   SlidersHorizontal, FileStack, User, Users, Pencil, LogOut, Image, Undo2, MessagesSquare, Rows3, KeyRound, ListTodo, Hourglass, Send,
-  BellRing, Crown, BellOff,
+  BellRing, Crown, BellOff, Languages, BookMarked,
 } from 'lucide-react';
 import { api } from '../api.js';
 import { MAILBOX_COLORS, relativeTime } from '../utils.js';
@@ -170,11 +170,60 @@ function Choice({ icon: Icon, label, value, options, onChange }) {
   );
 }
 
+function GlossaryEditor({ glossary, onSave }) {
+  const rows = Array.isArray(glossary) ? glossary : [];
+  const [draft, setDraft] = useState({ src: '', dst: '' });
+
+  function add(e) {
+    e.preventDefault();
+    const src = draft.src.trim();
+    const dst = draft.dst.trim();
+    if (!src || !dst) return;
+    if (rows.length >= 50) return;
+    const next = [...rows.filter((r) => r.src.toLowerCase() !== src.toLowerCase()), { src: src.slice(0, 80), dst: dst.slice(0, 80) }];
+    onSave({ glossary: next.slice(0, 50) });
+    setDraft({ src: '', dst: '' });
+  }
+
+  function remove(src) {
+    onSave({ glossary: rows.filter((r) => r.src !== src) });
+  }
+
+  return (
+    <div className="glossary-block">
+      <div className="set-row glossary-head">
+        <span className="set-label"><BookMarked size={15} /> <span>翻译术语表<small>外贸专用词（MOQ、面料名、SKU 等），翻译与润色时优先套用，最多 50 条</small></span></span>
+      </div>
+      {rows.length > 0 && (
+        <div className="glossary-list">
+          {rows.map((r) => (
+            <div key={r.src} className="glossary-row">
+              <span className="glossary-src">{r.src}</span>
+              <span className="glossary-arrow">→</span>
+              <span className="glossary-dst">{r.dst}</span>
+              <button type="button" className="icon-btn danger" onClick={() => remove(r.src)} title="删除"><Trash2 size={14} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <form className="glossary-add" onSubmit={add}>
+        <input value={draft.src} onChange={(e) => setDraft({ ...draft, src: e.target.value })} placeholder="原文术语，如 MOQ" maxLength={80} />
+        <span className="glossary-arrow">→</span>
+        <input value={draft.dst} onChange={(e) => setDraft({ ...draft, dst: e.target.value })} placeholder="译文，如 最小起订量" maxLength={80} />
+        <button type="submit" className="btn-ghost sm" disabled={!draft.src.trim() || !draft.dst.trim() || rows.length >= 50}>
+          <Plus size={13} /> 添加
+        </button>
+      </form>
+    </div>
+  );
+}
+
 function Preferences({ settings, onSave }) {
   const set = (k) => (v) => {
     onSave({ [k]: v });
     if (k === 'notify' && v && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
   };
+  const translateTarget = settings.translateTarget === 'English' || settings.translateTarget === '英文' ? 'English' : '简体中文';
   return (
     <>
       <Choice icon={settings.theme === 'dark' ? Moon : Sun} label="外观" value={settings.theme} onChange={set('theme')} options={[['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']]} />
@@ -183,7 +232,10 @@ function Preferences({ settings, onSave }) {
       <Choice icon={Undo2} label="撤销发送时长" value={settings.undoSeconds} onChange={set('undoSeconds')} options={[[0, '关闭'], [5, '5 秒'], [10, '10 秒'], [20, '20 秒'], [30, '30 秒']]} />
       <Toggle icon={MessagesSquare} label="会话视图" desc="把同一主题的往来邮件合并展示" checked={settings.conversationView} onChange={set('conversationView')} />
       <Toggle icon={Sparkles} label="打开邮件时自动生成 AI 摘要" checked={settings.autoSummary} onChange={set('autoSummary')} />
+      <Choice icon={Languages} label="默认翻译目标" value={translateTarget} onChange={set('translateTarget')} options={[['简体中文', '中文'], ['English', 'English']]} />
+      <Toggle icon={Languages} label="打开邮件时自动翻译" desc="外文邮件自动译成默认目标语言（消耗 AI 额度，默认关闭）" checked={settings.autoTranslate} onChange={set('autoTranslate')} />
       <Toggle icon={Bell} label="新邮件桌面通知" desc="浏览器在后台时弹出系统通知" checked={settings.notify} onChange={set('notify')} />
+      <GlossaryEditor glossary={settings.glossary} onSave={onSave} />
     </>
   );
 }

@@ -6,8 +6,9 @@ import {
 } from 'lucide-react';
 import { api } from '../api.js';
 import {
-  addrString, avatarColor, displayName, folderLabel, formatFullDate, formatListDate, formatSize, hasRemoteImages, initials,
-  relativeTime, replyIdeas, smartReplyInstruction, snoozePresets, sortFolders, summaryFromAiNote, textToHtml, waitText,
+  addrString, avatarColor, detectMailLang, displayName, folderLabel, formatFullDate, formatListDate, formatSize, hasRemoteImages, initials,
+  mostlyChinese, normalizeTranslateTarget, relativeTime, replyIdeas, smartReplyInstruction, snoozePresets, sortFolders,
+  sourceMatchesTarget, summaryFromAiNote, textToHtml, waitText,
 } from '../utils.js';
 import { buildComposeState, signatureHtml, toPayload } from '../compose.js';
 import MailFrame from './MailFrame.jsx';
@@ -190,6 +191,7 @@ export default function Reader({
   const [translated, setTranslated] = useState(null);
   const [showTranslated, setShowTranslated] = useState(false);
   const [translating, setTranslating] = useState(false);
+  const [lastTranslateTarget, setLastTranslateTarget] = useState(null);
   const [menu, setMenu] = useState(null);
   const [quick, setQuick] = useState('');
   const [quickBusy, setQuickBusy] = useState(false);
@@ -214,6 +216,7 @@ export default function Reader({
     setSummary(null);
     setTranslated(null);
     setShowTranslated(false);
+    setLastTranslateTarget(null);
     setMenu(null);
     setQuick('');
     setPinning(false);
@@ -270,6 +273,14 @@ export default function Reader({
   }, [msg?.id]);
 
   useEffect(() => {
+    if (!msg || !aiEnabled || !settings.autoTranslate || translated || translating) return;
+    const target = resolveTranslateTarget();
+    if (sourceMatchesTarget(detectMailLang(mailPlainText()), target)) return;
+    runTranslate(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [msg?.id, aiEnabled, settings.autoTranslate]);
+
+  useEffect(() => {
     if (!thread || thread.length < 2) return;
     const el = document.querySelector(`.thread-slot[data-mid="${id}"]`);
     if (el && thread[thread.length - 1].id !== id) el.scrollIntoView({ block: 'start' });
@@ -287,11 +298,41 @@ export default function Reader({
     }
   }
 
-  async function runTranslate() {
-    if (translated) return setShowTranslated((v) => !v);
+  function mailPlainText() {
+    if (!msg) return listItem?.snippet || '';
+    return msg.text || String(msg.html || '').replace(/<[^>]+>/g, ' ') || listItem?.snippet || '';
+  }
+
+  function resolveTranslateTarget() {
+    const body = mailPlainText();
+    const pref = normalizeTranslateTarget(settings.translateTarget);
+    // Body mostly ZH → offer English; otherwise use preference (default 简体中文)
+    if (mostlyChinese(body)) return 'English';
+    return pref;
+  }
+
+  function translateButtonLabel() {
+    if (translating) return '翻译中…';
+    if (translated) return showTranslated ? '查看原文' : '查看翻译';
+    return resolveTranslateTarget() === 'English' ? '译成英文' : '译成中文';
+  }
+
+  async function runTranslate(forceTarget) {
+    if (translated && forceTarget == null) return setShowTranslated((v) => !v);
+    const target = forceTarget || resolveTranslateTarget();
+    const sourceGuess = detectMailLang(mailPlainText());
+    if (sourceMatchesTarget(sourceGuess, target)) {
+      notify(target === 'English' ? '原文已是英文，无需翻译' : '原文已是中文，无需翻译');
+      return;
+    }
     setTranslating(true);
     try {
-      setTranslated(await api('/ai/translate', { method: 'POST', body: { id, target: '简体中文' } }));
+      const result = await api('/ai/translate', { method: 'POST', body: { id, target } });
+      if (result?.sourceLang && sourceMatchesTarget(result.sourceLang, target)) {
+        notify(target === 'English' ? '原文已是英文，无需翻译' : '原文已是中文，无需翻译');
+      }
+      setTranslated(result);
+      setLastTranslateTarget(target);
       setShowTranslated(true);
     } catch (e) {
       notify(e.message, 'error');
@@ -503,7 +544,7 @@ export default function Reader({
         {base && (
           <article className="mail-article">
             <h1 className="mail-subject">
-              {(showTranslated && translated?.subject) || base.subject || '(无主题)'}
+              {base.subject || '(无主题)'}
               {items.length > 1 && <span className="subject-count">{items.length}</span>}
             </h1>
             <div className="subject-tags">
@@ -560,10 +601,21 @@ export default function Reader({
                   {summaryLoading ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
                   {summary ? '重新分析' : items.length > 1 ? 'AI 总结会话' : 'AI 摘要'}
                 </button>
-                <button className="ai-btn ghost" onClick={runTranslate} disabled={translating || !msg}>
+                <button className="ai-btn ghost" onClick={() => runTranslate()} disabled={translating || !msg} title="智能翻译（保留原文）">
                   {translating ? <Loader2 size={14} className="spin" /> : showTranslated ? <Eye size={14} /> : <Languages size={14} />}
-                  {showTranslated ? '查看原文' : '翻译成中文'}
+                  {translateButtonLabel()}
                 </button>
+                {translated && lastTranslateTarget && (
+                  <button
+                    className="ai-btn ghost"
+                    onClick={() => runTranslate(lastTranslateTarget === 'English' ? '简体中文' : 'English')}
+                    disabled={translating || !msg}
+                    title="换目标语言重新翻译"
+                  >
+                    <Languages size={14} />
+                    {lastTranslateTarget === 'English' ? '改译中文' : '改译英文'}
+                  </button>
+                )}
                 <button className="ai-btn ghost" onClick={() => openSmartReply()} disabled={!msg}>
                   <Reply size={14} /> AI 智能回复
                 </button>
@@ -633,33 +685,39 @@ export default function Reader({
               </div>
             )}
 
-            {showTranslated && translated ? (
+            {showTranslated && translated && (
               <div className="translated-body">
-                <div className="translated-tag"><Languages size={13} /> AI 翻译</div>
+                <div className="translated-tag">
+                  <Languages size={13} /> AI 翻译
+                  {translated.sourceLang && <span className="translated-meta">原文 · {translated.sourceLang}</span>}
+                  {translated.subject && translated.subject !== base.subject && (
+                    <span className="translated-meta">主题：{translated.subject}</span>
+                  )}
+                </div>
                 <MailFrame text={translated.body} dark={dark} />
               </div>
-            ) : (
-              <div className="thread">
-                {items.map((it, i) => (
-                  <div key={it.id} data-mid={it.id} className="thread-slot">
-                    <MessageCard
-                      item={it}
-                      detail={details[it.id]}
-                      expanded={expanded.has(it.id)}
-                      onToggle={() => toggleCard(it.id)}
-                      settings={settings}
-                      dark={dark}
-                      isLast={i === items.length - 1}
-                      primary={it.id === id}
-                      onCompose={onCompose}
-                      onRule={setRule}
-                      mailbox={mailboxMap[it.mailboxId]}
-                      slaHours={listItem?.priority?.slaHours}
-                    />
-                  </div>
-                ))}
-              </div>
             )}
+
+            <div className="thread">
+              {items.map((it, i) => (
+                <div key={it.id} data-mid={it.id} className="thread-slot">
+                  <MessageCard
+                    item={it}
+                    detail={details[it.id]}
+                    expanded={expanded.has(it.id)}
+                    onToggle={() => toggleCard(it.id)}
+                    settings={settings}
+                    dark={dark}
+                    isLast={i === items.length - 1}
+                    primary={it.id === id}
+                    onCompose={onCompose}
+                    onRule={setRule}
+                    mailbox={mailboxMap[it.mailboxId]}
+                    slaHours={listItem?.priority?.slaHours}
+                  />
+                </div>
+              ))}
+            </div>
 
             {msg && special !== '\\Drafts' && (
               <div className="quick-reply">

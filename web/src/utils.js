@@ -339,3 +339,41 @@ export function summaryFromAiNote(note) {
     fromCache: true,
   };
 }
+
+/** Heuristic: body is mostly Chinese (for smart translate button). */
+export function mostlyChinese(text) {
+  const s = String(text || '').slice(0, 4000);
+  const cjk = (s.match(/[\u4e00-\u9fff]/g) || []).length;
+  const latin = (s.match(/[A-Za-z]/g) || []).length;
+  return cjk >= 8 && cjk >= latin * 0.4;
+}
+
+/** '中文' | 'English' | '其他' — mirrors server detectLang. */
+export function detectMailLang(text) {
+  const s = String(text || '').slice(0, 4000);
+  const cjk = (s.match(/[\u4e00-\u9fff]/g) || []).length;
+  const latin = (s.match(/[A-Za-z]/g) || []).length;
+  if (cjk >= 8 && cjk >= latin * 0.4) return '中文';
+  if (latin >= 20 && latin > cjk * 2) return 'English';
+  if (cjk > latin) return '中文';
+  if (latin > 0) return 'English';
+  return '其他';
+}
+
+/** Normalize translateTarget setting to API target string. */
+export function normalizeTranslateTarget(v) {
+  const t = String(v || '').trim();
+  if (t === 'English' || t === '英文') return 'English';
+  return '简体中文';
+}
+
+/** True when heuristic source language already matches the chosen target. */
+export function sourceMatchesTarget(sourceLang, target) {
+  const src = String(sourceLang || '');
+  const tgt = normalizeTranslateTarget(target);
+  const srcZh = /中文|chinese|zh/i.test(src);
+  const srcEn = /english|英文|en/i.test(src);
+  if (tgt === '简体中文' && srcZh) return true;
+  if (tgt === 'English' && srcEn) return true;
+  return false;
+}

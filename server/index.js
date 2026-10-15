@@ -899,8 +899,25 @@ async function mailForAi(req, id) {
 const aiLimit = (req) => rateLimit('ai:' + req.user.id, 60, 10 * 60_000);
 
 app.post('/api/ai/summarize', auth, wrap(async (req, res) => (aiLimit(req), res.json(await ai.summarize(await mailForAi(req, req.body.id))))));
-app.post('/api/ai/translate', auth, wrap(async (req, res) => (aiLimit(req), res.json(await ai.translate(await mailForAi(req, req.body.id), req.body.target)))));
-app.post('/api/ai/reply', auth, wrap(async (req, res) => (aiLimit(req), res.json(await ai.draftReply(await mailForAi(req, req.body.id), req.body)))));
+app.post(
+  '/api/ai/translate',
+  auth,
+  wrap(async (req, res) => {
+    aiLimit(req);
+    const settings = users.settingsOf(req.user.id);
+    const target = req.body.target || settings.translateTarget || '简体中文';
+    res.json(await ai.translate(await mailForAi(req, req.body.id), target, settings.glossary));
+  })
+);
+app.post(
+  '/api/ai/reply',
+  auth,
+  wrap(async (req, res) => {
+    aiLimit(req);
+    const settings = users.settingsOf(req.user.id);
+    res.json(await ai.draftReply(await mailForAi(req, req.body.id), { ...req.body, glossary: settings.glossary }));
+  })
+);
 app.post('/api/ai/compose', auth, wrap(async (req, res) => (aiLimit(req), res.json(await ai.compose(req.body)))));
 app.post(
   '/api/ai/rewrite',
@@ -908,7 +925,8 @@ app.post(
   wrap(async (req, res) => {
     aiLimit(req);
     if (!String(req.body.text || '').trim()) throw httpError(400, '请先输入需要处理的内容');
-    res.json(await ai.rewrite(req.body.text, req.body.mode));
+    const settings = users.settingsOf(req.user.id);
+    res.json(await ai.rewrite(req.body.text, req.body.mode, settings.glossary));
   })
 );
 app.post(
