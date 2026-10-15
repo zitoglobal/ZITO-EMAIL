@@ -2,8 +2,9 @@ import React, { useEffect, useState } from 'react';
 import {
   X, Trash2, Plus, Moon, Sun, Bell, Sparkles, RefreshCw, ArrowUp, ArrowDown, Server, Loader2, AlertCircle, CheckCircle2, Mail,
   SlidersHorizontal, FileStack, User, Users, Pencil, LogOut, Image, Undo2, MessagesSquare, Rows3, KeyRound, ListTodo, Hourglass, Send,
-  BellRing, Crown, BellOff, Languages, BookMarked,
+  BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft,
 } from 'lucide-react';
+import { LAYOUT_MODES } from '../layout.js';
 import { api } from '../api.js';
 import { MAILBOX_COLORS, relativeTime } from '../utils.js';
 import MailboxForm from './MailboxForm.jsx';
@@ -268,6 +269,14 @@ function Preferences({ settings, onSave, aiEnabled }) {
       </div>
       <Choice icon={settings.theme === 'dark' ? Moon : Sun} label="外观" value={settings.theme} onChange={set('theme')} options={[['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']]} />
       <Choice icon={Rows3} label="列表密度" value={settings.density} onChange={set('density')} options={[['comfortable', '舒适'], ['compact', '紧凑']]} />
+      <Choice
+        icon={LayoutPanelLeft}
+        label="布局模式"
+        value={settings.layoutMode || 'standard'}
+        onChange={set('layoutMode')}
+        options={LAYOUT_MODES.map((m) => [m.id, m.label])}
+      />
+      <p className="hint-line">标准：经典三栏；销售台：右侧客户栏；专注读信：侧栏收成图标轨。栏宽可拖拽，会自动记住。</p>
       <Choice icon={Image} label="外部图片" value={settings.remoteImages} onChange={set('remoteImages')} options={[['always', '总是显示'], ['contacts', '仅联系人'], ['never', '询问']]} />
       <Choice icon={Undo2} label="撤销发送时长" value={settings.undoSeconds} onChange={set('undoSeconds')} options={[[0, '关闭'], [5, '5 秒'], [10, '10 秒'], [20, '20 秒'], [30, '30 秒']]} />
       <Toggle icon={MessagesSquare} label="会话视图" desc="把同一主题的往来邮件合并展示" checked={settings.conversationView} onChange={set('conversationView')} />

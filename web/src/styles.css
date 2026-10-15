@@ -334,15 +334,134 @@ input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2
 .tips ul { margin: 8px 0 0; padding-left: 18px; line-height: 1.85; }
 
 /* ============================================================
-   主布局
+   主布局（可拖拽分栏 + 标准/销售台/专注读信）
    ============================================================ */
-.app { height: 100%; display: grid; grid-template-columns: 252px minmax(340px, 400px) 1fr; overflow: hidden; background: var(--bg); }
-@media (min-width: 1600px) {
-  .app.has-customer-rail { grid-template-columns: 252px minmax(320px, 360px) 1fr 280px; }
+.app {
+  --col-sidebar: 252px;
+  --col-list: 360px;
+  --col-customer: 280px;
+  height: 100%;
+  display: grid;
+  grid-template-columns: var(--col-sidebar) var(--col-list) 1fr;
+  overflow: hidden;
+  background: var(--bg);
+  position: relative;
+}
+.app.has-customer-rail {
+  grid-template-columns: var(--col-sidebar) var(--col-list) 1fr var(--col-customer);
+}
+.app.layout-focus {
+  grid-template-columns: var(--col-sidebar) var(--col-list) 1fr;
 }
 .app.has-customer-rail .customer-rail { display: flex; }
 .customer-rail { display: none; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel-2); border-left: 1px solid var(--hairline); }
 .has-customer-rail .relation-card { display: none; }
+
+/* 分栏拖拽条 */
+.col-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  margin-left: -3px;
+  z-index: 45;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+.col-splitter::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.15s var(--ease), opacity 0.15s;
+  opacity: 0;
+}
+.col-splitter:hover::after,
+.col-splitter.active::after,
+.col-splitter:focus-visible::after {
+  background: var(--accent);
+  opacity: 1;
+}
+.col-splitter.active { z-index: 46; }
+body.col-resizing { cursor: col-resize !important; user-select: none !important; }
+body.col-resizing iframe { pointer-events: none !important; }
+
+/* 侧栏图标轨（专注读信） */
+.sidebar.icon-rail {
+  padding: 10px 6px 8px;
+  align-items: stretch;
+  gap: 4px;
+}
+.sidebar.icon-rail .brand {
+  flex-direction: column;
+  align-items: center;
+  padding: 0 0 6px;
+  gap: 8px;
+}
+.sidebar.icon-rail .brand-name,
+.sidebar.icon-rail .folder-name,
+.sidebar.icon-rail .count,
+.sidebar.icon-rail .count-pill,
+.sidebar.icon-rail .folder-group,
+.sidebar.icon-rail .mb-group,
+.sidebar.icon-rail .cmd-btn kbd,
+.sidebar.icon-rail .account-text { display: none !important; }
+.sidebar.icon-rail .compose-btn,
+.sidebar.icon-rail .cmd-btn,
+.sidebar.icon-rail .digest-btn,
+.sidebar.icon-rail .folder,
+.sidebar.icon-rail .settings-link {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+  gap: 0;
+}
+.sidebar.icon-rail .compose-btn { font-size: 0; min-height: 40px; border-radius: 12px; }
+.sidebar.icon-rail .cmd-btn,
+.sidebar.icon-rail .digest-btn { font-size: 0; min-height: 34px; }
+.sidebar.icon-rail .folders { gap: 2px; }
+.sidebar.icon-rail .user-wrap { margin: 0 auto; }
+.sidebar.icon-rail .layout-mode-switch { padding: 4px 0; }
+.sidebar.icon-rail .layout-mode-btns { flex-direction: column; }
+.sidebar.icon-rail .layout-mode-btns button { padding: 6px 0; font-size: 11px; }
+
+.layout-mode-switch {
+  margin-top: auto;
+  padding: 8px 4px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--hairline);
+}
+.layout-mode-label {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 600; color: var(--faint);
+  padding: 0 6px; letter-spacing: 0.02em;
+}
+.layout-mode-btns {
+  display: flex; gap: 3px; background: var(--panel-2);
+  border: 1px solid var(--hairline); border-radius: 10px; padding: 3px;
+}
+.layout-mode-btns button {
+  flex: 1; min-height: 28px; padding: 0 6px; border-radius: 7px;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.layout-mode-btns button:hover { color: var(--text); background: var(--hover); }
+.layout-mode-btns button.on {
+  color: var(--accent-ink); background: var(--panel);
+  box-shadow: 0 1px 2px rgba(11, 31, 58, 0.08);
+}
+[data-theme='dark'] .layout-mode-btns button.on { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+
+.hint-line {
+  margin: -4px 0 10px; padding: 0 2px;
+  font-size: 12px; line-height: 1.55; color: var(--muted);
+}
 .customer-drawer-mask { position: fixed; inset: 0; background: rgba(11, 31, 58, 0.28); z-index: 80; animation: fade-up 0.18s var(--ease); }
 .customer-drawer {
   position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 92vw); z-index: 81;
@@ -777,7 +896,7 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 
 /* P1：多邮箱同步状态条 */
 .mb-sync-strip {
-  position: fixed; top: 0; left: 252px; right: 0; z-index: 55; height: 32px;
+  position: fixed; top: 0; left: var(--col-sidebar, 252px); right: 0; z-index: 55; height: 32px;
   display: flex; align-items: center; gap: 8px; padding: 0 14px;
   font-size: 12.5px; font-weight: 500; color: var(--accent-ink);
   background: color-mix(in srgb, var(--accent-soft) 92%, var(--panel));
@@ -1437,12 +1556,27 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
    响应式 / 无障碍 / 打印
    ============================================================ */
 @media (max-width: 1220px) {
-  .app { grid-template-columns: 220px 340px 1fr; }
   .tb span { display: none; }
   .tb:not(.icon) { width: 32px; padding: 0; justify-content: center; }
 }
 @media (max-width: 900px) {
-  .app { grid-template-columns: 1fr; }
+  .app,
+  .app.has-customer-rail,
+  .app.layout-focus {
+    grid-template-columns: 1fr;
+  }
+  .col-splitter,
+  .layout-mode-switch { display: none !important; }
+  .sidebar.icon-rail .brand-name,
+  .sidebar.icon-rail .folder-name,
+  .sidebar.icon-rail .count,
+  .sidebar.icon-rail .count-pill,
+  .sidebar.icon-rail .folder-group,
+  .sidebar.icon-rail .mb-group { display: revert !important; }
+  .sidebar.icon-rail { padding: 14px 10px 10px; }
+  .sidebar.icon-rail .compose-btn,
+  .sidebar.icon-rail .cmd-btn,
+  .sidebar.icon-rail .digest-btn { font-size: inherit; justify-content: flex-start; gap: 8px; padding-left: 12px; padding-right: 12px; }
   .mobile-only { display: inline-grid !important; }
   .sidebar { position: fixed; inset: 0 auto 0 0; width: 272px; z-index: 70; transform: translateX(-100%); transition: transform 0.22s var(--ease); }
   .sidebar.open { transform: none; box-shadow: var(--shadow-lg); }
