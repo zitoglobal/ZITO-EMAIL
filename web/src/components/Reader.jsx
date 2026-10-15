@@ -130,8 +130,11 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
       {m && (
         <>
           {images && !showImages && (
-            <div className="img-bar">
-              <ImageOff size={14} /> 为保护隐私，已阻止加载外部图片（可防止发件人追踪你是否阅读）
+            <div className="img-bar img-bar-risk">
+              <ImageOff size={14} />
+              <span className="img-bar-copy">
+                外部图片已拦截：加载后发件人可能得知你已读（追踪像素）。确认安全后再显示。
+              </span>
               <button className="link-btn" onClick={() => setAllowImages(true)}>显示图片</button>
             </div>
           )}

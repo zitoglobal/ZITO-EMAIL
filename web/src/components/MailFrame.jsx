@@ -84,7 +84,12 @@ export default function MailFrame({ html, text, dark, allowImages = true, collap
   }, [doc]);
 
   return (
-    <>
+    <div className="mail-frame-shell">
+      {html ? (
+        <span className="mail-trust-badge" title="脚本已禁用 · 外链新窗口打开 · 不泄露平台 Cookie">
+          已隔离
+        </span>
+      ) : null}
       <iframe
         ref={ref}
         title="mail-body"
@@ -98,6 +103,6 @@ export default function MailFrame({ html, text, dark, allowImages = true, collap
           •••
         </button>
       )}
-    </>
+    </div>
   );
 }
