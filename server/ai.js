@@ -1,4 +1,20 @@
+import dns from 'node:dns';
+import { createRequire } from 'node:module';
 import { sanitizeGlossary } from './glossary.js';
+
+// Prefer IPv4 for outbound AI calls. Production Node fetch to Aliyun Bailian
+// token-plan has timed out under IPv6 / Happy Eyeballs; CORE also sets
+// NODE_OPTIONS=--dns-result-order=ipv4first as a parallel process-level fix.
+dns.setDefaultResultOrder('ipv4first');
+
+let aiDispatcher;
+try {
+  const { Agent } = createRequire(import.meta.url)('undici');
+  aiDispatcher = new Agent({ connect: { family: 4 } });
+} catch {
+  // undici may be unavailable on some Node installs; ipv4first still applies.
+}
+
 const BASE_URL = () =>
   (process.env.AI_BASE_URL || 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, '');
 const API_KEY = () => process.env.AI_API_KEY || '';
@@ -21,6 +37,7 @@ async function chat(messages, { json = false, temperature = 0.4, maxTokens = 150
       ...(json ? { response_format: { type: 'json_object' } } : {}),
     }),
     signal: AbortSignal.timeout(90_000),
+    ...(aiDispatcher ? { dispatcher: aiDispatcher } : {}),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
