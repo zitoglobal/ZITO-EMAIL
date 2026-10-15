@@ -182,9 +182,21 @@ export function backfillSignals() {
   tx(() => rows.forEach((r) => st.run(signalsOf(r.subject, r.snippet).join(','), r.id)))();
 }
 
-/** 解析搜索语法：from: to: subject: has:attachment is:unread is:starred，其余为关键词 */
-function parseQuery(q) {
-  const out = { terms: [], from: [], to: [], subject: [], hasAtt: false, unread: false, starred: false };
+/** 解析搜索语法：from/to/subject/has/is + label:/is:vip/category:，其余为关键词 */
+export function parseQuery(q) {
+  const out = {
+    terms: [],
+    from: [],
+    to: [],
+    subject: [],
+    labels: [],
+    labelIds: [],
+    categories: [],
+    hasAtt: false,
+    unread: false,
+    starred: false,
+    vip: false,
+  };
   const re = /(\w+):("[^"]+"|\S+)|"([^"]+)"|(\S+)/g;
   let m;
   while ((m = re.exec(q))) {
@@ -197,6 +209,19 @@ function parseQuery(q) {
       else if (key === 'has' && /^(attachment|附件)$/i.test(val)) out.hasAtt = true;
       else if (key === 'is' && /^(unread|未读)$/i.test(val)) out.unread = true;
       else if (key === 'is' && /^(starred|flagged|星标)$/i.test(val)) out.starred = true;
+      else if (key === 'is' && /^(vip|VIP)$/i.test(val)) out.vip = true;
+      else if (key === 'label') {
+        const idm = /^id:(\d+)$/i.exec(val);
+        if (idm) out.labelIds.push(Number(idm[1]));
+        else if (val) out.labels.push(val);
+      }
+      else if (key === 'category' || key === 'cat') {
+        const c = val.toLowerCase();
+        if (['people', 'notification', 'newsletter', '联系人', '通知', '订阅', '订阅资讯'].includes(c)) {
+          const map = { 联系人: 'people', 通知: 'notification', 订阅: 'newsletter', 订阅资讯: 'newsletter' };
+          out.categories.push(map[c] || c);
+        } else out.terms.push(m[0]);
+      }
       else out.terms.push(m[0]);
     } else out.terms.push(m[3] || m[4]);
   }
@@ -212,7 +237,7 @@ export const MY_LAST_SQL = `(SELECT MAX(s.date) FROM messages s
     WHERE sb.user_id = b.user_id AND m.thread_id IS NOT NULL AND s.thread_id = m.thread_id AND s.from_addr = sb.email
       AND IFNULL(sf.special_use, '') NOT IN ('\\Drafts', '\\Trash'))`;
 
-export function queryMessages(userId, { mailboxId, box = 'inbox', folder, category, q, cursor, limit = 50, excludePinned = false, onlyPinned = false, ids, map }) {
+export function queryMessages(userId, { mailboxId, box = 'inbox', folder, category, q, cursor, limit = 50, excludePinned = false, onlyPinned = false, ids, map, labelId }) {
   const where = ['b.user_id = @userId'];
   const p = { userId, limit };
   if (ids) {
@@ -237,6 +262,15 @@ export function queryMessages(userId, { mailboxId, box = 'inbox', folder, catego
   if (box === 'folder') {
     where.push('m.folder = @folder');
     p.folder = folder;
+  }
+  if (box === 'label') {
+    const lid = Number(labelId);
+    if (!Number.isInteger(lid)) {
+      return { messages: [], nextCursor: null };
+    }
+    where.push('EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_pk = m.id AND ml.label_id = @labelId)');
+    where.push("IFNULL(f.special_use, '') NOT IN ('\\Trash', '\\Junk')");
+    p.labelId = lid;
   }
   if (category && category !== 'all') {
     where.push('m.category = @category');
@@ -266,7 +300,29 @@ export function queryMessages(userId, { mailboxId, box = 'inbox', folder, catego
     if (pq.hasAtt) where.push('m.has_att = 1');
     if (pq.unread) where.push('m.seen = 0');
     if (pq.starred) where.push('m.flagged = 1');
-    if (box !== 'trash' && box !== 'junk' && box !== 'folder') where.push("IFNULL(f.special_use, '') NOT IN ('\\Trash', '\\Junk')");
+    if (pq.vip) {
+      where.push(`EXISTS (
+        SELECT 1 FROM sender_rules sr
+        WHERE sr.user_id = @userId AND sr.kind = 'vip'
+          AND (sr.key = lower(m.from_addr) OR (sr.key LIKE '@%' AND lower(m.from_addr) LIKE '%' || sr.key))
+      )`);
+    }
+    pq.categories.forEach((c, i) => {
+      where.push(`m.category = @cat${i}`);
+      p[`cat${i}`] = c;
+    });
+    pq.labels.forEach((name, i) => {
+      where.push(`EXISTS (
+        SELECT 1 FROM message_labels ml JOIN labels lb ON lb.id = ml.label_id
+        WHERE ml.message_pk = m.id AND lb.user_id = @userId AND lb.name = @ln${i} COLLATE NOCASE
+      )`);
+      p[`ln${i}`] = name;
+    });
+    pq.labelIds.forEach((lid, i) => {
+      where.push(`EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_pk = m.id AND ml.label_id = @lid${i})`);
+      p[`lid${i}`] = lid;
+    });
+    if (box !== 'trash' && box !== 'junk' && box !== 'folder' && box !== 'label') where.push("IFNULL(f.special_use, '') NOT IN ('\\Trash', '\\Junk')");
   }
 
   if (cursor) {

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Star, Mail, Sparkles, Languages, Paperclip, Download, ArrowLeft, Loader2,
   AlertTriangle, CheckCircle2, ListChecks, FolderInput, Eye, Clock, Pin, ShieldAlert, ShieldCheck, MoreHorizontal, ImageOff,
-  BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass,
+  BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass, Tag,
 } from 'lucide-react';
 import { api } from '../api.js';
 import {
@@ -14,6 +14,7 @@ import { buildComposeState, signatureHtml, toPayload } from '../compose.js';
 import MailFrame from './MailFrame.jsx';
 import { BrandSymbol } from './Brand.jsx';
 import TimeMenu from './TimeMenu.jsx';
+import LabelMenu from './LabelMenu.jsx';
 
 const URGENCY = { high: ['紧急', 'high'], medium: ['一般', 'medium'], low: ['不急', 'low'] };
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
@@ -207,7 +208,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
 
 export default function Reader({
   id, listItem, settings, aiEnabled, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp, onAiNote,
-  onOpenCustomer, onOpenSettings,
+  onOpenCustomer, onOpenSettings, labels = [], onToggleLabels, onCreateLabel,
 }) {
   const [thread, setThread] = useState(null);
   const [details, setDetails] = useState({});
@@ -229,6 +230,7 @@ export default function Reader({
 
   const msg = details[id] && !details[id].error ? details[id] : null;
   const base = msg || listItem;
+  const displayLabels = (listItem?.labels || base?.labels || []);
 
   function loadDetail(mid, token) {
     return api(`/messages/${mid}`)
@@ -549,6 +551,9 @@ export default function Reader({
                 <button type="button" role="menuitem" onClick={() => act('unread')}><Mail size={13} /> 标为未读</button>
                 <button type="button" role="menuitem" onClick={() => act(base?.flagged ? 'unflag' : 'flag')}><Star size={13} /> {base?.flagged ? '取消星标' : '星标'}</button>
                 <button type="button" role="menuitem" onClick={() => act(base?.pinned ? 'unpin' : 'pin')}><Pin size={13} /> {base?.pinned ? '取消置顶' : '置顶'}</button>
+                {onToggleLabels && (
+                  <button type="button" role="menuitem" onClick={() => setMenu('labels')}><Tag size={13} /> 标签…</button>
+                )}
                 <button type="button" role="menuitem" onClick={() => setMenu('move')}><FolderInput size={13} /> 移动到…</button>
                 {base?.snoozeUntil && <button type="button" role="menuitem" onClick={() => act('unsnooze')}><Clock size={13} /> 取消稍后提醒</button>}
                 <a href={`/api/messages/${id}/raw`} role="menuitem" onClick={() => setMenu(null)}><Download size={13} /> 下载原始邮件</a>
@@ -562,6 +567,26 @@ export default function Reader({
                   <button type="button" key={f.path} role="menuitem" onClick={() => act('move', { dest: f.path })}>{folderLabel(f)}</button>
                 ))}
               </div>
+            )}
+            {menu === 'labels' && onToggleLabels && (
+              <LabelMenu
+                className="right"
+                labels={labels}
+                selectedIds={displayLabels.map((l) => l.id)}
+                onClose={() => setMenu(null)}
+                onToggle={(l, on) => {
+                  onToggleLabels([id], on ? { add: [l.id] } : { remove: [l.id] });
+                  setDetails((s) => {
+                    const cur = s[id];
+                    if (!cur || cur.error) return s;
+                    const have = new Map((cur.labels || []).map((x) => [x.id, x]));
+                    if (on) have.set(l.id, { id: l.id, name: l.name, color: l.color });
+                    else have.delete(l.id);
+                    return { ...s, [id]: { ...cur, labels: [...have.values()] } };
+                  });
+                }}
+                onCreate={onCreateLabel ? async (n) => { await onCreateLabel(n); } : undefined}
+              />
             )}
           </div>
         </div>
@@ -583,6 +608,11 @@ export default function Reader({
                 </span>
               )}
               {base.folder && <span className="folder-chip">{folderLabel((folders[base.mailboxId] || []).find((f) => f.path === base.folder)) || base.folder}</span>}
+              {displayLabels.map((l) => (
+                <span key={l.id} className="folder-chip user-label-chip" style={{ '--lc': l.color }}>
+                  <span className="label-dot xs" style={{ background: l.color }} /> {l.name}
+                </span>
+              ))}
               {base.snoozeUntil && <span className="folder-chip warn"><Clock size={11} /> {formatFullDate(base.snoozeUntil)} 提醒</span>}
               {msg?.unsubscribe && (
                 <button

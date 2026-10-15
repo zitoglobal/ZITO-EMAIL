@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Inbox, Send, FileText, Trash2, Archive, ShieldAlert, Star, Folder, PenSquare, Settings, Sparkles, ChevronRight, Plus, LogOut,
   MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, Hourglass, LayoutPanelLeft,
-  Columns3, Briefcase, BookOpen,
+  Columns3, Briefcase, BookOpen, Tag,
 } from 'lucide-react';
 import { avatarColor, folderDepth, folderLabel, initials, sortFolders } from '../utils.js';
 import { BrandIcon } from './Brand.jsx';
@@ -35,6 +35,7 @@ function loadExpanded() {
 export default function Sidebar({
   user, mailboxes, folders, counts, view, onView, onCompose, onDigest, onSettings, onAddMailbox, onLogout, onCommand, onNewFolder, open, onClose,
   iconRail = false, layoutMode = 'standard', onLayoutMode, salesRailTip = false,
+  labels = [], onCreateLabel,
 }) {
   const [expanded, setExpanded] = useState(loadExpanded);
   const [menu, setMenu] = useState(false);
@@ -60,7 +61,11 @@ export default function Sidebar({
     return 0;
   };
 
-  const isActive = (v) => view.box === v.box && (view.mailboxId || 'all') === (v.mailboxId || 'all') && (v.box !== 'folder' || view.folder === v.folder);
+  const isActive = (v) =>
+    view.box === v.box &&
+    (view.mailboxId || 'all') === (v.mailboxId || 'all') &&
+    (v.box !== 'folder' || view.folder === v.folder) &&
+    (v.box !== 'label' || Number(view.labelId) === Number(v.labelId));
 
   return (
     <aside className={'sidebar' + (open ? ' open' : '') + (iconRail ? ' icon-rail' : '')}>
@@ -114,6 +119,45 @@ export default function Sidebar({
             </button>
           );
         })}
+
+        <div className="folder-group">
+          <span>标签</span>
+          <button
+            className="mini-btn"
+            title="新建标签"
+            onClick={() => {
+              if (onCreateLabel) onCreateLabel();
+              else onSettings?.('labels');
+            }}
+          ><Plus size={14} /></button>
+        </div>
+        {!iconRail && !labels.length && (
+          <button className="folder sub label-empty-hint" onClick={() => onSettings?.('labels')} title="管理标签">
+            <Tag size={15} />
+            <span className="folder-name muted-text">添加标签整理邮件</span>
+          </button>
+        )}
+        {labels.map((l) => {
+          const v = { mailboxId: 'all', box: 'label', labelId: l.id };
+          return (
+            <button
+              key={l.id}
+              className={'folder sub' + (isActive(v) ? ' active' : '')}
+              onClick={() => go(v)}
+              title={l.name}
+              aria-label={`标签 ${l.name}`}
+            >
+              <span className="label-dot" style={{ background: l.color }} />
+              {!iconRail && <span className="folder-name">{l.name}</span>}
+              {!iconRail && l.count > 0 && <span className="count muted">{l.count > 999 ? '999+' : l.count}</span>}
+            </button>
+          );
+        })}
+        {!iconRail && labels.length > 0 && (
+          <button className="folder sub add-folder" onClick={() => onSettings?.('labels')}>
+            <Tag size={14} /> <span className="folder-name">管理标签</span>
+          </button>
+        )}
 
         <div className="folder-group">
           <span>邮箱账号</span>
