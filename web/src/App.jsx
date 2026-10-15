@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, PenSquare, AlertCircle, RefreshCw } from 'lucide-react';
+import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, PenSquare, AlertCircle, RefreshCw, Hourglass, Clock, Menu } from 'lucide-react';
 import { api, qs } from './api.js';
 import Auth, { HeroBrand } from './components/Auth.jsx';
 import { BrandIcon } from './components/Brand.jsx';
@@ -12,6 +12,8 @@ import Outbox from './components/Outbox.jsx';
 import Digest from './components/Digest.jsx';
 import Settings from './components/Settings.jsx';
 import Focus from './components/Focus.jsx';
+import Waiting from './components/Waiting.jsx';
+import CustomerPanel from './components/CustomerPanel.jsx';
 import Palette from './components/Palette.jsx';
 import { SMART_VIEWS, dayStart, displayName, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
 import { buildComposeState, signatureHtml, toForm } from './compose.js';
@@ -81,6 +83,10 @@ export default function App() {
   const [focusData, setFocusData] = useState(null);
   const [groupMode, setGroupModeState] = useState(() => localStorage.getItem('zm_group') || 'priority');
   const [aiBusy, setAiBusy] = useState(false);
+  const [waitingTab, setWaitingTab] = useState('mine');
+  const [customerOpen, setCustomerOpen] = useState(false); // drawer on narrow
+  const [customerWide, setCustomerWide] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1600px)').matches);
+  const [customerCtx, setCustomerCtx] = useState(null); // { address, sender, slaHours }
   const groupRef = useRef(groupMode);
   groupRef.current = groupMode;
 
@@ -106,6 +112,46 @@ export default function App() {
   }, []);
   const dismiss = (id) => setToasts((t) => t.filter((x) => x.id !== id));
 
+  const openCustomer = useCallback((address, detailOrSender) => {
+    const sender = detailOrSender?.sender
+      ? { ...detailOrSender.sender, address: address || detailOrSender.sender.address }
+      : detailOrSender?.from
+        ? null
+        : detailOrSender;
+    const slaHours = selectedItem?.priority?.slaHours;
+    setCustomerCtx({
+      address: address || sender?.address,
+      sender: sender || (detailOrSender?.sender ? { ...detailOrSender.sender, address } : null),
+      slaHours,
+      detail: detailOrSender?.sender ? detailOrSender : null,
+    });
+    if (!customerWide) setCustomerOpen(true);
+  }, [customerWide, selectedItem]);
+
+  async function setCustomerRule(key, kind, name) {
+    try {
+      if (kind) await api('/sender-rules', { method: 'POST', body: { key, kind, name } });
+      else await api('/sender-rules?key=' + encodeURIComponent(key), { method: 'DELETE' });
+      notify(kind === 'vip' ? `已设为 VIP 客户：${key}` : kind === 'muted' ? `已静音 ${key}，其来信不再进入今日待办` : '已移除规则');
+      // refresh selected message if any
+      if (selectedId) {
+        try {
+          const d = await api(`/messages/${selectedId}`);
+          setCurrentMsg(d);
+          if (customerCtx) {
+            setCustomerCtx((c) => c && {
+              ...c,
+              sender: d.sender ? { ...d.sender, address: c.address || d.sender.address || d.from?.address } : c.sender,
+            });
+          }
+        } catch {}
+      }
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
+
   // ---------- 主题 ----------
   useEffect(() => {
     const apply = () => {
@@ -119,6 +165,15 @@ export default function App() {
     return () => mq.removeEventListener('change', apply);
   }, [settings.theme]);
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+
+  useEffect(() => {
+    const mq = matchMedia('(min-width: 1600px)');
+    const apply = () => setCustomerWide(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []); // customerWide mq
+
 
   useEffect(() => {
     document.title = counts.unifiedUnread ? `(${counts.unifiedUnread}) ZITO 智能邮箱` : 'ZITO 智能邮箱';
@@ -173,7 +228,7 @@ export default function App() {
   const loadList = useCallback(
     async ({ append = false, silent = false } = {}) => {
       if (view.box === 'scheduled') return;
-      if (view.box === 'today') {
+      if (view.box === 'today' || view.box === 'waiting') {
         if (append) return;
         const id = ++reqId.current;
         if (!silent) setLoading(true);
@@ -378,7 +433,7 @@ export default function App() {
       const origins = Object.fromEntries(ids.map((id) => [id, all.find((m) => m.id === id)?.folder || fallbackFolder]));
       const removes =
         REMOVING.has(action) ||
-        (view.box === 'today' && (action === 'done' || action === 'nofollow')) ||
+        ((view.box === 'today' || view.box === 'waiting') && (action === 'done' || action === 'nofollow')) ||
         (action === 'snooze' && view.box !== 'snoozed') ||
         (action === 'unsnooze' && view.box === 'snoozed') ||
         (action === 'unflag' && view.box === 'flagged');
@@ -428,7 +483,7 @@ export default function App() {
         } else if (text) notify(text);
         if (action === 'restore' || action === 'undone' || action === 'follow') notify('已撤销');
         loadState();
-        if (view.box === 'today' || ['restore', 'unsnooze', 'pin', 'unpin'].includes(action)) loadList({ silent: true });
+        if (view.box === 'today' || view.box === 'waiting' || ['restore', 'unsnooze', 'pin', 'unpin'].includes(action)) loadList({ silent: true });
       } catch (e) {
         notify(e.message, 'error');
         loadList({ silent: true });
@@ -599,7 +654,7 @@ export default function App() {
       setUser((u) => ({ ...u, settings: r.settings }));
       if ('replySlaHours' in patch || 'followupDays' in patch) {
         loadState();
-        if (view.box === 'today') loadList({ silent: true });
+        if (view.box === 'today' || view.box === 'waiting') loadList({ silent: true });
       }
     } catch (e) {
       notify(e.message, 'error');
@@ -782,7 +837,7 @@ export default function App() {
   const syncAlert = syncBad.length || syncing.length;
 
   return (
-    <div className={'app zm-has-mob' + (selectedId ? ' has-selection' : '') + (settings.density === 'compact' ? ' compact' : '') + (syncAlert ? ' has-sync-strip' : '')}>
+    <div className={'app zm-has-mob' + (selectedId ? ' has-selection' : '') + (settings.density === 'compact' ? ' compact' : '') + (syncAlert ? ' has-sync-strip' : '') + (customerWide && selectedId ? ' has-customer-rail' : '')}>
       <Sidebar
         user={user}
         mailboxes={mailboxes}
@@ -848,6 +903,25 @@ export default function App() {
           setGroupMode={setGroupMode}
           onFollowUp={followUp}
           onMenu={() => setSidebarOpen(true)}
+          checked={checked}
+          setChecked={setChecked}
+        />
+      ) : view.box === 'waiting' ? (
+        <Waiting
+          data={focusData}
+          messages={list.messages}
+          loading={loading}
+          error={listError}
+          selectedId={selectedId}
+          onSelect={selectMessage}
+          onAction={doAction}
+          mailboxMap={mailboxMap}
+          onRefresh={refresh}
+          refreshing={refreshing}
+          onFollowUp={followUp}
+          onMenu={() => setSidebarOpen(true)}
+          tab={waitingTab}
+          setTab={setWaitingTab}
         />
       ) : (
         <MailList
@@ -906,6 +980,16 @@ export default function App() {
           onBack={() => setSelectedId(null)}
           onFollowUp={followUp}
           notify={notify}
+          onOpenCustomer={(addr, detail) => {
+            const sender = detail?.sender ? { ...detail.sender, address: addr || detail.sender.address || detail.from?.address } : null;
+            setCustomerCtx({
+              address: addr || sender?.address || detail?.from?.address,
+              sender,
+              slaHours: selectedItem?.priority?.slaHours,
+            });
+            if (!customerWide) setCustomerOpen(true);
+          }}
+          onOpenSettings={(tab) => setModal({ type: 'settings', tab: tab || 'preferences' })}
           onAiNote={(mid, note) => {
             setList((l) => ({
               ...l,
@@ -916,8 +1000,46 @@ export default function App() {
           onLoaded={(m) => {
             setCurrentMsg(m);
             if (!m.seen) loadState();
+            if (m?.sender || m?.from) {
+              setCustomerCtx((prev) => ({
+                address: m.from?.address || prev?.address,
+                sender: m.sender ? { ...m.sender, address: m.from?.address } : prev?.sender,
+                slaHours: selectedItem?.priority?.slaHours ?? prev?.slaHours,
+              }));
+            }
           }}
         />
+      )}
+
+
+      {customerWide && selectedId && (
+        <aside className="customer-rail" aria-label="客户栏">
+          <CustomerPanel
+            mode="rail"
+            address={customerCtx?.address || currentMsg?.from?.address || selectedItem?.from?.address}
+            sender={customerCtx?.sender || (currentMsg?.sender ? { ...currentMsg.sender, address: currentMsg.from?.address } : null)}
+            slaHours={customerCtx?.slaHours ?? selectedItem?.priority?.slaHours}
+            onRule={setCustomerRule}
+            onOpenThread={(mid) => setSelectedId(mid)}
+          />
+        </aside>
+      )}
+
+      {!customerWide && customerOpen && (
+        <>
+          <div className="customer-drawer-mask" onClick={() => setCustomerOpen(false)} />
+          <div className="customer-drawer" role="dialog" aria-modal="true" aria-label="客户">
+            <CustomerPanel
+              mode="drawer"
+              address={customerCtx?.address || currentMsg?.from?.address}
+              sender={customerCtx?.sender || (currentMsg?.sender ? { ...currentMsg.sender, address: currentMsg.from?.address } : null)}
+              slaHours={customerCtx?.slaHours ?? selectedItem?.priority?.slaHours}
+              onRule={setCustomerRule}
+              onOpenThread={(mid) => { setCustomerOpen(false); setSelectedId(mid); }}
+              onClose={() => setCustomerOpen(false)}
+            />
+          </div>
+        </>
       )}
 
       <div className="composer-dock">
@@ -932,6 +1054,8 @@ export default function App() {
             onSaveDraft={saveDraft}
             onClose={(collected, opts) => closeComposer(c.key, collected, opts)}
             notify={notify}
+            glossary={settings.glossary}
+            onOpenSettings={(tab) => setModal({ type: 'settings', tab: tab || 'preferences' })}
           />
         ))}
       </div>
@@ -960,6 +1084,7 @@ export default function App() {
           onMailboxesChanged={loadState}
           onAddMailbox={() => setModal({ type: 'add' })}
           onLogout={logout}
+          aiEnabled={ai}
         />
       )}
       {modal?.type === 'add' && (
@@ -1002,6 +1127,7 @@ export default function App() {
         <button
           type="button"
           className={view.box === 'today' ? 'on' : ''}
+          aria-label="今日待办"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'today' }); setSidebarOpen(false); }}
         >
           <ListTodo size={20} strokeWidth={1.75} />
@@ -1010,6 +1136,7 @@ export default function App() {
         <button
           type="button"
           className={view.box === 'inbox' ? 'on' : ''}
+          aria-label="收件箱"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'inbox' }); setSidebarOpen(false); }}
         >
           <Inbox size={20} strokeWidth={1.75} />
@@ -1017,17 +1144,35 @@ export default function App() {
         </button>
         <button
           type="button"
+          className={view.box === 'waiting' ? 'on' : ''}
+          aria-label="等待"
+          onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'waiting' }); setSidebarOpen(false); }}
+        >
+          <Hourglass size={20} strokeWidth={1.75} />
+          <span>等待</span>
+        </button>
+        <button
+          type="button"
           className="zm-mob-compose"
+          aria-label="写邮件"
           onClick={() => { setSidebarOpen(false); openCompose(); }}
         >
           <PenSquare size={20} strokeWidth={1.75} />
           <span>写信</span>
         </button>
+        <button
+          type="button"
+          aria-label="更多"
+          onClick={() => setSidebarOpen(true)}
+        >
+          <Menu size={20} strokeWidth={1.75} />
+          <span>更多</span>
+        </button>
       </nav>
 
-      <div className="toasts">
+      <div className="toasts" aria-live="polite" aria-relevant="additions">
         {toasts.map((t) => (
-          <div key={t.id} className={'toast ' + t.type}>
+          <div key={t.id} className={'toast ' + t.type} role="status">
             <span>{t.text}</span>
             {t.action && (
               <button
@@ -1039,7 +1184,7 @@ export default function App() {
                 {t.action.label}
               </button>
             )}
-            <button className="toast-x" onClick={() => dismiss(t.id)}><X size={13} /></button>
+            <button type="button" className="toast-x" aria-label="关闭通知" onClick={() => dismiss(t.id)}><X size={13} /></button>
           </div>
         ))}
       </div>

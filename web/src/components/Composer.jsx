@@ -104,7 +104,7 @@ function RecipientInput({ label, value, onChange, autoFocus, right }) {
   );
 }
 
-export default function Composer({ initial, mailboxes, aiEnabled, onSend, onSaveDraft, onClose, notify, stacked }) {
+export default function Composer({ initial, mailboxes, aiEnabled, onSend, onSaveDraft, onClose, notify, stacked, glossary, onOpenSettings }) {
   const [mailboxId, setMailboxId] = useState(initial.mailboxId || mailboxes[0]?.id);
   const [to, setTo] = useState(initial.to || '');
   const [cc, setCc] = useState(initial.cc || '');
@@ -544,19 +544,19 @@ export default function Composer({ initial, mailboxes, aiEnabled, onSend, onSave
             )}
           </div>
         </div>
-        {aiEnabled && (
+        {aiEnabled ? (
           <div className="ai-tools">
-            <button className={'ai-chip' + (aiOpen ? ' on' : '')} onClick={() => setAiOpen((v) => !v)}>
+            <button type="button" className={'ai-chip' + (aiOpen ? ' on' : '')} onClick={() => setAiOpen((v) => !v)}>
               <Sparkles size={14} /> AI 写作
             </button>
             <div className="move-wrap">
-              <button className="ai-chip" onClick={() => setMenu(menu === 'rewrite' ? null : 'rewrite')} disabled={aiBusy}>
+              <button type="button" className="ai-chip" onClick={() => setMenu(menu === 'rewrite' ? null : 'rewrite')} disabled={aiBusy}>
                 <Wand2 size={14} /> 改写 <ChevronDown size={12} />
               </button>
               {menu === 'rewrite' && (
                 <div className="dropdown up" onMouseLeave={() => setMenu(null)}>
                   {REWRITES.map(([k, l, Icon]) => (
-                    <button key={k} onMouseDown={(e) => e.preventDefault()} onClick={() => rewrite(k)}>
+                    <button key={k} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => rewrite(k)}>
                       <Icon size={13} /> {l}
                     </button>
                   ))}
@@ -565,6 +565,8 @@ export default function Composer({ initial, mailboxes, aiEnabled, onSend, onSave
               )}
             </div>
           </div>
+        ) : (
+          <span className="ai-off-inline">智能润色暂不可用 · <button type="button" onClick={() => onOpenSettings?.('preferences')}>去设置</button></span>
         )}
         <div className="c-tail">
           <button className="icon-btn" onClick={() => saveDraft(false)} title="保存草稿 (Ctrl+S)" disabled={saving}>
@@ -573,6 +575,27 @@ export default function Composer({ initial, mailboxes, aiEnabled, onSend, onSave
           <button className="icon-btn" onClick={discard} title="舍弃"><Trash2 size={15} /></button>
         </div>
       </div>
+
+      {Array.isArray(glossary) && glossary.length > 0 && (
+        <div className="composer-glossary" aria-label="术语表">
+          {glossary.slice(0, 12).map((g) => (
+            <button
+              key={g.src}
+              type="button"
+              title={`插入 ${g.src} → ${g.dst}`}
+              onClick={() => {
+                const el = editor.current;
+                if (!el) return;
+                el.focus();
+                document.execCommand('insertText', false, g.src);
+                touch();
+              }}
+            >
+              {g.src}
+            </button>
+          ))}
+        </div>
+      )}
       {initial.scheduledFor && (
         <div className="c-note"><Clock size={12} /> 原定于 {new Date(initial.scheduledFor).toLocaleString('zh-CN')} 发送，修改后请重新发送或定时</div>
       )}

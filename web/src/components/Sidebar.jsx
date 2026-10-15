@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Inbox, Send, FileText, Trash2, Archive, ShieldAlert, Star, Folder, PenSquare, Settings, Sparkles, ChevronRight, Plus, LogOut,
-  MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search,
+  MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, Hourglass,
 } from 'lucide-react';
 import { avatarColor, folderDepth, folderLabel, initials, sortFolders } from '../utils.js';
 import { BrandIcon } from './Brand.jsx';
@@ -10,6 +10,7 @@ const ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Trash
 
 const SMART = [
   { box: 'today', label: '今日待办', icon: ListTodo },
+  { box: 'waiting', label: '等待', icon: Hourglass },
   { box: 'inbox', label: '所有收件箱', icon: Inbox },
   { box: 'unread', label: '未读', icon: MailOpen },
   { box: 'flagged', label: '星标', icon: Star },
@@ -47,6 +48,7 @@ export default function Sidebar({
 
   const smartCount = (box) => {
     if (box === 'today') return (counts.focus?.needReply || 0) + (counts.focus?.followups || 0);
+    if (box === 'waiting') return (counts.focus?.needReply || 0) + (counts.focus?.followups || 0);
     if (box === 'inbox' || box === 'unread') return counts.unifiedUnread;
     if (box === 'snoozed') return counts.snoozed;
     if (box === 'scheduled') return counts.scheduled;
@@ -96,10 +98,10 @@ export default function Sidebar({
           return (
             <button key={s.box} className={'folder' + (isActive(v) ? ' active' : '') + (s.box === 'today' ? ' folder-today' : '')} onClick={() => go(v)}>
               <Icon size={17} />
-              <span className="folder-name">{multi || s.box !== 'inbox' ? s.label : '收件箱'}</span>
-              {s.box === 'today' && counts.focus?.overdue > 0 ? (
+              <span className="folder-name" title={s.box === 'waiting' ? '等我回复 · 等对方回复' : undefined}>{multi || s.box !== 'inbox' ? s.label : '收件箱'}</span>
+              {(s.box === 'today' || s.box === 'waiting') && counts.focus?.overdue > 0 ? (
                 <span className="count-pill alert" title={`${counts.focus.overdue} 封已超过回复时限`}>{n}</span>
-              ) : s.box === 'today' && n > 0 ? (
+              ) : (s.box === 'today' || s.box === 'waiting') && n > 0 ? (
                 <span className="count-pill">{n}</span>
               ) : (
                 n > 0 && <span className={'count' + (s.box === 'unread' || s.box === 'inbox' ? '' : ' muted')}>{n > 999 ? '999+' : n}</span>

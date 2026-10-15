@@ -14,31 +14,48 @@ const QUICK_FILTERS = [
   { token: 'has:attachment', label: '有附件' },
 ];
 
+function remindChip(stage) {
+  const s = Number(stage) || 0;
+  if (s < 1) return null;
+  if (s >= 3) return <span key="rm" className="tag remind-3">终提醒</span>;
+  if (s === 2) return <span key="rm" className="tag remind-2">提醒 2</span>;
+  return <span key="rm" className="tag remind-1">提醒</span>;
+}
+
 function Chips({ m, variant }) {
   const p = m.priority;
   const chips = [];
   if (variant === 'reply' && p) {
-    if (p.level === 'high') chips.push(<span key="lv" className="tag lv-high"><Flame size={10} /> 优先</span>);
-    else if (p.level === 'medium') chips.push(<span key="lv" className="tag lv-medium">重要</span>);
+    if (p.overdue) chips.push(<span key="aw" className="tag lv-high">超时未回</span>);
+    else chips.push(<span key="aw" className="tag await">待回复</span>);
+    const rm = remindChip(m.remindStage);
+    if (rm && p.overdue) chips.push(rm);
     if (p.tier === 'vip') chips.push(<span key="t" className="tag tier-vip"><Crown size={10} /> VIP</span>);
     else if (p.tier === 'customer') chips.push(<span key="t" className="tag tier-customer">客户</span>);
     else if (p.tier === 'new') chips.push(<span key="t" className="tag tier-new">{p.signals.includes('inquiry') ? '新询盘' : '新联系人'}</span>);
-    p.signals.filter((s) => SIGNALS[s] && !(p.tier === 'new' && s === 'inquiry')).slice(0, 2).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
+    if (p.level === 'high') chips.push(<span key="lv" className="tag lv-high"><Flame size={10} /> 优先</span>);
+    else if (p.level === 'medium') chips.push(<span key="lv" className="tag lv-medium">重要</span>);
+    p.signals.filter((s) => SIGNALS[s] && !(p.tier === 'new' && s === 'inquiry')).slice(0, 1).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
   } else if (variant === 'follow' && m.follow) {
+    chips.push(<span key="wot" className="tag waiting-them">等对方{m.follow.days ? ` · ${m.follow.days}天` : ''}</span>);
     if (m.follow.tier === 'vip') chips.push(<span key="t" className="tag tier-vip"><Crown size={10} /> VIP</span>);
     else if (m.follow.tier === 'customer') chips.push(<span key="t" className="tag tier-customer">客户</span>);
-    m.follow.signals.filter((s) => SIGNALS[s]).slice(0, 2).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
+    m.follow.signals.filter((s) => SIGNALS[s]).slice(0, 1).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
   } else {
     if (m.awaiting) chips.push(<span key="aw" className={'tag ' + (m.overdue ? 'lv-high' : 'await')}>{m.overdue ? '超时未回' : '待回复'}</span>);
     else if (m.waitingOnThem) {
       const label = m.waitingDays != null && m.waitingDays >= 1 ? `等对方 · ${m.waitingDays}天` : '等对方';
       chips.push(<span key="wot" className="tag waiting-them">{label}</span>);
     }
-    if (['vip', 'customer', 'new'].includes(m.tier)) {
-      m.signals?.filter((s) => SIGNALS[s]).slice(0, 2).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
+    const rm = remindChip(m.remindStage);
+    if (rm && m.overdue) chips.push(rm);
+    if (m.tier === 'vip') chips.push(<span key="t" className="tag tier-vip"><Crown size={10} /> VIP</span>);
+    else if (['customer', 'new'].includes(m.tier)) {
+      m.signals?.filter((s) => SIGNALS[s]).slice(0, 1).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
     }
   }
-  return chips.length ? <div className="row-tags">{chips}</div> : null;
+  const shown = chips.slice(0, 3);
+  return shown.length ? <div className="row-tags" title={chips.length > 3 ? '更多状态已收起' : undefined}>{shown}</div> : null;
 }
 
 export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp }) {
@@ -143,15 +160,15 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
             <button title="无需跟进" onClick={() => onAction([m.id], 'nofollow')}><BellOff size={15} /></button>
           </>
         )}
-        {!follow && <button title="归档 (E)" onClick={() => onAction([m.id], 'archive')}><Archive size={15} /></button>}
-        {!follow && <button title="删除 (#)" onClick={() => onAction([m.id], 'trash')}><Trash2 size={15} /></button>}
+        {!follow && <button type="button" title="归档 (E)" aria-label="归档" onClick={() => onAction([m.id], 'archive')}><Archive size={15} /></button>}
+        {!follow && <button type="button" title="删除 (#)" aria-label="删除" onClick={() => onAction([m.id], 'trash')}><Trash2 size={15} /></button>}
         {variant === 'mail' && (
-          <button title={m.seen ? '标为未读 (U)' : '标为已读'} onClick={() => onAction([m.id], m.seen ? 'unread' : 'read')}>
+          <button type="button" title={m.seen ? '标为未读 (U)' : '标为已读'} aria-label={m.seen ? '标为未读' : '标为已读'} onClick={() => onAction([m.id], m.seen ? 'unread' : 'read')}>
             {m.seen ? <Mail size={15} /> : <MailOpen size={15} />}
           </button>
         )}
         <div className="move-wrap">
-          <button title="稍后提醒 (B)" onClick={() => setSnooze((v) => !v)}><Clock size={15} /></button>
+          <button type="button" title="稍后提醒 (B)" aria-label="稍后提醒" onClick={() => setSnooze((v) => !v)}><Clock size={15} /></button>
           {snooze && (
             <TimeMenu
               title="稍后提醒"
@@ -167,7 +184,9 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
         </div>
       </div>
       <button
+        type="button"
         className={'star' + (m.flagged ? ' on' : '')}
+        aria-label={m.flagged ? '取消星标' : '星标'}
         onClick={(e) => {
           e.stopPropagation();
           onAction([m.id], m.flagged ? 'unflag' : 'flag');
@@ -264,7 +283,7 @@ export default function MailList({
     <section className="list-pane">
       <header className="list-head">
         <div className="list-title-row">
-          <button className="icon-btn mobile-only" onClick={onMenu}><Menu size={18} /></button>
+          <button type="button" className="icon-btn mobile-only" onClick={onMenu} aria-label="打开菜单"><Menu size={18} /></button>
           <div className="list-title">
             <h2>{title}</h2>
             {subtitle && <small>{subtitle}</small>}
@@ -272,7 +291,7 @@ export default function MailList({
           {onMarkAllRead && (
             <button className="icon-btn" onClick={onMarkAllRead} title="全部标为已读"><CheckCheck size={16} /></button>
           )}
-          <button className="icon-btn" onClick={onRefresh} title="同步">
+          <button type="button" className="icon-btn" onClick={onRefresh} title="同步" aria-label="同步">
             <RefreshCw size={16} className={refreshing ? 'spin' : ''} />
           </button>
         </div>

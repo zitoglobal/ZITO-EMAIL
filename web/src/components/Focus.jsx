@@ -1,5 +1,5 @@
-import React, { useMemo, useRef } from 'react';
-import { Menu, RefreshCw, Sparkles, Loader2, Crown, CornerDownRight, Send, PartyPopper, Info, AlertTriangle } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Menu, RefreshCw, Sparkles, Loader2, Crown, CornerDownRight, Send, PartyPopper, Info, AlertTriangle, ChevronDown, Archive, Trash2, CheckCircle2, MailOpen } from 'lucide-react';
 import { Row } from './MailList.jsx';
 import { avatarColor, greeting, waitText } from '../utils.js';
 
@@ -13,9 +13,19 @@ function SectionHead({ id, title, count, hint }) {
   );
 }
 
+function loadExpanded() {
+  try {
+    const v = localStorage.getItem('zm_focus_head_expanded');
+    if (v == null) return null;
+    return v === '1';
+  } catch {
+    return null;
+  }
+}
+
 export default function Focus({
   user, data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, aiEnabled, onAiTriage, aiBusy,
-  groupMode, setGroupMode, onFollowUp, onMenu,
+  groupMode, setGroupMode, onFollowUp, onMenu, checked, setChecked,
 }) {
   const body = useRef();
   const reply = messages.filter((m) => m._section === 'reply');
@@ -29,6 +39,27 @@ export default function Focus({
   const handled = stats?.handledToday || 0;
   const total = handled + reply.length;
   const pct = total ? Math.round((handled / total) * 100) : 100;
+
+  const [headOpen, setHeadOpen] = useState(() => {
+    const saved = loadExpanded();
+    return saved == null ? false : saved;
+  });
+  const [autoOpened, setAutoOpened] = useState(false);
+
+  useEffect(() => {
+    if (overdue > 0 && !autoOpened && loadExpanded() == null) {
+      setHeadOpen(true);
+      setAutoOpened(true);
+    }
+  }, [overdue, autoOpened]);
+
+  const toggleHead = () => {
+    setHeadOpen((v) => {
+      const next = !v;
+      try { localStorage.setItem('zm_focus_head_expanded', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  };
 
   const groupSizes = useMemo(() => {
     const map = new Map();
@@ -46,9 +77,27 @@ export default function Focus({
     mb: mailboxMap[m.mailboxId],
     showMailbox: multi,
     selected: selectedId === m.id,
-    checked: false,
+    checked: checked ? checked.has(m.id) : false,
     onSelect,
-    onToggleCheck: () => onSelect(m),
+    onToggleCheck: (id, range) => {
+      if (!setChecked || !checked) {
+        onSelect(m);
+        return;
+      }
+      const next = new Set(checked);
+      if (range) {
+        const ids = messages.map((x) => x.id);
+        const a = ids.indexOf([...checked][checked.size - 1]);
+        const b = ids.indexOf(id);
+        if (a >= 0 && b >= 0) {
+          for (let i = Math.min(a, b); i <= Math.max(a, b); i++) next.add(ids[i]);
+          setChecked(next);
+          return;
+        }
+      }
+      next.has(id) ? next.delete(id) : next.add(id);
+      setChecked(next);
+    },
     onAction,
     variant,
     onFollowUp,
@@ -56,71 +105,105 @@ export default function Focus({
 
   const today = new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' });
   let lastGroup = null;
+  const ids = checked ? [...checked] : [];
 
   return (
     <section className="list-pane focus-pane focus-craft">
-      <header className="focus-head">
+      <header className={'focus-head compact' + (headOpen ? ' expanded' : '')}>
         <div className="list-title-row">
-          <button className="icon-btn mobile-only" onClick={onMenu}><Menu size={18} /></button>
+          <button type="button" className="icon-btn mobile-only" onClick={onMenu} aria-label="打开菜单"><Menu size={18} /></button>
           <div className="list-title">
             <h2>今日待办</h2>
             <small>{today} · {greeting()}，{user.name}</small>
           </div>
           {aiEnabled && reply.length > 0 && (
-            <button className="ai-chip" onClick={onAiTriage} disabled={aiBusy} title="AI 逐封给出行动建议">
+            <button type="button" className="ai-chip" onClick={onAiTriage} disabled={aiBusy} title="AI 逐封给出行动建议" aria-label="AI 分析待办">
               {aiBusy ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} AI 分析
             </button>
           )}
-          <button className="icon-btn" onClick={onRefresh} title="同步所有邮箱">
+          <button type="button" className="icon-btn" onClick={onRefresh} title="同步所有邮箱" aria-label="同步所有邮箱">
             <RefreshCw size={16} className={refreshing ? 'spin' : ''} />
           </button>
         </div>
 
-        <div className="focus-stats">
-          <button className="stat" onClick={() => jump('fs-reply')}>
-            <b>{reply.length}</b><span>待回复</span>
+        {(reply.length > 0 || follow.length > 0 || overdue > 0) && (
+          <button
+            type="button"
+            className={'focus-summary' + (headOpen ? ' open' : '')}
+            onClick={toggleHead}
+            aria-expanded={headOpen}
+            aria-label={`待回复 ${reply.length} 封，超时 ${overdue} 封，跟进 ${follow.length} 封，今日来信 ${stats?.todayIn ?? 0}`}
+          >
+            {overdue > 0 && !headOpen && <span className="fs-dot-alert" aria-hidden />}
+            <span>待回 <b>{reply.length}</b></span>
+            <span className="fs-dot">·</span>
+            <span className={overdue ? 'fs-danger' : ''}>超时 <b>{overdue}</b></span>
+            <span className="fs-dot">·</span>
+            <span className={follow.length ? 'fs-warn' : ''}>跟进 <b>{follow.length}</b></span>
+            <span className="fs-dot">·</span>
+            <span>今日来信 <b>{stats?.todayIn ?? 0}</b></span>
+            <ChevronDown size={14} className="fs-chev" />
           </button>
-          <button className={'stat' + (overdue ? ' danger' : '')} onClick={() => jump('fs-reply')} title={`分层时限：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h`}>
-            <b>{overdue}</b><span>已超时</span>
-          </button>
-          <button className={'stat' + (follow.length ? ' warn' : '')} onClick={() => jump('fs-follow')}>
-            <b>{follow.length}</b><span>待跟进</span>
-          </button>
-          <div className="stat plain">
-            <b>{stats?.todayIn ?? 0}</b><span>今日来信</span>
-          </div>
-        </div>
+        )}
 
-        <div className={'focus-progress' + (pct === 100 && total ? ' done' : '')} title="今日已回复或标记处理的客户邮件">
-          <div className="fp-bar"><i style={{ width: pct + '%' }} /></div>
-          <span>今日已处理 <b>{handled}</b> / {total}{total > 0 ? <> · <b className="fp-pct">{pct}%</b></> : null}</span>
-        </div>
+        {headOpen && (
+          <div className="focus-details">
+            <div className="focus-stats" style={{ display: 'grid' }}>
+              <button type="button" className="stat" onClick={() => jump('fs-reply')} aria-label={`待回复 ${reply.length} 封`}>
+                <b>{reply.length}</b><span>待回复</span>
+              </button>
+              <button type="button" className={'stat' + (overdue ? ' danger' : '')} onClick={() => jump('fs-reply')} aria-label={`已超时 ${overdue} 封`} title={`分层时限：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h`}>
+                <b>{overdue}</b><span>已超时</span>
+              </button>
+              <button type="button" className={'stat' + (follow.length ? ' warn' : '')} onClick={() => jump('fs-follow')} aria-label={`待跟进 ${follow.length} 封`}>
+                <b>{follow.length}</b><span>待跟进</span>
+              </button>
+              <div className="stat plain">
+                <b>{stats?.todayIn ?? 0}</b><span>今日来信</span>
+              </div>
+            </div>
+            <div className={'focus-progress' + (pct === 100 && total ? ' done' : '')} title="今日已回复或标记处理的客户邮件">
+              <div className="fp-bar"><i style={{ width: pct + '%' }} /></div>
+              <span>今日已处理 <b>{handled}</b> / {total}{total > 0 ? <> · <b className="fp-pct">{pct}%</b></> : null}</span>
+            </div>
+            <div className="focus-sla-strip" title="按客户层级分层的回复时限">
+              <span className="focus-sla-chip vip"><Crown size={11} /> VIP {slaTier.vip}h</span>
+              <span className="focus-sla-chip">客户 {slaTier.customer}h</span>
+              <span className="focus-sla-chip new">新询盘 {slaTier.inquiry}h</span>
+            </div>
+            {overdue > 0 && data?.overdueSummary && (
+              <button type="button" className="overdue-summary" onClick={() => jump('fs-reply')} title="跳转到超时待回复">
+                <AlertTriangle size={14} />
+                <span>
+                  <b>{overdue}</b> 封已超时
+                  {data.overdueSummary.oldestHours > 0 && <> · 最早已等 {waitText(data.overdueSummary.oldestHours)}</>}
+                  {data.overdueSummary.byTier?.vip > 0 && <> · VIP {data.overdueSummary.byTier.vip}</>}
+                </span>
+                <small>去处理</small>
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="focus-tools">
           <div className="segmented">
-            <button className={groupMode !== 'customer' ? 'on' : ''} onClick={() => setGroupMode('priority')}>按优先级</button>
-            <button className={groupMode === 'customer' ? 'on' : ''} onClick={() => setGroupMode('customer')}>按客户</button>
+            <button type="button" className={groupMode !== 'customer' ? 'on' : ''} onClick={() => setGroupMode('priority')}>按优先级</button>
+            <button type="button" className={groupMode === 'customer' ? 'on' : ''} onClick={() => setGroupMode('customer')}>按客户</button>
           </div>
           <span className="focus-legend" title={`排序依据：客户等级 × 意图 × 等待时长。分层 SLA：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h · 默认 ${slaTier.default}h`}>
             <Info size={12} /> 智能排序
           </span>
         </div>
-        <div className="focus-sla-strip" title="按客户层级分层的回复时限">
-          <span className="focus-sla-chip vip"><Crown size={11} /> VIP {slaTier.vip}h</span>
-          <span className="focus-sla-chip">客户 {slaTier.customer}h</span>
-          <span className="focus-sla-chip new">新询盘 {slaTier.inquiry}h</span>
-        </div>
 
-        {overdue > 0 && data?.overdueSummary && (
-          <button type="button" className="overdue-summary" onClick={() => jump('fs-reply')} title="跳转到超时待回复">
-            <AlertTriangle size={14} />
-            <span>
-              <b>{overdue}</b> 封已超时
-              {data.overdueSummary.oldestHours > 0 && <> · 最早已等 {waitText(data.overdueSummary.oldestHours)}</>}
-              {data.overdueSummary.byTier?.vip > 0 && <> · VIP {data.overdueSummary.byTier.vip}</>}
-            </span>
-            <small>点击处理</small>
-          </button>
+        {checked && checked.size > 0 && (
+          <div className="bulk" style={{ padding: '0 0 2px' }}>
+            <span>已选 {checked.size}</span>
+            <button type="button" title="标为已读" aria-label="标为已读" onClick={() => onAction(ids, 'read')}><MailOpen size={15} /></button>
+            <button type="button" title="归档" aria-label="归档" onClick={() => onAction(ids, 'archive')}><Archive size={15} /></button>
+            <button type="button" title="删除" aria-label="删除" onClick={() => onAction(ids, 'trash')}><Trash2 size={15} /></button>
+            <button type="button" title="无需回复" aria-label="无需回复" onClick={() => onAction(ids, 'done')}><CheckCircle2 size={15} /></button>
+            <button type="button" className="text" onClick={() => setChecked(new Set())}>取消</button>
+          </div>
         )}
       </header>
 
