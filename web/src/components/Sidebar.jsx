@@ -2,10 +2,13 @@ import React, { useState } from 'react';
 import {
   Inbox, Send, FileText, Trash2, Archive, ShieldAlert, Star, Folder, PenSquare, Settings, Sparkles, ChevronRight, Plus, LogOut,
   MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, Hourglass, LayoutPanelLeft,
+  Columns3, Briefcase, BookOpen,
 } from 'lucide-react';
 import { avatarColor, folderDepth, folderLabel, initials, sortFolders } from '../utils.js';
 import { BrandIcon } from './Brand.jsx';
 import { LAYOUT_MODES } from '../layout.js';
+
+const MODE_ICONS = { standard: Columns3, sales: Briefcase, focus: BookOpen };
 
 const ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Trash': Trash2, '\\Archive': Archive, '\\Junk': ShieldAlert, '\\Flagged': Star, '\\All': Layers };
 
@@ -31,7 +34,7 @@ function loadExpanded() {
 
 export default function Sidebar({
   user, mailboxes, folders, counts, view, onView, onCompose, onDigest, onSettings, onAddMailbox, onLogout, onCommand, onNewFolder, open, onClose,
-  iconRail = false, layoutMode = 'standard', onLayoutMode,
+  iconRail = false, layoutMode = 'standard', onLayoutMode, salesRailTip = false,
 }) {
   const [expanded, setExpanded] = useState(loadExpanded);
   const [menu, setMenu] = useState(false);
@@ -175,20 +178,30 @@ export default function Sidebar({
             <div className="layout-mode-label"><LayoutPanelLeft size={13} /> 布局</div>
           )}
           <div className="layout-mode-btns">
-            {LAYOUT_MODES.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                className={layoutMode === m.id ? 'on' : ''}
-                title={m.hint}
-                aria-pressed={layoutMode === m.id}
-                aria-label={m.label}
-                onClick={() => onLayoutMode(m.id)}
-              >
-                {iconRail ? m.label.slice(0, 1) : m.label}
-              </button>
-            ))}
+            {LAYOUT_MODES.map((m) => {
+              const Icon = MODE_ICONS[m.id] || Columns3;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={layoutMode === m.id ? 'on' : ''}
+                  title={m.label + ' · ' + m.hint}
+                  aria-pressed={layoutMode === m.id}
+                  aria-label={m.label}
+                  onClick={() => onLayoutMode(m.id)}
+                >
+                  <Icon size={iconRail ? 16 : 13} strokeWidth={2} />
+                  {!iconRail && <span>{m.label}</span>}
+                </button>
+              );
+            })}
           </div>
+          {salesRailTip && !iconRail && (
+            <p className="layout-mode-tip" role="note">需更宽窗口才显示客户栏</p>
+          )}
+          {salesRailTip && iconRail && (
+            <p className="layout-mode-tip icon-tip" role="note" title="需更宽窗口才显示客户栏">宽屏</p>
+          )}
         </div>
       )}
 

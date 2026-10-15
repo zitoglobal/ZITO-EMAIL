@@ -3,13 +3,14 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 /**
  * 可拖拽分栏分隔条。hit 区 ≥6px，cursor col-resize。
  * onDrag(deltaX) 在拖动中连续回调；onDragEnd 在松开时回调。
+ * 双击恢复默认。默认可见淡握点，提升可发现性。
  */
 export default function ColumnSplitter({
   style,
   onDrag,
   onDragEnd,
   disabled = false,
-  label = '调整栏宽',
+  label = '拖拽调整 · 双击恢复默认',
 }) {
   const [active, setActive] = useState(false);
   const startX = useRef(0);
@@ -67,6 +68,10 @@ export default function ColumnSplitter({
         onDrag?.('reset');
         onDragEnd?.();
       }}
-    />
+    >
+      <span className="col-splitter-grip" aria-hidden>
+        <i /><i /><i />
+      </span>
+    </div>
   );
 }

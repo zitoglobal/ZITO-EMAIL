@@ -729,8 +729,10 @@ export default function App() {
     setLayoutWidths((prev) => {
       const lim = LAYOUT_LIMITS[key];
       let nextVal;
-      if (deltaOrReset === 'reset') nextVal = lim.def;
-      else nextVal = prev[key] + deltaOrReset;
+      if (deltaOrReset === 'reset') {
+        // 销售台列表默认略窄，保证读信区可读
+        nextVal = key === 'list' && layoutMode === 'sales' ? LAYOUT_LIMITS.salesListDef : lim.def;
+      } else nextVal = prev[key] + deltaOrReset;
       nextVal = Math.min(lim.max, Math.max(lim.min, Math.round(nextVal)));
       const next = { ...prev, [key]: nextVal };
       layoutWidthsRef.current = next;
@@ -918,7 +920,8 @@ export default function App() {
   const syncing = mailboxes.filter((m) => m.status === 'syncing' || m.status === 'new');
   const syncAlert = syncBad.length || syncing.length;
 
-  const showCustomerRail = railAllowed && !!selectedId && view.box !== 'scheduled';
+  // 销售台：客户栏常驻挂载，未选信显示空态，避免选信时插拔整列跳动
+  const showCustomerRail = railAllowed && view.box !== 'scheduled';
   const eff = effectiveWidths(layoutMode, layoutWidths);
   const desktopLayout = viewportW > 900;
   const appStyle = desktopLayout
@@ -937,6 +940,7 @@ export default function App() {
         + (settings.density === 'compact' ? ' compact' : '')
         + (syncAlert ? ' has-sync-strip' : '')
         + (showCustomerRail ? ' has-customer-rail' : '')
+        + (layoutMode === 'sales' ? ' layout-sales-desk' : '')
         + ` layout-${layoutMode}`
       }
       style={appStyle}
@@ -961,12 +965,13 @@ export default function App() {
         iconRail={layoutMode === 'focus' && desktopLayout}
         layoutMode={layoutMode}
         onLayoutMode={setLayoutMode}
+        salesRailTip={layoutMode === 'sales' && viewportW < LAYOUT_LIMITS.salesRailMinViewport}
       />
       {sidebarOpen && <div className="sidebar-mask" onClick={() => setSidebarOpen(false)} />}
 
       {desktopLayout && layoutMode !== 'focus' && (
         <ColumnSplitter
-          label="调整侧栏宽度"
+          label="拖拽调整 · 双击恢复默认"
           style={{ left: eff.sidebar }}
           onDrag={(d) => {
             if (d === 'reset') patchLayoutWidth('sidebar', 'reset');
@@ -977,7 +982,7 @@ export default function App() {
       )}
       {desktopLayout && (
         <ColumnSplitter
-          label="调整列表宽度"
+          label="拖拽调整 · 双击恢复默认"
           style={{ left: eff.sidebar + eff.list }}
           onDrag={(d) => {
             if (d === 'reset') patchLayoutWidth('list', 'reset');
@@ -988,7 +993,7 @@ export default function App() {
       )}
       {desktopLayout && showCustomerRail && (
         <ColumnSplitter
-          label="调整客户栏宽度"
+          label="拖拽调整 · 双击恢复默认"
           style={{ left: `calc(100% - ${layoutWidths.customer}px)` }}
           onDrag={(d) => {
             // 拖客户栏左边：向右变窄（delta 为正 → 宽度减小）
@@ -1047,6 +1052,7 @@ export default function App() {
           onMenu={() => setSidebarOpen(true)}
           checked={checked}
           setChecked={setChecked}
+          salesDensity={layoutMode === 'sales'}
         />
       ) : view.box === 'waiting' ? (
         <Waiting
@@ -1158,9 +1164,10 @@ export default function App() {
         <aside className="customer-rail" aria-label="客户栏">
           <CustomerPanel
             mode="rail"
-            address={customerCtx?.address || currentMsg?.from?.address || selectedItem?.from?.address}
-            sender={customerCtx?.sender || (currentMsg?.sender ? { ...currentMsg.sender, address: currentMsg.from?.address } : null)}
-            slaHours={customerCtx?.slaHours ?? selectedItem?.priority?.slaHours}
+            address={selectedId ? (customerCtx?.address || currentMsg?.from?.address || selectedItem?.from?.address) : null}
+            sender={selectedId ? (customerCtx?.sender || (currentMsg?.sender ? { ...currentMsg.sender, address: currentMsg.from?.address } : null)) : null}
+            slaHours={selectedId ? (customerCtx?.slaHours ?? selectedItem?.priority?.slaHours) : null}
+            listItem={selectedId ? selectedItem : null}
             onRule={setCustomerRule}
             onOpenThread={(mid) => setSelectedId(mid)}
           />
@@ -1176,6 +1183,7 @@ export default function App() {
               address={customerCtx?.address || currentMsg?.from?.address}
               sender={customerCtx?.sender || (currentMsg?.sender ? { ...currentMsg.sender, address: currentMsg.from?.address } : null)}
               slaHours={customerCtx?.slaHours ?? selectedItem?.priority?.slaHours}
+              listItem={selectedItem}
               onRule={setCustomerRule}
               onOpenThread={(mid) => { setCustomerOpen(false); setSelectedId(mid); }}
               onClose={() => setCustomerOpen(false)}
