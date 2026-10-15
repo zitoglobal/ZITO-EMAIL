@@ -155,7 +155,8 @@ for (const [name, def] of [
   ['done_at', 'INTEGER'],
   ['nudge_off', 'INTEGER NOT NULL DEFAULT 0'],
   ['ai_note', 'TEXT'],
-  ['reminded', 'INTEGER NOT NULL DEFAULT 0'],
+  ['reminded', 'INTEGER NOT NULL DEFAULT 0'],  // 提醒阶段 0→1→2→3（兼容旧的 0/1）
+  ['reminded_at', 'INTEGER'],                 // 上次提醒时间，用于冷却
 ]) {
   if (!msgCols.has(name)) db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${def}`);
 }

@@ -239,7 +239,16 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
   }
   followups.sort((a, b) => b.follow.score - a.follow.score);
 
-  const overdue = reply.filter((m) => m.priority.overdue).length;
+  const overdueList = reply.filter((m) => m.priority.overdue);
+  const overdue = overdueList.length;
+  const byTier = { vip: 0, customer: 0, new: 0, other: 0 };
+  let oldestHours = 0;
+  for (const m of overdueList) {
+    const t = m.priority.tier;
+    if (t in byTier) byTier[t]++;
+    else byTier.other++;
+    if (m.priority.waitingHours > oldestHours) oldestHours = m.priority.waitingHours;
+  }
   return {
     reply,
     followups,
@@ -251,23 +260,104 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       todayIn,
       handledToday: repliedToday + doneToday,
     },
+    overdueSummary: {
+      count: overdue,
+      byTier,
+      oldestHours: Math.round(oldestHours * 10) / 10,
+      top: overdueList.slice(0, 3).map((m) => ({
+        id: m.id,
+        subject: m.subject,
+        from: m.from,
+        tier: m.priority.tier,
+        waitingHours: m.priority.waitingHours,
+        slaHours: m.priority.slaHours,
+      })),
+    },
     settings: { slaHours, followDays, slaByTier: tiers },
   };
 }
 
-/** 普通列表的轻量标注：客户等级、业务意图、是否待回复 */
+/** 批量取会话中对方最后回信时间（用于已发送「等对方」） */
+function theirLastByThread(userId, threadIds) {
+  const ids = [...new Set(threadIds.filter(Boolean))];
+  const map = new Map();
+  if (!ids.length) return map;
+  const ph = ids.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT m.thread_id AS tid, MAX(m.date) AS their_last
+       FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
+       WHERE b.user_id = ? AND m.thread_id IN (${ph})
+         AND m.from_addr NOT IN (SELECT email FROM mailboxes WHERE user_id = ?)
+       GROUP BY m.thread_id`
+    )
+    .all(userId, ...ids, userId);
+  for (const r of rows) map.set(r.tid, r.their_last);
+  return map;
+}
+
+function externalRecipient(idx, toJson) {
+  const to = JSON.parse(toJson || '[]');
+  return to.find((a) => {
+    const addr = String(a.address || '').toLowerCase();
+    return addr && !idx.own.has(addr) && !idx.ownDomains.has(domainOf(addr)) && !ROBOT.test(addr);
+  }) || null;
+}
+
+/** 普通列表的轻量标注：待我回 / 等对方 / 超时 */
 export function decorate(userId, rows, settings = {}) {
   const idx = relationIndex(userId);
   const at = now();
+  const sentThreads = rows.filter((r) => r.special_use === '\\Sent' && r.thread_id).map((r) => r.thread_id);
+  const theirLast = theirLastByThread(userId, sentThreads);
+
   return rows.map((r) => {
     const m = rowToMessage(r);
-    if (r.special_use !== '\\Inbox') return m;
-    const tier = tierOf(idx, r.from_addr, r.category);
-    const signals = signalsFrom(r);
-    const sla = slaFor(settings, tier, signals);
-    const awaiting = ['vip', 'customer', 'new'].includes(tier) && !handled(r) && at - r.date < REPLY_WINDOW;
-    const waitingHours = (at - r.date) / HOUR;
-    return { ...m, tier, awaiting, overdue: awaiting && waitingHours >= sla, slaHours: sla };
+
+    if (r.special_use === '\\Inbox') {
+      const tier = tierOf(idx, r.from_addr, r.category);
+      const signals = signalsFrom(r);
+      const sla = slaFor(settings, tier, signals);
+      const awaiting = ['vip', 'customer', 'new'].includes(tier) && !handled(r) && at - r.date < REPLY_WINDOW;
+      const waitingHours = (at - r.date) / HOUR;
+      // 我已回复（answered / my_last 晚于来信）且未关闭 → 等对方
+      const replied = !!(r.answered || (r.my_last && r.my_last > r.date));
+      const waitingOnThem =
+        !awaiting &&
+        replied &&
+        ['vip', 'customer', 'new'].includes(tier) &&
+        !r.done_at &&
+        !r.snooze_until &&
+        !r.nudge_off &&
+        at - (r.my_last || r.date) < FOLLOW_WINDOW;
+      return {
+        ...m,
+        tier,
+        awaiting,
+        overdue: awaiting && waitingHours >= sla,
+        slaHours: sla,
+        waitingOnThem,
+      };
+    }
+
+    if (r.special_use === '\\Sent') {
+      if (r.nudge_off || r.snooze_until) return m;
+      if (r.my_last && r.my_last > r.date) return m;
+      const their = r.thread_id ? theirLast.get(r.thread_id) : null;
+      if (their && their > r.date) return m;
+      if (!expectsReply(r.subject, r.snippet)) return m;
+      const external = externalRecipient(idx, r.to_json);
+      if (!external) return m;
+      const days = Math.floor((at - r.date) / DAY);
+      return {
+        ...m,
+        waitingOnThem: true,
+        waitingDays: days,
+        tier: tierOf(idx, external.address),
+      };
+    }
+
+    return m;
   });
 }
 
@@ -307,16 +397,102 @@ export function senderInfo(userId, address) {
     )
     .all(userId, a)
     .map((r) => ({ subject: r.subject || '(无主题)', date: r.date }));
+  const received = st?.received || 0;
+  const sent = idx.wrote.get(a) || 0;
+  const suggest = vipSuggestFor(idx, a, { received, sent, tier, rule });
   return {
     tier,
     rule: rule ? { key: rule.key, kind: rule.kind, name: rule.name } : null,
     company: companyOf(idx, { address: a }),
-    received: st?.received || 0,
-    sent: idx.wrote.get(a) || 0,
+    received,
+    sent,
     lastReceived: st?.last_received || null,
     lastSent: st?.last_sent || null,
     recentSubjects: recent,
+    vipSuggest: suggest,
   };
+}
+
+// ---------- VIP 建议（不自动升 VIP，需一键确认） ----------
+function vipSuggestFor(idx, address, { received = 0, sent = 0, tier, rule } = {}) {
+  const a = String(address || '').toLowerCase();
+  if (!a || rule?.kind === 'vip' || rule?.kind === 'muted') return null;
+  if (['vip', 'muted', 'self', 'bulk', 'colleague'].includes(tier)) return null;
+  if (ROBOT.test(a)) return null;
+  const d = domainOf(a);
+  const domainSent = d && !isFreeDomain(d) ? idx.wroteDomains.get(d) || 0 : 0;
+  const score = sent * 3 + received + Math.min(domainSent, 8);
+  const qualify = score >= 12 || (sent >= 3 && received >= 2) || (received >= 5 && sent >= 1);
+  if (!qualify) return null;
+  const reasons = [];
+  if (sent >= 3) reasons.push(`你发过 ${sent} 封`);
+  if (received >= 5) reasons.push(`来信 ${received} 封`);
+  else if (received >= 2) reasons.push(`来信 ${received} 封`);
+  if (tier === 'customer') reasons.push('已识别为老客户');
+  if (domainSent >= 2 && !isFreeDomain(d)) reasons.push(`同公司往来 ${domainSent} 次`);
+  if (!reasons.length) return null;
+  const key = !isFreeDomain(d) && domainSent >= 2 ? '@' + d : a;
+  return { key, address: a, score, reasons };
+}
+
+/** 扫描往来频次 + 订单/付款/投诉信号，给出 VIP 建议列表（不自动写入规则） */
+export function vipSuggestions(userId, { limit = 15 } = {}) {
+  const idx = relationIndex(userId);
+  const rows = db
+    .prepare(
+      `SELECT lower(m.from_addr) AS addr,
+              COUNT(*) AS received,
+              SUM(CASE WHEN IFNULL(m.signals,'') LIKE '%order%' OR IFNULL(m.signals,'') LIKE '%payment%' OR IFNULL(m.signals,'') LIKE '%complaint%' THEN 1 ELSE 0 END) AS biz
+       FROM messages m
+       JOIN mailboxes b ON b.id = m.mailbox_id
+       LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
+       WHERE b.user_id = ? AND f.special_use = '\\Inbox' AND m.from_addr != b.email
+         AND m.date >= ?
+       GROUP BY lower(m.from_addr)
+       HAVING received >= 2`
+    )
+    .all(userId, now() - 180 * DAY);
+
+  const byKey = new Map();
+  for (const r of rows) {
+    const a = r.addr;
+    const tier = tierOf(idx, a);
+    const rule = ruleFor(idx, a);
+    if (rule?.kind === 'vip' || rule?.kind === 'muted') continue;
+    if (['vip', 'muted', 'self', 'bulk', 'colleague'].includes(tier)) continue;
+    if (ROBOT.test(a)) continue;
+    const sent = idx.wrote.get(a) || 0;
+    const d = domainOf(a);
+    const domainSent = d && !isFreeDomain(d) ? idx.wroteDomains.get(d) || 0 : 0;
+    const score = sent * 3 + r.received + r.biz * 8 + Math.min(domainSent, 10);
+    const qualify =
+      score >= 12 || (sent >= 3 && r.received >= 2) || (r.biz >= 1 && (sent >= 2 || r.received >= 3)) || (r.received >= 5 && sent >= 1);
+    if (!qualify) continue;
+    const reasons = [];
+    if (sent >= 3) reasons.push(`你发过 ${sent} 封`);
+    if (r.received >= 5) reasons.push(`来信 ${r.received} 封`);
+    else if (r.received >= 2) reasons.push(`来信 ${r.received} 封`);
+    if (r.biz) reasons.push('含订单/付款/投诉往来');
+    if (tier === 'customer') reasons.push('已识别为老客户');
+    if (domainSent >= 2 && !isFreeDomain(d)) reasons.push(`同公司往来 ${domainSent} 次`);
+    const key = !isFreeDomain(d) && domainSent >= 2 ? '@' + d : a;
+    const company = companyOf(idx, { address: a });
+    const prev = byKey.get(key);
+    if (!prev || score > prev.score) {
+      byKey.set(key, {
+        key,
+        address: a,
+        name: company.name,
+        domain: company.domain || null,
+        score,
+        reasons,
+        sent,
+        received: r.received,
+        biz: r.biz,
+      });
+    }
+  }
+  return [...byKey.values()].sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
 // ---------- 发件人规则（VIP / 静音） ----------
@@ -344,16 +520,56 @@ export function deleteRule(userId, key) {
   invalidate(userId);
 }
 
-// ---------- 超时提醒 ----------
+// ---------- 超时提醒（分阶段 + 冷却，替代一次性 reminded=1） ----------
+const REMIND_MAX_STAGE = 3;
+/** stage 完成后进入下一阶段前的冷却；stage0→1 立即 */
+const REMIND_COOLDOWN = {
+  0: 0,
+  1: 4 * HOUR,
+  2: 12 * HOUR,
+  3: Infinity,
+};
+
 export function overdueToRemind(userId, settings) {
+  const at = now();
   const data = focus(userId, settings);
   const fresh = data.reply.filter((m) => m.priority.overdue && m.priority.tier !== 'colleague');
+  if (!fresh.length) return null;
   const ids = fresh.map((m) => m.id);
-  if (!ids.length) return null;
-  const pending = db.prepare(`SELECT id FROM messages WHERE reminded = 0 AND id IN (${ids.join(',')})`).all().map((r) => r.id);
-  if (!pending.length) return null;
-  db.prepare(`UPDATE messages SET reminded = 1 WHERE id IN (${pending.join(',')})`).run();
-  const set = new Set(pending);
-  const items = fresh.filter((m) => set.has(m.id));
-  return { count: items.length, total: data.stats.overdue, items: items.slice(0, 3).map((m) => ({ id: m.id, subject: m.subject, from: m.from })) };
+  const meta = new Map(
+    db.prepare(`SELECT id, reminded, reminded_at FROM messages WHERE id IN (${ids.join(',')})`).all().map((r) => [r.id, r])
+  );
+  const due = [];
+  for (const m of fresh) {
+    const row = meta.get(m.id) || { reminded: 0, reminded_at: null };
+    const stage = Number(row.reminded) || 0;
+    if (stage >= REMIND_MAX_STAGE) continue;
+    const last = Number(row.reminded_at) || 0;
+    // 旧库 reminded=1 且无时间戳：补戳，本轮不重复推，避免升级风暴
+    if (stage > 0 && !last) {
+      db.prepare('UPDATE messages SET reminded_at = ? WHERE id = ?').run(at, m.id);
+      continue;
+    }
+    const cool = REMIND_COOLDOWN[stage] ?? Infinity;
+    if (stage > 0 && at - last < cool) continue;
+    due.push({ m, nextStage: stage + 1 });
+  }
+  if (!due.length) return null;
+  const upd = db.prepare('UPDATE messages SET reminded = ?, reminded_at = ? WHERE id = ?');
+  for (const { m, nextStage } of due) upd.run(nextStage, at, m.id);
+  const items = due.slice(0, 5).map(({ m, nextStage }) => ({
+    id: m.id,
+    subject: m.subject,
+    from: m.from,
+    stage: nextStage,
+    waitingHours: m.priority.waitingHours,
+    tier: m.priority.tier,
+  }));
+  return {
+    count: due.length,
+    total: data.stats.overdue,
+    stage: Math.max(...due.map((d) => d.nextStage)),
+    escalate: due.some((d) => d.nextStage >= 2),
+    items,
+  };
 }

@@ -278,10 +278,14 @@ function Preferences({ settings, onSave }) {
 
 function Triage({ settings, onSave, notify }) {
   const [rules, setRules] = useState(null);
+  const [suggestions, setSuggestions] = useState(null);
   const [form, setForm] = useState({ key: '', name: '', kind: 'vip' });
   const set = (k) => (v) => onSave({ [k]: v });
 
-  const load = () => api('/sender-rules').then((r) => setRules(r.rules)).catch((e) => notify(e.message, 'error'));
+  const load = () => {
+    api('/sender-rules').then((r) => setRules(r.rules)).catch((e) => notify(e.message, 'error'));
+    api('/vip-suggestions').then((r) => setSuggestions(r.suggestions || [])).catch(() => setSuggestions([]));
+  };
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -292,6 +296,16 @@ function Triage({ settings, onSave, notify }) {
     try {
       await api('/sender-rules', { method: 'POST', body: form });
       setForm({ key: '', name: '', kind: form.kind });
+      load();
+    } catch (err) {
+      notify(err.message, 'error');
+    }
+  }
+
+  async function confirmVip(s) {
+    try {
+      await api('/sender-rules', { method: 'POST', body: { key: s.key, kind: 'vip', name: s.name || '' } });
+      notify(`已设为 VIP：${s.name || s.key}`);
       load();
     } catch (err) {
       notify(err.message, 'error');
@@ -321,7 +335,21 @@ function Triage({ settings, onSave, notify }) {
         <Choice icon={Sparkles} label="新询盘" value={settings.slaNewInquiryHours ?? 8} onChange={set('slaNewInquiryHours')} options={[[4, '4 小时'], [8, '8 小时'], [12, '12 小时'], [24, '24 小时']]} />
       </div>
       <Choice icon={Send} label="对方未回复多久提醒跟进" value={settings.followupDays} onChange={set('followupDays')} options={[[2, '2 天'], [3, '3 天'], [5, '5 天'], [7, '7 天']]} />
-      <Toggle icon={BellRing} label="超时提醒" desc="客户邮件超过回复时限仍未处理时主动提醒（每封只提醒一次）" checked={settings.remindOverdue} onChange={set('remindOverdue')} />
+      <Toggle icon={BellRing} label="超时提醒" desc="超时后分阶段提醒：首次 → 4 小时后升级 → 再 12 小时终提醒（有冷却，不全量轰炸）" checked={settings.remindOverdue} onChange={set('remindOverdue')} />
+
+      <h4 className="set-h"><Crown size={15} /> VIP 建议（需确认）</h4>
+      <p className="set-desc muted-note">根据往来频次与订单/付款/投诉信号给出建议，不会自动升 VIP。</p>
+      {suggestions && !suggestions.length && <p className="set-desc muted-note">暂无建议。与客户往来增多后会出现在这里。</p>}
+      {(suggestions || []).map((s) => (
+        <div key={s.key} className="tpl-row vip-suggest-row">
+          <span className="rule-ico vip"><Crown size={13} /></span>
+          <div>
+            <b>{s.name || s.key}</b>
+            <small>{(s.reasons || []).join(' · ')} · {s.key.startsWith('@') ? `建议整域 ${s.key}` : s.key}</small>
+          </div>
+          <button type="button" className="btn-primary sm" onClick={() => confirmVip(s)}>确认 VIP</button>
+        </div>
+      ))}
 
       <h4 className="set-h"><Crown size={15} /> VIP 客户与静音名单</h4>
       <form className="rule-form" onSubmit={add}>

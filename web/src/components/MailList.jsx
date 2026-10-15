@@ -30,6 +30,10 @@ function Chips({ m, variant }) {
     m.follow.signals.filter((s) => SIGNALS[s]).slice(0, 2).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
   } else {
     if (m.awaiting) chips.push(<span key="aw" className={'tag ' + (m.overdue ? 'lv-high' : 'await')}>{m.overdue ? '超时未回' : '待回复'}</span>);
+    else if (m.waitingOnThem) {
+      const label = m.waitingDays != null && m.waitingDays >= 1 ? `等对方 · ${m.waitingDays}天` : '等对方';
+      chips.push(<span key="wot" className="tag waiting-them">{label}</span>);
+    }
     if (['vip', 'customer', 'new'].includes(m.tier)) {
       m.signals?.filter((s) => SIGNALS[s]).slice(0, 2).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
     }
@@ -72,9 +76,10 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
             {displayName(person) || '(未知)'}
           </span>
           {(m.tier === 'vip' || p?.tier === 'vip') && variant === 'mail' && <Crown size={12} className="vip-icon" />}
+          {m.waitingOnThem && variant === 'mail' && <Hourglass size={12} className="waiting-icon" title="等对方回复" />}
           {m.threadCount > 1 && <span className="thread-count">{m.threadCount}</span>}
           {m.pinned && <Pin size={12} className="pin-icon" />}
-          {m.answered && !focus && <CornerUpLeft size={12} className="muted-icon" />}
+          {m.answered && !focus && !m.waitingOnThem && <CornerUpLeft size={12} className="muted-icon" />}
           {m.hasAttachments && <Paperclip size={12} className="muted-icon" />}
           {variant === 'reply' && p ? (
             <span className={'date wait' + (p.overdue ? ' over' : '')} title={`收到于 ${formatShortDateTime(m.date)}${p.slaHours != null ? ` · 时限 ${p.slaHours}h` : ''}`}>

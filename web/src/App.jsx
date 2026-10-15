@@ -335,13 +335,14 @@ export default function App() {
     es.addEventListener('remind', (e) => {
       const d = parse(e);
       const first = d.items?.[0];
+      const escalate = !!d.escalate;
       const text =
         d.count > 1
-          ? `有 ${d.count} 封客户邮件已超过回复时限，最早的来自 ${displayName(first?.from)}`
-          : `${displayName(first?.from)} 的邮件已超过回复时限：${first?.subject || ''}`;
+          ? `${escalate ? '再次提醒：' : ''}有 ${d.count} 封客户邮件已超过回复时限，最早的来自 ${displayName(first?.from)}`
+          : `${escalate ? '再次提醒 · ' : ''}${displayName(first?.from)} 的邮件已超过回复时限：${first?.subject || ''}`;
       notify(text, 'important', { label: '去处理', fn: () => setViewRef.current({ mailboxId: 'all', box: 'today' }) }, 15_000);
       if (settingsRef.current.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-        const n = new Notification('客户邮件待回复', { body: text, tag: 'zm-remind', icon: '/favicon-180.png' });
+        const n = new Notification(escalate ? '超时升级提醒' : '客户邮件待回复', { body: text, tag: 'zm-remind', icon: '/favicon-180.png' });
         n.onclick = () => {
           window.focus();
           setViewRef.current({ mailboxId: 'all', box: 'today' });
