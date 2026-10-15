@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Search, RefreshCw, Star, Paperclip, MailOpen, Mail, Trash2, Archive, FolderInput, X, Menu, CornerUpLeft, Loader2, Inbox, Clock, Pin,
-  ServerCrash, ShieldAlert, CheckCheck, Crown, Flame, Hourglass, Sparkles, CheckCircle2, Reply, BellOff, Send, Tag,
+  ServerCrash, ShieldAlert, CheckCheck, Crown, Flame, Hourglass, Sparkles, CheckCircle2, Reply, BellOff, Send, Tag, Bookmark,
 } from 'lucide-react';
 import LabelMenu from './LabelMenu.jsx';
 import {
@@ -217,6 +217,7 @@ export default function MailList({
   title, subtitle, view, mailboxMap, messages, pinned, loading, loadingMore, hasMore, onLoadMore, selectedId, onSelect,
   checked, setChecked, category, setCategory, showCategories, q, deep, onSearch, onRefresh, refreshing, onAction, moveFolders,
   labels = [], onToggleLabels, onCreateLabel,
+  onSaveSearch, onUpdateSavedSearch, activeSavedSearch = null,
   onMenu, error, compact, onMarkAllRead,
 }) {
   const [input, setInput] = useState(q);
@@ -314,7 +315,7 @@ export default function MailList({
         </div>
         <form className="search" onSubmit={(e) => { e.preventDefault(); onSearch(input.trim(), false); }}>
           <Search size={15} />
-          <input ref={searchRef} value={input} onChange={(e) => setInput(e.target.value)} placeholder="搜索  支持 from: to: subject: has:attachment is:unread" />
+          <input ref={searchRef} value={input} onChange={(e) => setInput(e.target.value)} placeholder="搜索  支持 from: to: subject: has:attachment is:unread is:vip label:" />
           {input && (
             <button type="button" className="clear" onClick={() => { setInput(''); onSearch('', false); }}><X size={14} /></button>
           )}
@@ -323,6 +324,26 @@ export default function MailList({
           <div className="search-hint">
             {deep ? '已在邮件服务器上搜索全文（含正文）' : '当前搜索本地缓存的邮件'}
             {!deep && <button className="link-btn" onClick={() => onSearch(q, true)}><ServerCrash size={12} /> 在服务器上搜索全文</button>}
+            {onSaveSearch && (
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => onSaveSearch(input.trim() || q)}
+                title="保存为智能文件夹"
+              >
+                <Bookmark size={12} /> 保存为智能文件夹
+              </button>
+            )}
+            {activeSavedSearch && onUpdateSavedSearch && (input.trim() || q) !== activeSavedSearch.query && (
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => onUpdateSavedSearch(activeSavedSearch, input.trim() || q)}
+                title="用当前查询更新此智能文件夹"
+              >
+                <Bookmark size={12} /> 更新「{activeSavedSearch.name}」
+              </button>
+            )}
           </div>
         )}
 

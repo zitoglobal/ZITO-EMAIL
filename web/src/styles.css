@@ -1834,3 +1834,45 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .label-manage-row input { flex: 1; min-width: 100px; }
 .empty-inline { padding: 16px 4px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .sidebar .folder .label-dot { margin-right: 2px; }
+
+
+/* ---------- 智能文件夹（切片 B） ---------- */
+.folder-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+  gap: 0;
+}
+.folder-row > .folder {
+  flex: 1;
+  min-width: 0;
+}
+.folder-more-wrap {
+  position: relative;
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.folder-row:hover .folder-more-wrap,
+.folder-row:focus-within .folder-more-wrap,
+.sidebar.icon-rail .folder-more-wrap { opacity: 1; }
+.folder-more {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--muted);
+  margin-right: 6px;
+}
+.folder-more:hover { background: var(--hover); color: var(--text); }
+.folder-ss-menu {
+  position: absolute;
+  right: 4px;
+  top: 100%;
+  z-index: 40;
+  min-width: 180px;
+}
+.save-search-presets { margin-top: 14px; }
+.save-search-modal .modal-body .field { margin-bottom: 0; }
+.search-hint .link-btn { display: inline-flex; align-items: center; gap: 4px; }

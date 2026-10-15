@@ -210,3 +210,19 @@ CREATE TABLE IF NOT EXISTS message_labels (
 );
 CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label_id);
 `);
+
+// ---------- 保存的搜索 / 智能文件夹（切片 B） ----------
+db.exec(`
+CREATE TABLE IF NOT EXISTS saved_searches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  query TEXT NOT NULL,
+  icon TEXT,
+  pinned INTEGER NOT NULL DEFAULT 1,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_saved_searches_user_pos ON saved_searches(user_id, position);
+`);
