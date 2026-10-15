@@ -434,11 +434,8 @@ body.col-resizing iframe { pointer-events: none !important; }
 .sidebar.icon-rail .count-pill,
 .sidebar.icon-rail .folder-group,
 .sidebar.icon-rail .mb-group,
-.sidebar.icon-rail .cmd-btn kbd,
 .sidebar.icon-rail .account-text { display: none !important; }
 .sidebar.icon-rail .compose-btn,
-.sidebar.icon-rail .cmd-btn,
-.sidebar.icon-rail .digest-btn,
 .sidebar.icon-rail .folder,
 .sidebar.icon-rail .settings-link {
   justify-content: center;
@@ -447,8 +444,10 @@ body.col-resizing iframe { pointer-events: none !important; }
   gap: 0;
 }
 .sidebar.icon-rail .compose-btn { font-size: 0; min-height: 40px; border-radius: 12px; }
+/* cmd + digest are not rendered in icon-rail (Sidebar filters); keep hide as belt-and-suspenders */
 .sidebar.icon-rail .cmd-btn,
-.sidebar.icon-rail .digest-btn { font-size: 0; min-height: 34px; }
+.sidebar.icon-rail .digest-btn,
+.sidebar.icon-rail .digest-link { display: none !important; }
 .sidebar.icon-rail .folders { gap: 2px; }
 .sidebar.icon-rail .user-wrap { margin: 0 auto; }
 .sidebar.icon-rail .layout-mode-switch { padding: 6px 0 4px; }
@@ -548,14 +547,21 @@ body.col-resizing iframe { pointer-events: none !important; }
 [data-theme='dark'] .compose-btn { background: var(--twill), linear-gradient(165deg, #3a8dff, #1f6ff0); }
 
 .digest-btn {
+  /* legacy class kept for any residual refs; prefer .digest-link */
   position: relative; display: flex; align-items: center; justify-content: center; gap: 7px; height: 36px; border-radius: 10px;
   font-weight: 600; font-size: 13px; color: var(--accent-ink); background: var(--ai-soft);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
 }
-.digest-btn svg { color: var(--ai-ink); }
-.digest-btn:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
+.digest-link {
+  display: flex; align-items: center; gap: 7px; height: 30px; margin-top: 2px; padding: 0 10px;
+  border-radius: 8px; background: transparent; border: 0;
+  font-size: 12.5px; font-weight: 500; color: var(--ai-ink);
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.digest-link svg { color: var(--cyan); flex: none; }
+.digest-link:hover { background: color-mix(in srgb, var(--cyan) 10%, transparent); color: var(--ai-ink); }
 .cmd-btn {
-  display: flex; align-items: center; gap: 8px; height: 34px; margin-top: 6px; padding: 0 10px 0 12px; border-radius: 10px;
+  display: flex; align-items: center; gap: 8px; height: 36px; margin-top: 4px; padding: 0 10px 0 12px; border-radius: 10px;
   background: color-mix(in srgb, var(--panel) 70%, transparent); color: var(--muted); font-size: 12.5px; font-weight: 500;
   border: 1px solid var(--border);
 }
@@ -576,9 +582,12 @@ body.col-resizing iframe { pointer-events: none !important; }
 .folder.active .count { color: var(--accent); }
 .count.muted { color: var(--faint); font-weight: 500; }
 .folder-group {
-  display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 600; color: var(--faint);
-  padding: 16px 6px 6px 10px; letter-spacing: 0.6px;
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; font-weight: 500; color: var(--muted);
+  padding: 14px 6px 6px 10px; letter-spacing: 0.06em;
 }
+.folder-more-toggle { color: var(--faint); font-weight: 500; }
+.folder-more-toggle.open { color: var(--muted); }
 .mini-btn { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--faint); }
 .mini-btn:hover { background: var(--panel); color: var(--accent); }
 .mb-group { display: flex; flex-direction: column; gap: 1px; margin-bottom: 4px; }
@@ -816,8 +825,23 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .focus-empty > svg { color: var(--accent); border-style: solid; border-color: var(--accent-soft); background: var(--accent-soft); }
 
 /* ---------- 大师设计 P0 craft：为何优先 + 一键处理/催单（仅新类） ---------- */
-.folder-today .folder-name { font-weight: 700; letter-spacing: -0.2px; }
+.folder-today .folder-name { font-weight: 600; letter-spacing: -0.15px; }
 .folder-today .count-pill { font-size: 11.5px; min-width: 22px; height: 20px; }
+.folder-today.active {
+  background: var(--accent-soft);
+  box-shadow: none;
+  color: var(--text);
+}
+.folder-today.active::before {
+  content: '';
+  position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent, var(--navy));
+}
+.folder-today.active svg { color: var(--accent); }
+.folder-waiting:not(.active) svg { color: var(--waiting); opacity: 0.9; }
+.folder-waiting.active svg { color: var(--waiting); }
+.folder.active { transition: background 0.12s var(--ease), color 0.12s var(--ease); }
 .why-priority {
   align-self: flex-start; max-width: 100%; display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px;
   margin-top: 5px; padding: 2px 0; font-size: 11.5px; color: var(--muted); line-height: 1.45;
@@ -1657,7 +1681,8 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
   .sidebar.icon-rail { padding: 14px 10px 10px; }
   .sidebar.icon-rail .compose-btn,
   .sidebar.icon-rail .cmd-btn,
-  .sidebar.icon-rail .digest-btn { font-size: inherit; justify-content: flex-start; gap: 8px; padding-left: 12px; padding-right: 12px; }
+  .sidebar.icon-rail .digest-btn,
+  .sidebar.icon-rail .digest-link { font-size: inherit; justify-content: flex-start; gap: 8px; padding-left: 12px; padding-right: 12px; }
   .mobile-only { display: inline-grid !important; }
   .sidebar { position: fixed; inset: 0 auto 0 0; width: 272px; z-index: 70; transform: translateX(-100%); transition: transform 0.22s var(--ease); }
   .sidebar.open { transform: none; box-shadow: var(--shadow-lg); }
@@ -1692,7 +1717,7 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
   .relation-card { margin-left: 0; }
   .mb-sync-strip { left: 0; }
   .zm-mob-nav {
-    display: grid; grid-template-columns: repeat(3, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 65;
+    display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 65;
     height: calc(56px + env(safe-area-inset-bottom, 0px)); padding: 0 8px env(safe-area-inset-bottom, 0px);
     background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(14px);
     border-top: 1px solid var(--hairline); box-shadow: 0 -8px 24px -16px rgba(11, 31, 58, 0.28);
