@@ -1,9 +1,18 @@
 import crypto from 'node:crypto';
 
-if (!process.env.MAIL_SECRET && process.env.NODE_ENV === 'production') {
+const DEV_SECRET = 'zito-smart-mail-dev-secret';
+const rawSecret = process.env.MAIL_SECRET;
+const isProd = process.env.NODE_ENV === 'production';
+
+if (isProd && (!rawSecret || !String(rawSecret).trim() || String(rawSecret).trim() === DEV_SECRET || String(rawSecret).trim() === 'change-me-to-a-long-random-string')) {
+  console.error('[security] 生产环境必须设置强随机 MAIL_SECRET（勿使用默认/示例值），进程退出');
+  process.exit(1);
+}
+if (!rawSecret) {
   console.warn('[security] 警告：未设置 MAIL_SECRET，邮箱密码将使用默认密钥加密，请在生产环境配置');
 }
-const KEY = crypto.createHash('sha256').update(process.env.MAIL_SECRET || 'zito-smart-mail-dev-secret').digest();
+
+const KEY = crypto.createHash('sha256').update(rawSecret || DEV_SECRET).digest();
 
 export function encrypt(plain) {
   const iv = crypto.randomBytes(12);

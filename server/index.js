@@ -121,6 +121,20 @@ function stateFor(user, dayStart) {
   };
 }
 
+
+// ---------- 健康检查（探针用，无需登录） ----------
+app.get('/api/health', (req, res) => {
+  let dbOk = false;
+  try {
+    db.prepare('SELECT 1 AS ok').get();
+    dbOk = true;
+  } catch (e) {
+    console.error('[health]', e.message);
+  }
+  const body = { ok: dbOk, db: dbOk ? 'up' : 'down', uptime: Math.round(process.uptime()) };
+  res.status(dbOk ? 200 : 503).json(body);
+});
+
 // ---------- 账号 ----------
 app.get('/api/auth/status', (req, res) => {
   res.json({ hasUsers: users.userCount() > 0, signup: users.userCount() === 0 ? 'open' : signupMode() });
@@ -997,6 +1011,18 @@ function remindUser(u) {
 const remindOverdue = () => db.prepare('SELECT * FROM users').all().forEach(remindUser);
 setTimeout(remindOverdue, 60_000).unref();
 setInterval(remindOverdue, 10 * 60_000).unref();
-app.listen(PORT, () => console.log(`[zito-mail] 服务已启动 http://localhost:${PORT}`));
+const server = app.listen(PORT, () => console.log(`[zito-mail] 服务已启动 http://localhost:${PORT}`));
 
+function shutdown(signal) {
+  console.log(`[zito-mail] 收到 ${signal}，正在关闭…`);
+  server.close(() => {
+    try {
+      db.close();
+    } catch (_) {}
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e?.message || e));
