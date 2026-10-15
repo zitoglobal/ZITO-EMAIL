@@ -1,0 +1,204 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { Mail, Lock, ChevronDown, Loader2, Server, ShieldCheck } from 'lucide-react';
+import { api, qs } from '../api.js';
+import { MAILBOX_COLORS } from '../utils.js';
+
+const PROVIDER_TIPS = [
+  ['网易企业邮 / 163', '设置 → 客户端设置 → 开启 IMAP/SMTP，使用授权码'],
+  ['QQ / 腾讯企业邮', '设置 → 账户 → 开启 IMAP/SMTP 服务，生成授权码'],
+  ['Gmail', 'Google 账号 → 安全性 → 两步验证 → 应用专用密码'],
+  ['Outlook', '需允许 IMAP 与 SMTP AUTH，个人账户使用应用密码'],
+];
+
+/**
+ * 绑定新邮箱，或修改已绑定邮箱的密码 / 服务器设置
+ */
+export default function MailboxForm({ mailbox, onDone, onCancel, title, compact }) {
+  const editing = !!mailbox;
+  const [email, setEmail] = useState(mailbox?.email || '');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState(mailbox?.name || '');
+  const [color, setColor] = useState(mailbox?.color || null);
+  const [detected, setDetected] = useState(null);
+  const [showAdv, setShowAdv] = useState(editing);
+  const [adv, setAdv] = useState({
+    user: mailbox?.loginUser || '',
+    imapHost: mailbox?.imap.host || '',
+    imapPort: mailbox?.imap.port || 993,
+    imapSecure: mailbox?.imap.secure ?? true,
+    smtpHost: mailbox?.smtp.host || '',
+    smtpPort: mailbox?.smtp.port || 465,
+    smtpSecure: mailbox?.smtp.secure ?? true,
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const advTouched = useRef(false);
+  const timer = useRef();
+
+  useEffect(() => {
+    if (editing) return;
+    clearTimeout(timer.current);
+    if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email)) return setDetected(null);
+    timer.current = setTimeout(async () => {
+      try {
+        const p = await api('/providers/detect' + qs({ email }));
+        setDetected(p);
+        if (p?.imap && !advTouched.current) {
+          setAdv((a) => ({ ...a, imapHost: p.imap.host, imapPort: p.imap.port, imapSecure: p.imap.secure, smtpHost: p.smtp.host, smtpPort: p.smtp.port, smtpSecure: p.smtp.secure }));
+        }
+      } catch {
+        setDetected(null);
+      }
+    }, 450);
+  }, [email, editing]);
+
+  const setA = (patch) => {
+    advTouched.current = true;
+    setAdv((a) => ({ ...a, ...patch }));
+  };
+
+  async function submit(e) {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const advanced = showAdv && advTouched.current ? adv : undefined;
+      const res = editing
+        ? await api(`/mailboxes/${mailbox.id}`, { method: 'PATCH', body: { password: password || undefined, advanced: showAdv ? adv : undefined } })
+        : await api('/mailboxes', { method: 'POST', body: { email, password, name, color, advanced } });
+      onDone(res);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form className={'login-card' + (compact ? ' compact' : '')} onSubmit={submit}>
+      <div className="login-brand">
+        <div className="logo-mark"><Mail size={20} /></div>
+        <div>
+          <div className="login-title">{title || (editing ? '更新邮箱连接' : '绑定邮箱')}</div>
+          <div className="login-sub">{editing ? mailbox.email : '支持企业邮箱、Gmail、QQ、163、Outlook 等，可绑定多个'}</div>
+        </div>
+      </div>
+
+      {!editing && (
+        <label className="field">
+          <span>邮箱地址</span>
+          <div className="input-icon">
+            <Mail size={16} />
+            <input type="email" autoFocus required value={email} onChange={(e) => setEmail(e.target.value.trim())} placeholder="name@company.com" />
+          </div>
+        </label>
+      )}
+
+      {detected?.name && !editing && (
+        <div className="provider-hint">
+          <Server size={14} />
+          <div>
+            <b>已识别：{detected.name}</b>
+            {detected.hint && <div>{detected.hint}</div>}
+          </div>
+        </div>
+      )}
+
+      <label className="field">
+        <span>{editing ? '新的密码 / 授权码（不修改可留空）' : '密码 / 授权码'}</span>
+        <div className="input-icon">
+          <Lock size={16} />
+          <input type="password" required={!editing} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="邮箱密码或客户端授权码" autoComplete="new-password" />
+        </div>
+      </label>
+
+      {!editing && (
+        <div className="row-2">
+          <label className="field">
+            <span>发件人显示名</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：Alice Chen" />
+          </label>
+          <div className="field">
+            <span>标识颜色</span>
+            <div className="color-row">
+              {MAILBOX_COLORS.slice(0, 7).map((c) => (
+                <button type="button" key={c} className={'color-dot' + (color === c ? ' on' : '')} style={{ background: c }} onClick={() => setColor(c)} />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button type="button" className="adv-toggle" onClick={() => setShowAdv((v) => !v)}>
+        服务器设置 <ChevronDown size={14} style={{ transform: showAdv ? 'rotate(180deg)' : '' }} />
+      </button>
+
+      {showAdv && (
+        <div className="adv-grid">
+          <label className="field span2">
+            <span>登录用户名（默认同邮箱地址）</span>
+            <input value={adv.user} onChange={(e) => setA({ user: e.target.value })} />
+          </label>
+          <label className="field">
+            <span>IMAP 服务器</span>
+            <input value={adv.imapHost} onChange={(e) => setA({ imapHost: e.target.value })} />
+          </label>
+          <label className="field small">
+            <span>端口</span>
+            <input
+              type="number"
+              value={adv.imapPort}
+              onChange={(e) => {
+                const p = e.target.value;
+                setA({ imapPort: p, imapSecure: p === '993' ? true : p === '143' ? false : adv.imapSecure });
+              }}
+            />
+          </label>
+          <label className="field">
+            <span>SMTP 服务器</span>
+            <input value={adv.smtpHost} onChange={(e) => setA({ smtpHost: e.target.value })} />
+          </label>
+          <label className="field small">
+            <span>端口</span>
+            <input
+              type="number"
+              value={adv.smtpPort}
+              onChange={(e) => {
+                const p = e.target.value;
+                setA({ smtpPort: p, smtpSecure: p === '465' ? true : p === '587' || p === '25' ? false : adv.smtpSecure });
+              }}
+            />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={!!adv.imapSecure} onChange={(e) => setA({ imapSecure: e.target.checked })} /> IMAP 使用 SSL
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={!!adv.smtpSecure} onChange={(e) => setA({ smtpSecure: e.target.checked })} /> SMTP 使用 SSL
+          </label>
+        </div>
+      )}
+
+      {!editing && !compact && (
+        <details className="tips">
+          <summary>如何获取授权码？</summary>
+          <ul>
+            {PROVIDER_TIPS.map(([k, v]) => (
+              <li key={k}><b>{k}</b>：{v}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {error && <div className="form-error">{error}</div>}
+
+      <button className="btn-primary block" disabled={loading}>
+        {loading && <Loader2 size={16} className="spin" />}
+        {loading ? '正在验证并连接邮件服务器…' : editing ? '保存并重新连接' : '验证并绑定'}
+      </button>
+      {onCancel && (
+        <button type="button" className="btn-ghost block" onClick={onCancel}>取消</button>
+      )}
+      <div className="login-foot"><ShieldCheck size={13} /> 授权码经 AES-256 加密存储，仅用于连接您的邮件服务器</div>
+    </form>
+  );
+}

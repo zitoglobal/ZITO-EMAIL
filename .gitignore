@@ -1,0 +1,51 @@
+# 依赖与构建产物
+node_modules/
+dist/
+.vite/
+
+# 运行数据（SQLite 数据库、附件、定时发送队列）
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# 环境变量与凭据（只提交示例文件）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# 部署打包产物
+*.tgz
+*.tar.gz
+*.zip
+
+# 日志与临时文件
+logs/
+*.log
+npm-debug.log*
+tmp/
+*.tmp
+coverage/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 编辑器与系统文件
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+Desktop.ini

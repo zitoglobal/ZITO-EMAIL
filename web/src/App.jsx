@@ -1,0 +1,984 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, X, LogOut, Keyboard } from 'lucide-react';
+import { api, qs } from './api.js';
+import Auth, { HeroBrand } from './components/Auth.jsx';
+import { BrandIcon } from './components/Brand.jsx';
+import MailboxForm from './components/MailboxForm.jsx';
+import Sidebar from './components/Sidebar.jsx';
+import MailList from './components/MailList.jsx';
+import Reader from './components/Reader.jsx';
+import Composer from './components/Composer.jsx';
+import Outbox from './components/Outbox.jsx';
+import Digest from './components/Digest.jsx';
+import Settings from './components/Settings.jsx';
+import Focus from './components/Focus.jsx';
+import Palette from './components/Palette.jsx';
+import { SMART_VIEWS, dayStart, displayName, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
+import { buildComposeState, signatureHtml, toForm } from './compose.js';
+
+const PAGE = 50;
+const DEFAULT_VIEW = { mailboxId: 'all', box: 'today' };
+const REMOVING = new Set(['archive', 'trash', 'spam', 'notspam', 'move', 'delete']);
+const ACTION_TEXT = {
+  archive: '已归档', trash: '已移到已删除', spam: '已标记为垃圾邮件', notspam: '已移回收件箱', move: '已移动', delete: '已彻底删除', snooze: '已设为稍后提醒',
+  done: '已标记为处理完成', nofollow: '已移出待跟进',
+};
+const UNDO_OF = { done: 'undone', nofollow: 'follow' };
+
+const SHORTCUTS = [
+  ['C', '写邮件'], ['R / A / F', '回复 / 全部回复 / 转发'], ['D', '标记已处理（移出待回复）'], ['E', '归档'], ['#  或 Delete', '删除'], ['!', '垃圾邮件'],
+  ['B', '稍后提醒（明天 8:00）'], ['S', '星标'], ['P', '置顶'], ['U', '标为未读'], ['X', '勾选当前邮件'], ['J / K 或 ↓ / ↑', '下一封 / 上一封'], ['/', '搜索'],
+  ['G 然后 T / I', '前往 今日待办 / 收件箱'], ['Ctrl + K', '搜索邮件与命令'], ['Ctrl + Enter', '发送邮件'], ['Ctrl + S', '保存草稿'], ['Esc', '关闭阅读 / 最小化写信窗口'], ['?', '显示快捷键'],
+];
+
+const FOLLOW_UP_AI = '礼貌地跟进这封邮件：询问对方是否已查看、有无疑问，并推动下一步（如确认订单细节或安排样品），保持简短';
+function followUpBody(person, signature) {
+  const first = String(person?.name || '').split(/\s+/)[0] || 'there';
+  return `<div>Hi ${first},</div><div><br></div><div>Just following up on my email below — have you had a chance to review it? I'm happy to answer any questions or adjust the details if needed.</div><div><br></div><div>Looking forward to hearing from you.</div><br>${signatureHtml(signature)}`;
+}
+
+function loadView() {
+  try {
+    return JSON.parse(localStorage.getItem('zm_view')) || DEFAULT_VIEW;
+  } catch {
+    return DEFAULT_VIEW;
+  }
+}
+
+export default function App() {
+  const [boot, setBoot] = useState('loading');
+  const [user, setUser] = useState(null);
+  const [ai, setAi] = useState(false);
+  const [mailboxes, setMailboxes] = useState([]);
+  const [folders, setFolders] = useState({});
+  const [counts, setCounts] = useState({ unifiedUnread: 0, snoozed: 0, scheduled: 0 });
+
+  const [view, setViewState] = useState(loadView);
+  const [category, setCategory] = useState('all');
+  const [q, setQ] = useState('');
+  const [deep, setDeep] = useState(false);
+  const [list, setList] = useState({ messages: [], pinned: [], nextCursor: null });
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [listError, setListError] = useState('');
+  const [selectedId, setSelectedId] = useState(null);
+  const [palette, setPalette] = useState(false);
+  const [checked, setChecked] = useState(new Set());
+  const [currentMsg, setCurrentMsg] = useState(null);
+
+  const [composers, setComposers] = useState([]);
+  const [modal, setModal] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [outboxVersion, setOutboxVersion] = useState(0);
+  const [focusData, setFocusData] = useState(null);
+  const [groupMode, setGroupModeState] = useState(() => localStorage.getItem('zm_group') || 'priority');
+  const [aiBusy, setAiBusy] = useState(false);
+  const groupRef = useRef(groupMode);
+  groupRef.current = groupMode;
+
+  const reqId = useRef(0);
+  const listRef = useRef(list);
+  listRef.current = list;
+  const settings = user?.settings || {};
+
+  const mailboxMap = useMemo(() => Object.fromEntries(mailboxes.map((m) => [m.id, m])), [mailboxes]);
+  const currentFolder = view.box === 'folder' ? (folders[view.mailboxId] || []).find((f) => f.path === view.folder) : null;
+  const special = currentFolder?.specialUse;
+  const isDraftsView = view.box === 'drafts' || special === '\\Drafts';
+  const showCategories = view.box === 'inbox' || special === '\\Inbox';
+  const allItems = useMemo(() => [...list.pinned, ...list.messages], [list]);
+  const selectedItem = allItems.find((m) => m.id === selectedId) || null;
+
+  // ---------- 通知 ----------
+  const notify = useCallback((text, type = 'info', action, ttl = 4000) => {
+    const id = Math.random().toString(36).slice(2);
+    setToasts((t) => [...t.slice(-3), { id, text, type, action }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), ttl);
+    return id;
+  }, []);
+  const dismiss = (id) => setToasts((t) => t.filter((x) => x.id !== id));
+
+  // ---------- 主题 ----------
+  useEffect(() => {
+    const apply = () => {
+      const t = settings.theme === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : settings.theme || 'light';
+      document.documentElement.dataset.theme = t;
+    };
+    apply();
+    if (settings.theme !== 'system') return;
+    const mq = matchMedia('(prefers-color-scheme: dark)');
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, [settings.theme]);
+  const dark = settings.theme === 'dark' || (settings.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+
+  useEffect(() => {
+    document.title = counts.unifiedUnread ? `(${counts.unifiedUnread}) ZITO 智能邮箱` : 'ZITO 智能邮箱';
+    const pending = (counts.focus?.needReply || 0) + (counts.focus?.followups || 0);
+    if ('setAppBadge' in navigator) (pending ? navigator.setAppBadge(pending) : navigator.clearAppBadge()).catch(() => {});
+  }, [counts.unifiedUnread, counts.focus?.needReply, counts.focus?.followups]);
+
+  // ---------- 状态 ----------
+  const applyState = useCallback((s) => {
+    setMailboxes(s.mailboxes);
+    setFolders(s.folders);
+    setCounts(s.counts);
+  }, []);
+
+  const loadState = useCallback(async () => {
+    try {
+      applyState(await api('/state' + qs({ dayStart: dayStart() })));
+    } catch (e) {
+      if (e.status === 401) setBoot('auth');
+    }
+  }, [applyState]);
+
+  useEffect(() => {
+    api('/me' + qs({ dayStart: dayStart() }))
+      .then((d) => {
+        setUser(d.user);
+        setAi(d.ai);
+        applyState(d);
+        setBoot('ready');
+      })
+      .catch(() => setBoot('auth'));
+  }, [applyState]);
+
+  // 视图引用的邮箱/文件夹不存在时回到默认视图
+  useEffect(() => {
+    if (boot !== 'ready' || !mailboxes.length) return;
+    if (view.mailboxId !== 'all' && !mailboxMap[view.mailboxId]) setView(DEFAULT_VIEW);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boot, mailboxes]);
+
+  function setView(v) {
+    setViewState(v);
+    localStorage.setItem('zm_view', JSON.stringify(v));
+    setSelectedId(null);
+    setChecked(new Set());
+    setCategory('all');
+    setQ('');
+    setDeep(false);
+  }
+
+  // ---------- 列表 ----------
+  const loadList = useCallback(
+    async ({ append = false, silent = false } = {}) => {
+      if (view.box === 'scheduled') return;
+      if (view.box === 'today') {
+        if (append) return;
+        const id = ++reqId.current;
+        if (!silent) setLoading(true);
+        setListError('');
+        try {
+          const d = await api('/focus' + qs({ mailboxId: view.mailboxId || 'all', dayStart: dayStart() }));
+          if (id !== reqId.current) return;
+          setFocusData(d);
+          const items = [...d.reply.map((m) => ({ ...m, _section: 'reply' })), ...d.followups.map((m) => ({ ...m, _section: 'follow' }))];
+          setList({ messages: orderFocus(items, groupRef.current), pinned: [], nextCursor: null });
+        } catch (e) {
+          if (id !== reqId.current) return;
+          if (e.status === 401) return setBoot('auth');
+          if (!silent) setListError(e.message);
+        } finally {
+          if (id === reqId.current) {
+            setLoading(false);
+            setRefreshing(false);
+          }
+        }
+        return;
+      }
+      const id = ++reqId.current;
+      const prev = listRef.current;
+      if (append) {
+        if (!prev.nextCursor) return;
+        setLoadingMore(true);
+      } else if (!silent) setLoading(true);
+      setListError('');
+      const limit = silent ? Math.min(100, Math.max(PAGE, prev.messages.length)) : PAGE;
+      try {
+        const data = await api(
+          '/messages' +
+            qs({
+              mailboxId: view.mailboxId || 'all',
+              box: view.box,
+              folder: view.folder,
+              category: showCategories && category !== 'all' && !q ? category : undefined,
+              q,
+              deep: deep && q ? 1 : undefined,
+              cursor: append ? prev.nextCursor : undefined,
+              limit,
+            })
+        );
+        if (id !== reqId.current) return;
+        setList((p) => {
+          if (append) {
+            const have = new Set(p.messages.map((m) => m.id));
+            return { ...p, messages: [...p.messages, ...data.messages.filter((m) => !have.has(m.id))], nextCursor: data.nextCursor };
+          }
+          if (silent && p.messages.length > data.messages.length && data.nextCursor) {
+            const fresh = new Set(data.messages.map((m) => m.id));
+            const lastTs = data.messages[data.messages.length - 1]?.sortTs ?? Infinity;
+            const tail = p.messages.filter((m) => !fresh.has(m.id) && m.sortTs < lastTs);
+            return { messages: [...data.messages, ...tail], pinned: data.pinned || [], nextCursor: tail.length ? p.nextCursor : data.nextCursor };
+          }
+          return { messages: data.messages, pinned: data.pinned || [], nextCursor: data.nextCursor };
+        });
+      } catch (e) {
+        if (id !== reqId.current) return;
+        if (e.status === 401) return setBoot('auth');
+        if (!silent) setListError(e.message);
+      } finally {
+        if (id === reqId.current) {
+          setLoading(false);
+          setLoadingMore(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [view, category, q, deep, showCategories]
+  );
+
+  useEffect(() => {
+    if (boot !== 'ready' || !mailboxes.length) return;
+    setList({ messages: [], pinned: [], nextCursor: null });
+    setChecked(new Set());
+    loadList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadList, boot, mailboxes.length]);
+
+  function setGroupMode(mode) {
+    setGroupModeState(mode);
+    localStorage.setItem('zm_group', mode);
+    setList((l) => ({ ...l, messages: orderFocus(l.messages, mode) }));
+  }
+
+  async function aiTriage() {
+    const ids = listRef.current.messages.filter((m) => m._section === 'reply').slice(0, 20).map((m) => m.id);
+    if (!ids.length) return;
+    setAiBusy(true);
+    try {
+      const { notes } = await api('/ai/triage', { method: 'POST', body: { ids, force: true } });
+      setList((l) => ({ ...l, messages: l.messages.map((m) => (notes[m.id] ? { ...m, aiNote: notes[m.id] } : m)) }));
+      notify('AI 已为每封邮件给出行动建议', 'success');
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  // ---------- 实时事件 ----------
+  const refreshTimer = useRef();
+  const scheduleRefresh = useCallback(() => {
+    clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      loadState();
+      loadList({ silent: true });
+    }, 600);
+  }, [loadState, loadList]);
+  const scheduleRef = useRef(scheduleRefresh);
+  scheduleRef.current = scheduleRefresh;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const mbRef = useRef(mailboxMap);
+  mbRef.current = mailboxMap;
+  const setViewRef = useRef();
+  setViewRef.current = setView;
+
+  useEffect(() => {
+    if (boot !== 'ready') return;
+    const es = new EventSource('/api/events');
+    const parse = (e) => {
+      try {
+        return JSON.parse(e.data);
+      } catch {
+        return {};
+      }
+    };
+    es.addEventListener('sync', () => scheduleRef.current());
+    es.addEventListener('mailbox', (e) => {
+      const d = parse(e);
+      setMailboxes((list) => list.map((m) => (m.id === d.id ? { ...m, status: d.status, lastError: d.error || null, lastSync: d.status === 'ok' ? Date.now() : m.lastSync } : m)));
+      if (d.status === 'ok') scheduleRef.current();
+    });
+    es.addEventListener('new', (e) => {
+      const d = parse(e);
+      const mb = mbRef.current[d.mailboxId];
+      const first = d.items?.[0];
+      const important = !d.snooze && first?.important;
+      const text = d.snooze
+        ? `稍后提醒：${first?.subject || ''}`
+        : important
+          ? `${first.label}来信 · ${displayName(first.from)}：${first.subject || '(无主题)'}${d.count > 1 ? `（另有 ${d.count - 1} 封）` : ''}`
+          : d.count > 1
+            ? `${mb?.email || ''} 收到 ${d.count} 封新邮件`
+            : `${displayName(first?.from)}：${first?.subject || '(无主题)'}`;
+      notify(text, important ? 'important' : 'info', first ? { label: '查看', fn: () => setSelectedId(first.id) } : null, important ? 10_000 : 6000);
+      if (settingsRef.current.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        const n = new Notification(d.snooze ? '稍后提醒' : important ? `重要 · ${first.label}来信` : `新邮件 · ${mb?.email || ''}`, { body: text, tag: 'zm-' + d.mailboxId, icon: '/favicon-180.png' });
+        n.onclick = () => {
+          window.focus();
+          if (first) setSelectedId(first.id);
+        };
+      }
+      scheduleRef.current();
+    });
+    es.addEventListener('remind', (e) => {
+      const d = parse(e);
+      const first = d.items?.[0];
+      const text =
+        d.count > 1
+          ? `有 ${d.count} 封客户邮件已超过回复时限，最早的来自 ${displayName(first?.from)}`
+          : `${displayName(first?.from)} 的邮件已超过回复时限：${first?.subject || ''}`;
+      notify(text, 'important', { label: '去处理', fn: () => setViewRef.current({ mailboxId: 'all', box: 'today' }) }, 15_000);
+      if (settingsRef.current.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        const n = new Notification('客户邮件待回复', { body: text, tag: 'zm-remind', icon: '/favicon-180.png' });
+        n.onclick = () => {
+          window.focus();
+          setViewRef.current({ mailboxId: 'all', box: 'today' });
+        };
+      }
+      scheduleRef.current();
+    });
+    es.addEventListener('outbox', (e) => {
+      const d = parse(e);
+      if (d.status === 'sent') notify('邮件已发送 ✓', 'success');
+      if (d.status === 'failed') notify(`发送失败：${d.error}（可在「定时发送」中重试）`, 'error', null, 10_000);
+      setOutboxVersion((v) => v + 1);
+      scheduleRef.current();
+    });
+    return () => es.close();
+  }, [boot, notify]);
+
+  // ---------- 邮件操作 ----------
+  function nextAfter(ids) {
+    const all = [...listRef.current.pinned, ...listRef.current.messages];
+    const idx = all.findIndex((m) => m.id === selectedId);
+    const rest = all.filter((m) => !ids.includes(m.id));
+    if (idx < 0) return null;
+    const after = all.slice(idx + 1).find((m) => !ids.includes(m.id));
+    return after || rest[rest.length - 1] || null;
+  }
+
+  const doAction = useCallback(
+    async (ids, action, extra = {}) => {
+      if (!ids.length) return;
+      const all = [...listRef.current.pinned, ...listRef.current.messages];
+      const fallbackFolder = all.find((m) => m.id === ids[0])?.folder || currentMsg?.folder;
+      const origins = Object.fromEntries(ids.map((id) => [id, all.find((m) => m.id === id)?.folder || fallbackFolder]));
+      const removes =
+        REMOVING.has(action) ||
+        (view.box === 'today' && (action === 'done' || action === 'nofollow')) ||
+        (action === 'snooze' && view.box !== 'snoozed') ||
+        (action === 'unsnooze' && view.box === 'snoozed') ||
+        (action === 'unflag' && view.box === 'flagged');
+
+      if (removes) {
+        if (ids.includes(selectedId)) {
+          const next = nextAfter(ids);
+          setSelectedId(next && window.innerWidth > 900 ? next.id : null);
+        }
+        setList((l) => ({ ...l, messages: l.messages.filter((m) => !ids.includes(m.id)), pinned: l.pinned.filter((m) => !ids.includes(m.id)) }));
+      } else {
+        const patch = {
+          read: { seen: true }, unread: { seen: false }, flag: { flagged: true }, unflag: { flagged: false }, pin: { pinned: true }, unpin: { pinned: false },
+          snooze: { snoozeUntil: extra.until }, unsnooze: { snoozeUntil: null },
+          done: { doneAt: Date.now(), awaiting: false, overdue: false }, undone: { doneAt: null },
+        }[action];
+        if (patch) {
+          setList((l) => {
+            const map = (m) => (ids.includes(m.id) ? { ...m, ...patch } : m);
+            let messages = l.messages.map(map);
+            let pinned = l.pinned.map(map);
+            if (action === 'pin' && view.box === 'inbox' && !q) {
+              pinned = [...pinned, ...messages.filter((m) => ids.includes(m.id))];
+              messages = messages.filter((m) => !ids.includes(m.id));
+            }
+            if (action === 'unpin' && view.box === 'inbox' && !q) {
+              messages = [...pinned.filter((m) => ids.includes(m.id)), ...messages].sort((a, b) => b.sortTs - a.sortTs);
+              pinned = pinned.filter((m) => !ids.includes(m.id));
+            }
+            return { ...l, messages, pinned };
+          });
+        }
+        if (action === 'unread' && ids.includes(selectedId)) setSelectedId(null);
+      }
+      setChecked(new Set());
+
+      try {
+        const res = await api('/messages/actions', { method: 'POST', body: { ids, action, ...extra } });
+        const n = ids.length > 1 ? `${ids.length} 封邮件` : '';
+        const text = ACTION_TEXT[action] && (n ? `${n}${ACTION_TEXT[action]}` : ACTION_TEXT[action]);
+        if (action === 'snooze') {
+          notify(`将于 ${formatShortDateTime(extra.until)} 重新提醒`, 'info', { label: '撤销', fn: () => doAction(ids, 'unsnooze') }, 6000);
+        } else if (UNDO_OF[action]) {
+          notify(text, 'info', { label: '撤销', fn: () => doAction(ids, UNDO_OF[action]) }, 6000);
+        } else if (res.undoable) {
+          notify(text, 'info', { label: '撤销', fn: () => doAction(ids, 'restore', { origins }) }, 7000);
+        } else if (text) notify(text);
+        if (action === 'restore' || action === 'undone' || action === 'follow') notify('已撤销');
+        loadState();
+        if (view.box === 'today' || ['restore', 'unsnooze', 'pin', 'unpin'].includes(action)) loadList({ silent: true });
+      } catch (e) {
+        notify(e.message, 'error');
+        loadList({ silent: true });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [view, q, selectedId, currentMsg, notify, loadState, loadList]
+  );
+
+  async function selectMessage(m) {
+    if (isDraftsView || m.specialUse === '\\Drafts') {
+      try {
+        const d = await api(`/messages/${m.id}?markSeen=0`);
+        openCompose('draft', d);
+      } catch (e) {
+        notify(e.message, 'error');
+      }
+      return;
+    }
+    setSelectedId(m.id);
+    setCurrentMsg(null);
+    if (!m.seen) {
+      setList((l) => ({
+        ...l,
+        messages: l.messages.map((x) => (x.id === m.id ? { ...x, seen: true } : x)),
+        pinned: l.pinned.map((x) => (x.id === m.id ? { ...x, seen: true } : x)),
+      }));
+      setTimeout(loadState, 800);
+    }
+  }
+
+  async function refresh() {
+    setRefreshing(true);
+    const targets = view.mailboxId === 'all' ? mailboxes : [mailboxMap[view.mailboxId]].filter(Boolean);
+    await Promise.allSettled(targets.map((mb) => api(`/mailboxes/${mb.id}/sync`, { method: 'POST', body: view.box === 'folder' ? { folder: view.folder } : {} })));
+    await loadState();
+    await loadList({ silent: true });
+    setRefreshing(false);
+  }
+
+  // ---------- 写信 ----------
+  const composeCtx = useMemo(
+    () => ({ mailboxes, defaultMailboxId: view.mailboxId !== 'all' && mailboxMap[view.mailboxId] ? view.mailboxId : mailboxes[0]?.id }),
+    [mailboxes, mailboxMap, view.mailboxId]
+  );
+
+  function pushComposer(initial) {
+    setComposers((list) => {
+      if (initial.draftId && list.some((c) => c.initial.draftId === initial.draftId)) return list;
+      if (list.length >= 3) {
+        notify('最多同时打开 3 个写信窗口', 'error');
+        return list;
+      }
+      return [...list, { key: Date.now() + Math.random(), initial }];
+    });
+  }
+
+  function openCompose(mode = 'new', msg = null, extra = {}) {
+    if (mode !== 'new' && !msg) return;
+    pushComposer(buildComposeState(mode, msg, composeCtx, extra));
+  }
+
+  async function followUp(m) {
+    try {
+      const d = await api(`/messages/${m.id}?markSeen=0`);
+      const mb = mailboxMap[d.mailboxId];
+      openCompose('reply', d, ai ? { aiInstruction: FOLLOW_UP_AI } : { body: followUpBody(m.follow?.to, mb?.signature) });
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
+  const removeComposer = (key) => setComposers((list) => list.filter((c) => c.key !== key));
+
+  async function sendMail(payload, files, state, key) {
+    if (key) removeComposer(key);
+    const undo = Number(settings.undoSeconds ?? 5);
+    const sending = payload.sendAt ? null : notify(undo ? `邮件将在 ${undo} 秒后发送` : '正在发送…', 'info', null, 60_000);
+    try {
+      const res = await api('/send', { method: 'POST', form: toForm({ ...payload, delaySeconds: payload.sendAt ? 0 : undo }, files) });
+      if (sending) dismiss(sending);
+      const reopen = async () => {
+        try {
+          await api(`/outbox/${res.outboxId}`, { method: 'DELETE' });
+          pushComposer(state);
+          notify('已撤销发送');
+          loadState();
+        } catch (e) {
+          notify(e.message, 'error');
+        }
+      };
+      if (res.sent) {
+        notify('邮件已发送 ✓', 'success');
+      } else if (res.scheduled) {
+        notify(`已定时，将于 ${formatShortDateTime(res.sendAt)} 发送`, 'success', { label: '撤销', fn: reopen }, 8000);
+      } else {
+        const ms = Math.max(1500, res.sendAt - Date.now());
+        const id = notify('正在发送…', 'info', { label: '撤销', fn: () => { dismiss(id); reopen(); } }, ms);
+      }
+      if (payload.replyTo?.id) {
+        const rid = payload.replyTo.id;
+        setList((l) => ({
+          ...l,
+          messages:
+            view.box === 'today'
+              ? l.messages.filter((m) => m.id !== rid)
+              : l.messages.map((m) => (m.id === rid ? { ...m, answered: true, awaiting: false, overdue: false } : m)),
+        }));
+      }
+      loadState();
+      setOutboxVersion((v) => v + 1);
+      return true;
+    } catch (e) {
+      if (sending) dismiss(sending);
+      notify(`发送失败：${e.message}`, 'error', null, 8000);
+      if (key) pushComposer(state);
+      else throw e;
+      return false;
+    }
+  }
+
+  async function saveDraft(payload, files) {
+    const res = await api('/drafts', { method: 'POST', form: toForm(payload, files) });
+    if (isDraftsView) setTimeout(() => loadList({ silent: true }), 1500);
+    return res;
+  }
+
+  function closeComposer(key, collected, opts) {
+    removeComposer(key);
+    if (collected) {
+      saveDraft(collected.payload, collected.files)
+        .then(() => notify('已保存到草稿箱'))
+        .catch((e) => {
+          notify(`草稿保存失败：${e.message}`, 'error', { label: '恢复', fn: () => pushComposer(collected.state) }, 10_000);
+        });
+    }
+    if (opts?.discard && opts.draftUid) {
+      api('/drafts/discard', { method: 'POST', body: { mailboxId: opts.mailboxId, uid: opts.draftUid } })
+        .then(() => isDraftsView && loadList({ silent: true }))
+        .catch(() => {});
+    }
+  }
+
+  function editOutbox(p, item) {
+    pushComposer({
+      mode: 'new',
+      mailboxId: item.mailboxId,
+      to: p.to || '',
+      cc: p.cc || '',
+      bcc: p.bcc || '',
+      subject: p.subject || '',
+      body: sanitizeHtml(p.html || ''),
+      inReplyTo: p.inReplyTo,
+      references: p.references,
+      replyTo: p.replyTo,
+      draftUid: p.draftUid,
+      forward: p.forward ? { id: p.forward.id, attachments: (p.forward.indexes || []).map((i) => ({ index: i, filename: `原邮件附件 ${i + 1}`, size: 0 })) } : undefined,
+      scheduledFor: item.sendAt,
+    });
+    loadState();
+  }
+
+  // ---------- 账号 ----------
+  async function saveSettings(patch) {
+    setUser((u) => ({ ...u, settings: { ...u.settings, ...patch } }));
+    try {
+      const r = await api('/me/settings', { method: 'PUT', body: patch });
+      setUser((u) => ({ ...u, settings: r.settings }));
+      if ('replySlaHours' in patch || 'followupDays' in patch) {
+        loadState();
+        if (view.box === 'today') loadList({ silent: true });
+      }
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
+  async function logout() {
+    await api('/auth/logout', { method: 'POST' }).catch(() => {});
+    setUser(null);
+    setMailboxes([]);
+    setFolders({});
+    setComposers([]);
+    setModal(null);
+    setList({ messages: [], pinned: [], nextCursor: null });
+    setBoot('auth');
+  }
+
+  async function onAuthed(u) {
+    setUser(u);
+    try {
+      const d = await api('/me');
+      setAi(d.ai);
+      applyState(d);
+    } catch {
+      // ignore
+    }
+    setBoot('ready');
+  }
+
+  async function onMailboxBound(res) {
+    setModal(null);
+    if (res.warning) notify(res.warning, 'error', null, 10_000);
+    else notify(`已绑定 ${res.mailbox.email}，正在同步邮件…`, 'success');
+    await loadState();
+  }
+
+  async function newFolder(mb) {
+    const name = window.prompt(`在 ${mb.email} 中新建文件夹`, '');
+    if (!name?.trim()) return;
+    try {
+      await api(`/mailboxes/${mb.id}/folders`, { method: 'POST', body: { name: name.trim() } });
+      notify('文件夹已创建');
+      loadState();
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPalette((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // ---------- 快捷键 ----------
+  const keyState = useRef();
+  const gPending = useRef(0);
+  keyState.current = { allItems, selectedId, selectedItem, currentMsg, modal, composers, checked };
+  useEffect(() => {
+    const onKey = (e) => {
+      const el = document.activeElement;
+      if (e.ctrlKey || e.metaKey || e.altKey || /INPUT|TEXTAREA|SELECT/.test(el?.tagName) || el?.isContentEditable) return;
+      const s = keyState.current;
+      if (s.modal) {
+        if (e.key === 'Escape') setModal(null);
+        return;
+      }
+      const idx = s.allItems.findIndex((m) => m.id === s.selectedId);
+      const step = (d) => {
+        const m = s.allItems[Math.min(s.allItems.length - 1, Math.max(0, idx + d))];
+        if (m) selectMessage(m);
+      };
+      const sel = s.selectedId;
+      const item = s.selectedItem || s.currentMsg;
+      if (gPending.current && Date.now() - gPending.current < 1500) {
+        gPending.current = 0;
+        const target = { t: 'today', i: 'inbox', u: 'unread', s: 'flagged' }[e.key];
+        if (target) {
+          e.preventDefault();
+          setView({ mailboxId: 'all', box: target });
+          return;
+        }
+      }
+      const global = {
+        g: () => (gPending.current = Date.now()),
+        c: () => openCompose(),
+        j: () => step(1),
+        ArrowDown: () => step(1),
+        k: () => step(-1),
+        ArrowUp: () => step(-1),
+        '?': () => setModal({ type: 'help' }),
+      };
+      const onSelected = {
+        r: () => s.currentMsg && openCompose('reply', s.currentMsg),
+        a: () => s.currentMsg && openCompose('replyAll', s.currentMsg),
+        f: () => s.currentMsg && openCompose('forward', s.currentMsg),
+        d: () => {
+          const it = s.selectedItem;
+          if (it?._section === 'follow') doAction([sel], 'nofollow');
+          else doAction([sel], 'done');
+        },
+        e: () => doAction([sel], 'archive'),
+        '#': () => doAction([sel], 'trash'),
+        Delete: () => doAction([sel], 'trash'),
+        '!': () => doAction([sel], 'spam'),
+        b: () => doAction([sel], 'snooze', { until: snoozePresets()[1].at }),
+        s: () => item && doAction([sel], item.flagged ? 'unflag' : 'flag'),
+        p: () => item && doAction([sel], item.pinned ? 'unpin' : 'pin'),
+        u: () => doAction([sel], 'unread'),
+        x: () => setChecked((c) => {
+          const n = new Set(c);
+          n.has(sel) ? n.delete(sel) : n.add(sel);
+          return n;
+        }),
+        Escape: () => setSelectedId(null),
+      };
+      const fn = global[e.key] || (sel ? onSelected[e.key] : null);
+      if (fn) {
+        e.preventDefault();
+        fn();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  // ---------- 渲染 ----------
+  if (boot === 'loading') {
+    return (
+      <div className="boot">
+        <BrandIcon size={56} className="boot-icon" />
+      </div>
+    );
+  }
+  if (boot === 'auth' || !user) return <Auth onAuthed={onAuthed} />;
+
+  // 测试账号免绑定：登录即进入，内置演示邮件
+  if (!mailboxes.length && user.role !== 'tester') {
+    return (
+      <div className="login-page onboarding">
+        <div className="login-hero">
+          <HeroBrand />
+          <div className="hero-copy">
+            <div className="hero-badge">开始使用 · 绑定邮箱</div>
+            <h1>你好，{user.name}。<br />先绑定第一个邮箱。</h1>
+            <p>绑定后会自动同步最近的邮件。之后可在「设置 → 邮箱账号」继续添加，所有邮箱在同一个收件箱里收发。</p>
+          </div>
+          <button className="hero-logout" onClick={logout}><LogOut size={14} /> 退出登录</button>
+        </div>
+        <div className="login-side">
+          <MailboxForm title="绑定你的邮箱" onDone={onMailboxBound} />
+        </div>
+      </div>
+    );
+  }
+
+  const singleMb = mailboxes.length === 1;
+  const title =
+    view.box === 'folder'
+      ? folderLabel(currentFolder) || view.folder
+      : view.box === 'inbox' && singleMb
+        ? '收件箱'
+        : SMART_VIEWS[view.box] || '收件箱';
+  const subtitle =
+    view.box === 'folder' ? (singleMb ? '' : mailboxMap[view.mailboxId]?.email) : !singleMb ? `${mailboxes.length} 个邮箱` : '';
+  const checkedRows = allItems.filter((m) => checked.has(m.id));
+  const checkedMb = new Set(checkedRows.map((m) => m.mailboxId));
+  const moveFolders = checkedMb.size === 1 ? folders[[...checkedMb][0]] : null;
+  const unreadInList = allItems.filter((m) => !m.seen).map((m) => m.id);
+
+  return (
+    <div className={'app' + (selectedId ? ' has-selection' : '') + (settings.density === 'compact' ? ' compact' : '')}>
+      <Sidebar
+        user={user}
+        mailboxes={mailboxes}
+        folders={folders}
+        counts={counts}
+        view={view}
+        onView={setView}
+        onCompose={() => openCompose()}
+        onDigest={() => setModal({ type: 'digest' })}
+        onSettings={(tab, mb) => setModal({ type: 'settings', tab, mb })}
+        onAddMailbox={() => setModal({ type: 'add' })}
+        onLogout={logout}
+        onCommand={() => setPalette(true)}
+        onNewFolder={newFolder}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
+      {sidebarOpen && <div className="sidebar-mask" onClick={() => setSidebarOpen(false)} />}
+
+      {view.box === 'scheduled' ? (
+        <Outbox
+          mailboxMap={mailboxMap}
+          onMenu={() => setSidebarOpen(true)}
+          onEdit={editOutbox}
+          notify={notify}
+          version={outboxVersion}
+          onChanged={loadState}
+        />
+      ) : view.box === 'today' ? (
+        <Focus
+          user={user}
+          data={focusData}
+          messages={list.messages}
+          loading={loading}
+          error={listError}
+          selectedId={selectedId}
+          onSelect={selectMessage}
+          onAction={doAction}
+          mailboxMap={mailboxMap}
+          onRefresh={refresh}
+          refreshing={refreshing}
+          aiEnabled={ai}
+          onAiTriage={aiTriage}
+          aiBusy={aiBusy}
+          groupMode={groupMode}
+          setGroupMode={setGroupMode}
+          onFollowUp={followUp}
+          onMenu={() => setSidebarOpen(true)}
+        />
+      ) : (
+        <MailList
+          title={title}
+          subtitle={subtitle}
+          view={{ ...view, special }}
+          mailboxMap={mailboxMap}
+          messages={list.messages}
+          pinned={list.pinned}
+          loading={loading}
+          loadingMore={loadingMore}
+          hasMore={!!list.nextCursor}
+          onLoadMore={() => loadList({ append: true })}
+          selectedId={selectedId}
+          onSelect={selectMessage}
+          checked={checked}
+          setChecked={setChecked}
+          category={category}
+          setCategory={setCategory}
+          showCategories={showCategories}
+          q={q}
+          deep={deep}
+          onSearch={(nq, d) => {
+            setQ(nq);
+            setDeep(!!d && !!nq);
+            setSelectedId(null);
+          }}
+          onRefresh={refresh}
+          refreshing={refreshing}
+          onAction={doAction}
+          moveFolders={moveFolders}
+          onMenu={() => setSidebarOpen(true)}
+          error={listError}
+          compact={settings.density === 'compact'}
+          onMarkAllRead={
+            unreadInList.length && ['inbox', 'unread', 'folder'].includes(view.box)
+              ? () => doAction(unreadInList, 'read')
+              : null
+          }
+        />
+      )}
+
+      {view.box !== 'scheduled' && (
+        <Reader
+          id={selectedId}
+          listItem={selectedItem}
+          settings={settings}
+          aiEnabled={ai}
+          dark={dark}
+          mailboxMap={mailboxMap}
+          folders={folders}
+          composeCtx={composeCtx}
+          onCompose={openCompose}
+          onAction={doAction}
+          onSend={(payload, files, state) => sendMail(payload, files, state)}
+          onBack={() => setSelectedId(null)}
+          onFollowUp={followUp}
+          notify={notify}
+          onLoaded={(m) => {
+            setCurrentMsg(m);
+            if (!m.seen) loadState();
+          }}
+        />
+      )}
+
+      <div className="composer-dock">
+        {composers.map((c, i) => (
+          <Composer
+            key={c.key}
+            initial={c.initial}
+            mailboxes={mailboxes}
+            aiEnabled={ai}
+            stacked={composers.length > 1 && i < composers.length - 1}
+            onSend={(payload, files, state) => sendMail(payload, files, state, c.key)}
+            onSaveDraft={saveDraft}
+            onClose={(collected, opts) => closeComposer(c.key, collected, opts)}
+            notify={notify}
+          />
+        ))}
+      </div>
+
+      {modal?.type === 'digest' && (
+        <Digest
+          aiEnabled={ai}
+          mailboxMap={mailboxMap}
+          onClose={() => setModal(null)}
+          onOpen={(m) => {
+            setModal(null);
+            setSelectedId(m.id);
+          }}
+        />
+      )}
+      {modal?.type === 'settings' && (
+        <Settings
+          user={user}
+          mailboxes={mailboxes}
+          tab={modal.tab}
+          focusMailbox={modal.mb}
+          onClose={() => setModal(null)}
+          notify={notify}
+          onUserChange={setUser}
+          onSettings={saveSettings}
+          onMailboxesChanged={loadState}
+          onAddMailbox={() => setModal({ type: 'add' })}
+          onLogout={logout}
+        />
+      )}
+      {modal?.type === 'add' && (
+        <div className="modal-mask" onClick={() => setModal(null)}>
+          <div onClick={(e) => e.stopPropagation()}>
+            <MailboxForm onDone={onMailboxBound} onCancel={() => setModal(null)} />
+          </div>
+        </div>
+      )}
+      {modal?.type === 'help' && (
+        <div className="modal-mask" onClick={() => setModal(null)}>
+          <div className="modal help" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <b><Keyboard size={16} /> 键盘快捷键</b>
+              <button className="icon-btn" onClick={() => setModal(null)}><X size={18} /></button>
+            </div>
+            <div className="modal-body shortcuts">
+              {SHORTCUTS.map(([k, v]) => (
+                <div key={k}><kbd>{k}</kbd><span>{v}</span></div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Palette
+        open={palette}
+        messages={allItems}
+        hasSelection={!!selectedId}
+        onClose={() => setPalette(false)}
+        onOpen={(m) => { setPalette(false); selectMessage(m); }}
+        onGo={(box) => { setPalette(false); setView({ mailboxId: 'all', box }); }}
+        onCompose={() => { setPalette(false); openCompose(); }}
+        onReply={() => { setPalette(false); currentMsg && openCompose('reply', currentMsg); }}
+        onDone={() => { setPalette(false); selectedId && doAction([selectedId], selectedItem?._section === 'follow' ? 'nofollow' : 'done'); }}
+        onSnooze={() => { setPalette(false); selectedId && doAction([selectedId], 'snooze', { until: snoozePresets()[1].at }); }}
+      />
+
+      <div className="toasts">
+        {toasts.map((t) => (
+          <div key={t.id} className={'toast ' + t.type}>
+            <span>{t.text}</span>
+            {t.action && (
+              <button
+                onClick={() => {
+                  dismiss(t.id);
+                  t.action.fn();
+                }}
+              >
+                {t.action.label}
+              </button>
+            )}
+            <button className="toast-x" onClick={() => dismiss(t.id)}><X size={13} /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
