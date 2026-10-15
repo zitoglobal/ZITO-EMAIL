@@ -18,7 +18,7 @@ import TimeMenu from './TimeMenu.jsx';
 const URGENCY = { high: ['紧急', 'high'], medium: ['一般', 'medium'], low: ['不急', 'low'] };
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
 
-function RelationCard({ info, onRule, slaHours }) {
+function RelationCard({ info, onRule, slaHours, onOpenCustomer }) {
   if (!info || info.tier === 'self' || info.tier === 'bulk') return null;
   const vip = info.rule?.kind === 'vip';
   const muted = info.rule?.kind === 'muted';
@@ -65,6 +65,9 @@ function RelationCard({ info, onRule, slaHours }) {
         )}
       </div>
       <div className="relation-card-actions">
+        {onOpenCustomer && (
+          <button type="button" className="sl-btn" onClick={() => onOpenCustomer(info.address, { sender: info })}>查看客户</button>
+        )}
         {info.rule ? (
           <button className="sl-btn" onClick={() => onRule(info.rule.key, null)} title={`规则：${info.rule.key}`}>
             {vip ? <><Crown size={12} /> 取消 VIP</> : <><Bell size={12} /> 取消静音</>}
@@ -116,7 +119,7 @@ function Attachments({ msg }) {
   );
 }
 
-function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours }) {
+function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer }) {
   const [allowImages, setAllowImages] = useState(false);
   const loading = expanded && !detail;
   const isDraft = item.specialUse === '\\Drafts';
@@ -143,7 +146,12 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
       <div className="mail-meta" onClick={isLast ? undefined : onToggle}>
         <div className="avatar lg" style={{ background: avatarColor(item.from?.address) }}>{initials(item.from)}</div>
         <div className="meta-text">
-          <div className="meta-from">
+          <div
+            className={'meta-from' + (primary && onOpenCustomer ? ' clickable' : '')}
+            onClick={primary && onOpenCustomer ? (e) => { e.stopPropagation(); onOpenCustomer(item.from?.address, detail); } : undefined}
+            title={primary && onOpenCustomer ? '查看客户' : undefined}
+            role={primary && onOpenCustomer ? 'button' : undefined}
+          >
             <b>{displayName(item.from)}</b> <span>&lt;{item.from?.address}&gt;</span>
             {isDraft && <span className="draft-tag">草稿</span>}
           </div>
@@ -161,7 +169,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
           {mailbox && <div className="meta-mb"><span className="mb-dot" style={{ background: mailbox.color }} />{mailbox.email}</div>}
         </div>
       </div>
-      {m && primary && <RelationCard info={m.sender && { ...m.sender, address: item.from?.address }} onRule={onRule} slaHours={slaHours} />}
+      {m && primary && <RelationCard info={m.sender && { ...m.sender, address: item.from?.address }} onRule={onRule} slaHours={slaHours} onOpenCustomer={onOpenCustomer} />}
 
       {loading && <div className="reader-loading sm"><Loader2 size={16} className="spin" /> 正在加载…</div>}
       {detail?.error && <div className="list-error">{detail.error}</div>}
@@ -199,6 +207,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
 
 export default function Reader({
   id, listItem, settings, aiEnabled, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp, onAiNote,
+  onOpenCustomer, onOpenSettings,
 }) {
   const [thread, setThread] = useState(null);
   const [details, setDetails] = useState({});
@@ -213,6 +222,8 @@ export default function Reader({
   const [quick, setQuick] = useState('');
   const [quickBusy, setQuickBusy] = useState(false);
   const [pinning, setPinning] = useState(false);
+  const [intel, setIntel] = useState(null); // 'summary' | 'translate' | null
+  const [translateLayout, setTranslateLayout] = useState(() => localStorage.getItem('zm_translate_layout') || 'split');
   const alive = useRef(0);
   const scroller = useRef();
 
@@ -237,6 +248,7 @@ export default function Reader({
     setMenu(null);
     setQuick('');
     setPinning(false);
+    setIntel(null);
     setExpanded(new Set([id]));
     scroller.current?.scrollTo(0, 0);
 
@@ -293,7 +305,7 @@ export default function Reader({
     if (!msg || !aiEnabled || !settings.autoTranslate || translated || translating) return;
     const target = resolveTranslateTarget();
     if (sourceMatchesTarget(detectMailLang(mailPlainText()), target)) return;
-    runTranslate(target);
+    runTranslate(target, { quiet: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msg?.id, aiEnabled, settings.autoTranslate]);
 
@@ -334,27 +346,27 @@ export default function Reader({
     return resolveTranslateTarget() === 'English' ? '译成英文' : '译成中文';
   }
 
-  async function runTranslate(forceTarget) {
-    if (translated && forceTarget == null) return setShowTranslated((v) => !v);
-    const target = forceTarget || resolveTranslateTarget();
+  async function runTranslate(forceTarget, opts = {}) {
+    if (translated && forceTarget == null && !opts.quiet) return setShowTranslated((v) => !v);
+    const target = (forceTarget && typeof forceTarget === 'string' ? forceTarget : null) || resolveTranslateTarget();
     const sourceGuess = detectMailLang(mailPlainText());
     if (sourceMatchesTarget(sourceGuess, target)) {
-      notify(target === 'English' ? '原文已是英文，无需翻译' : '原文已是中文，无需翻译');
+      if (!opts.quiet) notify(target === 'English' ? '原文已是英文，无需翻译' : '原文已是中文，无需翻译');
       return;
     }
     setTranslating(true);
     try {
       const result = await api('/ai/translate', { method: 'POST', body: { id, target } });
       if (result?.sourceLang && sourceMatchesTarget(result.sourceLang, target)) {
-        notify(target === 'English' ? '原文已是英文，无需翻译' : '原文已是中文，无需翻译');
-      } else if (result?.fromCache) {
+        if (!opts.quiet) notify(target === 'English' ? '原文已是英文，无需翻译' : '原文已是中文，无需翻译');
+      } else if (result?.fromCache && !opts.quiet) {
         notify('已使用翻译缓存');
       }
       setTranslated(result);
       setLastTranslateTarget(target);
-      setShowTranslated(true);
+      if (!opts.quiet) setShowTranslated(true);
     } catch (e) {
-      notify(e.message, 'error');
+      if (!opts.quiet) notify(e.message, 'error');
     } finally {
       setTranslating(false);
     }
@@ -493,27 +505,18 @@ export default function Reader({
   return (
     <section className="reader-pane">
       <div className="reader-toolbar">
-        <button className="icon-btn mobile-only" onClick={onBack}><ArrowLeft size={18} /></button>
-        <div className="tb-group">
-          <button className="tb" onClick={() => onCompose('reply', msg)} disabled={!msg} title="回复 (R)"><Reply size={16} /><span>回复</span></button>
-          <button className="tb" onClick={() => onCompose('replyAll', msg)} disabled={!msg} title="全部回复 (A)"><ReplyAll size={16} /><span>全部回复</span></button>
-          <button className="tb" onClick={() => onCompose('forward', msg)} disabled={!msg} title="转发 (F)"><Forward size={16} /><span>转发</span></button>
+        <button type="button" className="icon-btn mobile-only" onClick={onBack} aria-label="返回列表"><ArrowLeft size={18} /></button>
+        <div className="tb-group primary">
+          <button type="button" className="tb" onClick={() => onCompose('reply', msg)} disabled={!msg} title="回复 (R)" aria-label="回复"><Reply size={16} /><span>回复</span></button>
+          <button type="button" className="tb" onClick={() => onCompose('replyAll', msg)} disabled={!msg} title="全部回复 (A)" aria-label="全部回复"><ReplyAll size={16} /><span>全部回复</span></button>
+          <button type="button" className="tb" onClick={() => onCompose('forward', msg)} disabled={!msg} title="转发 (F)" aria-label="转发"><Forward size={16} /><span>转发</span></button>
         </div>
         <div className="tb-group">
-          {(listItem?.awaiting || listItem?._section === 'reply') && (
-            <button className="tb icon" onClick={() => act('done')} title="已处理，无需回复 (D)"><CheckCircle2 size={16} /></button>
-          )}
           {special !== '\\Archive' && special !== '\\All' && (
-            <button className="tb icon" onClick={() => act('archive')} title="归档 (E)"><Archive size={16} /></button>
-          )}
-          <button className="tb icon" onClick={() => act(inTrash ? 'delete' : 'trash')} title={inTrash ? '彻底删除' : '删除 (#)'}><Trash2 size={16} /></button>
-          {inJunk ? (
-            <button className="tb icon" onClick={() => act('notspam')} title="不是垃圾邮件"><ShieldCheck size={16} /></button>
-          ) : (
-            <button className="tb icon" onClick={() => act('spam')} title="举报垃圾邮件 (!)"><ShieldAlert size={16} /></button>
+            <button type="button" className="tb icon" onClick={() => act('archive')} title="归档 (E)" aria-label="归档"><Archive size={16} /></button>
           )}
           <div className="move-wrap">
-            <button className={'tb icon' + (base?.snoozeUntil ? ' active' : '')} onClick={() => setMenu(menu === 'snooze' ? null : 'snooze')} title="稍后提醒 (B)">
+            <button type="button" className={'tb icon' + (base?.snoozeUntil ? ' active' : '')} onClick={() => setMenu(menu === 'snooze' ? null : 'snooze')} title="稍后提醒 (B)" aria-label="稍后提醒">
               <Clock size={16} />
             </button>
             {menu === 'snooze' && (
@@ -526,31 +529,38 @@ export default function Reader({
               />
             )}
           </div>
-          <button className="tb icon" onClick={() => act('unread')} title="标为未读 (U)"><Mail size={16} /></button>
-          <button className={'tb icon' + (base?.flagged ? ' starred' : '')} onClick={() => act(base?.flagged ? 'unflag' : 'flag')} title="星标 (S)">
-            <Star size={16} />
-          </button>
-          <button className={'tb icon' + (base?.pinned ? ' active' : '')} onClick={() => act(base?.pinned ? 'unpin' : 'pin')} title="置顶 (P)">
-            <Pin size={16} />
-          </button>
+        </div>
+        <div className="tb-group tb-more">
           <div className="move-wrap">
-            <button className="tb icon" onClick={() => setMenu(menu === 'move' ? null : 'move')} title="移动到 (V)"><FolderInput size={16} /></button>
-            {menu === 'move' && (
-              <div className="dropdown right scroll" onMouseLeave={() => setMenu(null)}>
-                <div className="dropdown-title">移动到</div>
-                {mbFolders.map((f) => (
-                  <button key={f.path} onClick={() => act('move', { dest: f.path })}>{folderLabel(f)}</button>
-                ))}
+            <button type="button" className="tb icon" onClick={() => setMenu(menu === 'more' ? null : 'more')} title="更多" aria-label="更多" aria-haspopup="menu" aria-expanded={menu === 'more'}>
+              <MoreHorizontal size={16} />
+            </button>
+            {menu === 'more' && (
+              <div className="dropdown right" role="menu" onMouseLeave={() => setMenu(null)}>
+                {(listItem?.awaiting || listItem?._section === 'reply') && (
+                  <button type="button" role="menuitem" onClick={() => act('done')}><CheckCircle2 size={13} /> 无需回复</button>
+                )}
+                <button type="button" role="menuitem" onClick={() => act(inTrash ? 'delete' : 'trash')}><Trash2 size={13} /> {inTrash ? '彻底删除' : '删除'}</button>
+                {inJunk ? (
+                  <button type="button" role="menuitem" onClick={() => act('notspam')}><ShieldCheck size={13} /> 不是垃圾邮件</button>
+                ) : (
+                  <button type="button" role="menuitem" onClick={() => act('spam')}><ShieldAlert size={13} /> 举报垃圾邮件</button>
+                )}
+                <button type="button" role="menuitem" onClick={() => act('unread')}><Mail size={13} /> 标为未读</button>
+                <button type="button" role="menuitem" onClick={() => act(base?.flagged ? 'unflag' : 'flag')}><Star size={13} /> {base?.flagged ? '取消星标' : '星标'}</button>
+                <button type="button" role="menuitem" onClick={() => act(base?.pinned ? 'unpin' : 'pin')}><Pin size={13} /> {base?.pinned ? '取消置顶' : '置顶'}</button>
+                <button type="button" role="menuitem" onClick={() => setMenu('move')}><FolderInput size={13} /> 移动到…</button>
+                {base?.snoozeUntil && <button type="button" role="menuitem" onClick={() => act('unsnooze')}><Clock size={13} /> 取消稍后提醒</button>}
+                <a href={`/api/messages/${id}/raw`} role="menuitem" onClick={() => setMenu(null)}><Download size={13} /> 下载原始邮件</a>
+                <button type="button" role="menuitem" onClick={() => { setMenu(null); window.print(); }}><Printer size={13} /> 打印</button>
               </div>
             )}
-          </div>
-          <div className="move-wrap">
-            <button className="tb icon" onClick={() => setMenu(menu === 'more' ? null : 'more')} title="更多"><MoreHorizontal size={16} /></button>
-            {menu === 'more' && (
-              <div className="dropdown right" onMouseLeave={() => setMenu(null)}>
-                {base?.snoozeUntil && <button onClick={() => act('unsnooze')}><Clock size={13} /> 取消稍后提醒</button>}
-                <a href={`/api/messages/${id}/raw`} onClick={() => setMenu(null)}><Download size={13} /> 下载原始邮件 (.eml)</a>
-                <button onClick={() => { setMenu(null); window.print(); }}><Printer size={13} /> 打印</button>
+            {menu === 'move' && (
+              <div className="dropdown right scroll" role="menu" onMouseLeave={() => setMenu(null)}>
+                <div className="dropdown-title">移动到</div>
+                {mbFolders.map((f) => (
+                  <button type="button" key={f.path} role="menuitem" onClick={() => act('move', { dest: f.path })}>{folderLabel(f)}</button>
+                ))}
               </div>
             )}
           </div>
@@ -589,83 +599,102 @@ export default function Reader({
             </div>
 
             {listItem?._section === 'reply' && listItem.priority && (
-              <div className={'await-banner' + (listItem.priority.overdue ? ' over' : '')}>
+              <div className={'await-strip' + (listItem.priority.overdue ? ' over' : '')}>
                 <Hourglass size={15} />
                 <div>
                   <b>{listItem.priority.overdue ? '已超过回复时限' : '等待你回复'} · 已等 {waitText(listItem.priority.waitingHours)}</b>
+                  {listItem.remindStage >= 1 && (
+                    <span className={'tag ' + (listItem.remindStage >= 3 ? 'remind-3' : listItem.remindStage === 2 ? 'remind-2' : 'remind-1')}>
+                      {listItem.remindStage >= 3 ? '终提醒' : listItem.remindStage === 2 ? '提醒 2' : '提醒'}
+                    </span>
+                  )}
                   <small>
                     {listItem.priority.reasons.join(' · ')}
                     {listItem.priority.slaHours != null ? ` · 时限 ${listItem.priority.slaHours}h` : ''}
                   </small>
                 </div>
-                <button className="btn-ghost sm" onClick={() => act('done')}><CheckCircle2 size={13} /> 无需回复</button>
-                <button className="btn-primary sm" onClick={() => onCompose('reply', msg)} disabled={!msg}><Reply size={13} /> 回复</button>
+                <div className="strip-actions">
+                  <button type="button" className="btn-ghost sm" onClick={() => act('done')}><CheckCircle2 size={13} /> 无需回复</button>
+                  <button type="button" className="btn-primary sm" onClick={() => onCompose('reply', msg)} disabled={!msg}><Reply size={13} /> 回复</button>
+                </div>
               </div>
             )}
             {listItem?._section === 'follow' && listItem.follow && (
-              <div className="await-banner follow">
+              <div className="await-strip follow">
                 <Send size={15} />
                 <div>
-                  <b>你在 {listItem.follow.days} 天前发出，{displayName(listItem.follow.to)} 还没有回复</b>
-                  <small>适时跟进能显著提高成单率</small>
+                  <b>{listItem.follow.days} 天前发出，对方未回</b>
+                  <small>{displayName(listItem.follow.to)}</small>
                 </div>
-                <button className="btn-ghost sm" onClick={() => act('nofollow')}><BellOff size={13} /> 无需跟进</button>
-                <button className="btn-primary sm" onClick={() => onFollowUp?.(listItem)}><Reply size={13} /> 写跟进</button>
+                <div className="strip-actions">
+                  <button type="button" className="btn-ghost sm" onClick={() => act('nofollow')}><BellOff size={13} /> 无需跟进</button>
+                  <button type="button" className="btn-primary sm" onClick={() => onFollowUp?.(listItem)}><Reply size={13} /> 写跟进</button>
+                </div>
               </div>
             )}
             {!listItem?._section && listItem?.waitingOnThem && (
-              <div className="await-banner follow">
+              <div className="await-strip follow">
                 <Hourglass size={15} />
                 <div>
-                  <b>等对方回复</b>
-                  <small>{listItem.waitingDays != null && listItem.waitingDays >= 1 ? `已等待约 ${listItem.waitingDays} 天` : '你已回复，对方尚未回信'}</small>
+                  <b>等对方回复{listItem.waitingDays != null && listItem.waitingDays >= 1 ? ` · 约 ${listItem.waitingDays} 天` : ''}</b>
+                  <small>你已回复，对方尚未回信</small>
+                </div>
+                <div className="strip-actions">
+                  <button type="button" className="btn-ghost sm" onClick={() => act('snooze', { until: snoozePresets()[1].at })}><Clock size={13} /> 稍后提醒</button>
                 </div>
               </div>
             )}
 
+            {!aiEnabled && (
+              <div className="ai-off-strip">
+                <Sparkles size={14} />
+                <span>智能功能未开通 · 翻译与摘要暂不可用</span>
+                <button type="button" onClick={() => onOpenSettings?.('preferences')}>去设置</button>
+              </div>
+            )}
+
             {aiEnabled && (
-              <div className="ai-bar">
-                <button className="ai-btn" onClick={runSummary} disabled={summaryLoading || !msg}>
-                  {summaryLoading ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
-                  {summary ? '重新分析' : items.length > 1 ? 'AI 总结会话' : 'AI 摘要'}
+              <div className="intel-rail">
+                <span className="intel-label"><Sparkles size={13} /> 智能</span>
+                <button
+                  type="button"
+                  className={'intel-tab' + (intel === 'summary' ? ' on' : '')}
+                  onClick={() => {
+                    setIntel((v) => (v === 'summary' ? null : 'summary'));
+                    if (!summary && !summaryLoading) runSummary();
+                  }}
+                >
+                  摘要{summary ? <span className="dot" /> : null}
                 </button>
-                <button className="ai-btn ghost" onClick={() => runTranslate()} disabled={translating || !msg} title="智能翻译（保留原文）">
-                  {translating ? <Loader2 size={14} className="spin" /> : showTranslated ? <Eye size={14} /> : <Languages size={14} />}
-                  {translateButtonLabel()}
+                <button
+                  type="button"
+                  className={'intel-tab' + (intel === 'translate' || showTranslated ? ' on' : '')}
+                  onClick={() => {
+                    const next = intel === 'translate' ? null : 'translate';
+                    setIntel(next);
+                    if (next === 'translate' && !translated && !translating) runTranslate();
+                    else if (translated) setShowTranslated(!!next);
+                  }}
+                  title="智能翻译（保留原文）"
+                >
+                  翻译{translated ? <span className="dot" /> : null}
                 </button>
-                {translated && lastTranslateTarget && (
-                  <button
-                    className="ai-btn ghost"
-                    onClick={() => runTranslate(lastTranslateTarget === 'English' ? '简体中文' : 'English')}
-                    disabled={translating || !msg}
-                    title="换目标语言重新翻译"
-                  >
-                    <Languages size={14} />
-                    {lastTranslateTarget === 'English' ? '改译中文' : '改译英文'}
-                  </button>
-                )}
-                <button className="ai-btn ghost" onClick={() => openSmartReply()} disabled={!msg}>
-                  <Reply size={14} /> AI 智能回复
+                <button type="button" className="intel-tab" onClick={() => openSmartReply()} disabled={!msg}>
+                  回复
                 </button>
               </div>
             )}
 
             {!summary && noteSource?.note && (
-              <div className="ai-note-banner">
-                <Sparkles size={14} />
-                <span className="ai-note-banner-text">{noteSource.note}</span>
-                <button className="ai-btn ghost sm" onClick={() => openSmartReply(noteSource.note)} disabled={!msg}>
-                  <Reply size={13} /> 据此回复
+              <div className="ai-pin-strip">
+                <span>📌 {noteSource.note}</span>
+                <button type="button" className="ai-btn ghost sm" onClick={() => openSmartReply(noteSource.note)} disabled={!msg}>
+                  据此回复
                 </button>
-                {aiEnabled && (
-                  <button className="ai-btn ghost sm" onClick={runSummary} disabled={summaryLoading || !msg}>
-                    {summaryLoading ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} 完整摘要
-                  </button>
-                )}
               </div>
             )}
 
-            {summary && (
+            {intel === 'summary' && summary && (
               <div className={'ai-card' + (isPinned ? ' pinned' : '')}>
                 <div className="ai-card-head">
                   <Sparkles size={15} /> AI 摘要
@@ -713,7 +742,7 @@ export default function Reader({
               </div>
             )}
 
-            {showTranslated && translated && (
+            {(intel === 'translate' && translated) && (
               <div className="translated-body">
                 <div className="translated-tag">
                   <Languages size={13} /> AI 翻译
@@ -722,8 +751,46 @@ export default function Reader({
                   {translated.subject && translated.subject !== base.subject && (
                     <span className="translated-meta">主题：{translated.subject}</span>
                   )}
+                  <div className="translate-switch" style={{ marginLeft: 'auto' }}>
+                    <button
+                      type="button"
+                      className={translateLayout === 'split' ? 'on' : ''}
+                      onClick={() => { setTranslateLayout('split'); localStorage.setItem('zm_translate_layout', 'split'); }}
+                    >对照阅读</button>
+                    <button
+                      type="button"
+                      className={translateLayout === 'stack' ? 'on' : ''}
+                      onClick={() => { setTranslateLayout('stack'); localStorage.setItem('zm_translate_layout', 'stack'); setShowTranslated(true); }}
+                    >仅译文</button>
+                    <button type="button" onClick={() => { setIntel(null); setShowTranslated(false); }}>收起</button>
+                  </div>
                 </div>
-                <MailFrame text={translated.body} dark={dark} />
+                {translateLayout === 'split' ? (
+                  <div className="translate-compare">
+                    <div className="tc-pane">
+                      <div className="tc-head">原文{translated.sourceLang ? ` · ${translated.sourceLang}` : ''}</div>
+                      <MailFrame html={msg?.html} text={msg?.text || mailPlainText()} dark={dark} collapseQuotes />
+                    </div>
+                    <div className="tc-pane">
+                      <div className="tc-head">译文 · {lastTranslateTarget === 'English' ? 'English' : '简体中文'}</div>
+                      <MailFrame text={translated.body} dark={dark} />
+                    </div>
+                  </div>
+                ) : (
+                  <MailFrame text={translated.body} dark={dark} />
+                )}
+                {lastTranslateTarget && (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="ai-btn ghost sm"
+                      onClick={() => runTranslate(lastTranslateTarget === 'English' ? '简体中文' : 'English')}
+                      disabled={translating || !msg}
+                    >
+                      <Languages size={13} /> {lastTranslateTarget === 'English' ? '改译中文' : '改译英文'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -743,6 +810,7 @@ export default function Reader({
                     onRule={setRule}
                     mailbox={mailboxMap[it.mailboxId]}
                     slaHours={listItem?.priority?.slaHours}
+                    onOpenCustomer={onOpenCustomer}
                   />
                 </div>
               ))}

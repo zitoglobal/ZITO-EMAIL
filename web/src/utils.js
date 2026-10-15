@@ -103,6 +103,7 @@ export const BOX_FOR_SPECIAL = {
 
 export const SMART_VIEWS = {
   today: '今日待办',
+  waiting: '等待',
   inbox: '所有收件箱',
   unread: '未读邮件',
   flagged: '星标邮件',

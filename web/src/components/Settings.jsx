@@ -254,7 +254,7 @@ function GlossaryEditor({ glossary, onSave }) {
   );
 }
 
-function Preferences({ settings, onSave }) {
+function Preferences({ settings, onSave, aiEnabled }) {
   const set = (k) => (v) => {
     onSave({ [k]: v });
     if (k === 'notify' && v && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -262,6 +262,10 @@ function Preferences({ settings, onSave }) {
   const translateTarget = settings.translateTarget === 'English' || settings.translateTarget === '英文' ? 'English' : '简体中文';
   return (
     <>
+      <div className={'ai-status-card ' + (aiEnabled ? 'on' : 'off')} id="ai-status">
+        <b>{aiEnabled ? '智能功能正常 · 模型已配置' : '智能功能未开通 · 请联系管理员配置服务器 AI 密钥'}</b>
+        <small>{aiEnabled ? '摘要、翻译、润色与今日简报可用' : '此前翻译、摘要按钮会隐藏或提示，避免误以为坏掉。密钥在服务端 .env，此处只读。'}</small>
+      </div>
       <Choice icon={settings.theme === 'dark' ? Moon : Sun} label="外观" value={settings.theme} onChange={set('theme')} options={[['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']]} />
       <Choice icon={Rows3} label="列表密度" value={settings.density} onChange={set('density')} options={[['comfortable', '舒适'], ['compact', '紧凑']]} />
       <Choice icon={Image} label="外部图片" value={settings.remoteImages} onChange={set('remoteImages')} options={[['always', '总是显示'], ['contacts', '仅联系人'], ['never', '询问']]} />
@@ -568,7 +572,7 @@ function Team({ me, notify }) {
   );
 }
 
-export default function Settings({ user, mailboxes, tab: initialTab, focusMailbox, onClose, notify, onUserChange, onSettings, onMailboxesChanged, onAddMailbox, onLogout }) {
+export default function Settings({ user, mailboxes, tab: initialTab, focusMailbox, onClose, notify, onUserChange, onSettings, onMailboxesChanged, onAddMailbox, onLogout, aiEnabled }) {
   const [tab, setTab] = useState(initialTab || 'mailboxes');
   const tabs = TABS.filter(([k]) => k !== 'team' || user.role === 'admin');
 
@@ -588,7 +592,7 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
           <div className="modal-body settings-body">
             {tab === 'mailboxes' && <Mailboxes mailboxes={mailboxes} onChanged={onMailboxesChanged} onAdd={onAddMailbox} notify={notify} focusId={focusMailbox} />}
             {tab === 'triage' && <Triage settings={user.settings} onSave={onSettings} notify={notify} />}
-            {tab === 'preferences' && <Preferences settings={user.settings} onSave={onSettings} />}
+            {tab === 'preferences' && <Preferences settings={user.settings} onSave={onSettings} aiEnabled={aiEnabled} />}
             {tab === 'templates' && <Templates notify={notify} />}
             {tab === 'account' && <Account user={user} onUserChange={onUserChange} onLogout={onLogout} notify={notify} />}
             {tab === 'team' && <Team me={user} notify={notify} />}

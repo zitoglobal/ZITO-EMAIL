@@ -249,6 +249,17 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     else byTier.other++;
     if (m.priority.waitingHours > oldestHours) oldestHours = m.priority.waitingHours;
   }
+  // Soft UI field: remind stage 0–3 from messages.reminded (push escalate)
+  if (overdueList.length) {
+    const ids = overdueList.map((m) => m.id);
+    const ph = ids.map(() => '?').join(',');
+    const stages = new Map(
+      db.prepare(`SELECT id, reminded FROM messages WHERE id IN (${ph})`).all(...ids).map((r) => [r.id, Number(r.reminded) || 0])
+    );
+    for (const m of reply) {
+      if (m.priority?.overdue) m.remindStage = stages.get(m.id) || 0;
+    }
+  }
   return {
     reply,
     followups,
