@@ -1,4 +1,13 @@
+import dns from 'node:dns';
+import https from 'node:https';
+import { URL } from 'node:url';
 import { sanitizeGlossary } from './glossary.js';
+
+// Prefer IPv4 for outbound AI calls. Production Node fetch to Aliyun Bailian
+// token-plan ETIMEDOUT under IPv6/Happy Eyeballs; NODE_OPTIONS ipv4first alone
+// was not enough. CORE hotfixed with https.request({ family: 4 }); this matches.
+dns.setDefaultResultOrder('ipv4first');
+
 const BASE_URL = () =>
   (process.env.AI_BASE_URL || 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, '');
 const API_KEY = () => process.env.AI_API_KEY || '';
@@ -8,25 +17,70 @@ export function aiConfigured() {
   return !!API_KEY();
 }
 
+const AI_TIMEOUT_MS = 90_000;
+
+/** POST JSON over IPv4-only https.request (avoids bare fetch/undici path). */
+function httpsPostJson(urlStr, bodyObj, { headers = {}, timeoutMs = AI_TIMEOUT_MS } = {}) {
+  const u = new URL(urlStr);
+  if (u.protocol !== 'https:') {
+    return Promise.reject(new Error(`AI_BASE_URL must be https (got ${u.protocol})`));
+  }
+  const body = JSON.stringify(bodyObj);
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port || 443,
+        path: `${u.pathname}${u.search}`,
+        method: 'POST',
+        family: 4,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+          ...headers,
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolve({ status: res.statusCode || 0, text });
+        });
+      }
+    );
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`AI 请求超时（${timeoutMs}ms）`));
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 async function chat(messages, { json = false, temperature = 0.4, maxTokens = 1500 } = {}) {
   if (!aiConfigured()) throw new Error('AI 未配置：请在服务器 .env 中设置 AI_API_KEY（以及 AI_BASE_URL / AI_MODEL）');
-  const res = await fetch(`${BASE_URL()}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY()}` },
-    body: JSON.stringify({
+  const { status, text } = await httpsPostJson(
+    `${BASE_URL()}/chat/completions`,
+    {
       model: MODEL(),
       messages,
       temperature,
       max_tokens: maxTokens,
       ...(json ? { response_format: { type: 'json_object' } } : {}),
-    }),
-    signal: AbortSignal.timeout(90_000),
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`AI 服务返回错误 ${res.status}：${t.slice(0, 200)}`);
+    },
+    { headers: { Authorization: `Bearer ${API_KEY()}` } }
+  );
+  if (status < 200 || status >= 300) {
+    throw new Error(`AI 服务返回错误 ${status}：${text.slice(0, 200)}`);
   }
-  const data = await res.json();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('AI 返回格式异常，请重试');
+  }
   const content = data.choices?.[0]?.message?.content || '';
   if (!json) return content.trim();
   const m = content.match(/\{[\s\S]*\}/);
