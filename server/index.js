@@ -17,6 +17,7 @@ import { buildRaw, verifySmtp } from './smtp.js';
 import { subscribe, emit, isOnline } from './events.js';
 import * as ai from './ai.js';
 import * as priority from './priority.js';
+import * as backup from './backup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
@@ -1026,6 +1027,7 @@ if (fs.existsSync(DIST)) {
 repo.backfillSignals();
 mailer.startScheduler();
 sync.startAll();
+backup.startBackupScheduler();
 
 /** 客户邮件超过回复时限仍未处理时主动提醒（每位用户每封邮件只提醒一次） */
 function remindUser(u) {

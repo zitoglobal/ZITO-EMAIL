@@ -162,6 +162,12 @@ for (const [name, def] of [
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_tid ON messages(thread_id)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_date ON messages(date DESC)');
 
+// Focus / 分诊查询加速：按邮箱+日期窗口、发件人、文件夹 special_use、会话时间线
+db.exec('CREATE INDEX IF NOT EXISTS idx_msg_mb_date ON messages(mailbox_id, date DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_msg_mb_from_date ON messages(mailbox_id, from_addr, date DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_msg_thread_date ON messages(thread_id, date DESC) WHERE thread_id IS NOT NULL');
+db.exec('CREATE INDEX IF NOT EXISTS idx_folders_special ON folders(special_use, mailbox_id)');
+
 export const now = () => Date.now();
 
 export function tx(fn) {
