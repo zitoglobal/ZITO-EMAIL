@@ -25,7 +25,7 @@ function loadExpanded() {
 
 export default function Focus({
   user, data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, aiEnabled, onAiTriage, aiBusy,
-  groupMode, setGroupMode, onFollowUp, onMenu, checked, setChecked,
+  groupMode, setGroupMode, onFollowUp, onMenu, checked, setChecked, salesDensity = false,
 }) {
   const body = useRef();
   const reply = messages.filter((m) => m._section === 'reply');
@@ -108,7 +108,7 @@ export default function Focus({
   const ids = checked ? [...checked] : [];
 
   return (
-    <section className="list-pane focus-pane focus-craft">
+    <section className={'list-pane focus-pane focus-craft' + (salesDensity ? ' sales-dense' : '')}>
       <header className={'focus-head compact' + (headOpen ? ' expanded' : '')}>
         <div className="list-title-row">
           <button type="button" className="icon-btn mobile-only" onClick={onMenu} aria-label="打开菜单"><Menu size={18} /></button>
