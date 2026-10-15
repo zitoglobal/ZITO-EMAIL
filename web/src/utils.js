@@ -230,6 +230,28 @@ export const TIERS = { vip: 'VIP', customer: '客户', new: '新联系人', coll
 
 export const dayStart = () => new Date(new Date().setHours(0, 0, 0, 0)).getTime();
 
+/** Focus 行「为何优先」：消费后端 reasons / signals / waiting，不改 API */
+export function whyPriority(m, variant = 'reply') {
+  if (variant === 'reply' && m?.priority) {
+    const p = m.priority;
+    const parts = [...(p.reasons || [])];
+    if (p.overdue) parts.push(`已等 ${waitText(p.waitingHours)}`);
+    else if (p.waitingHours >= 1) parts.push(`已等 ${waitText(p.waitingHours)}`);
+    return [...new Set(parts.filter(Boolean))].slice(0, 4).join(' · ');
+  }
+  if (variant === 'follow' && m?.follow) {
+    const f = m.follow;
+    const parts = [];
+    if (f.tier === 'vip') parts.push('VIP');
+    else if (f.tier === 'customer') parts.push('老客户');
+    else if (f.tier === 'new') parts.push('新联系人');
+    for (const s of f.signals || []) if (SIGNALS[s]) parts.push(SIGNALS[s]);
+    if (f.days != null) parts.push(`${f.days} 天未回`);
+    return [...new Set(parts.filter(Boolean))].slice(0, 4).join(' · ');
+  }
+  return '';
+}
+
 export function waitText(hours) {
   if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} 分钟`;
   if (hours < 48) return `${Math.round(hours)} 小时`;

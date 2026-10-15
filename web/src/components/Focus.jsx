@@ -57,7 +57,7 @@ export default function Focus({
   let lastGroup = null;
 
   return (
-    <section className="list-pane focus-pane">
+    <section className="list-pane focus-pane focus-craft">
       <header className="focus-head">
         <div className="list-title-row">
           <button className="icon-btn mobile-only" onClick={onMenu}><Menu size={18} /></button>
@@ -90,9 +90,9 @@ export default function Focus({
           </div>
         </div>
 
-        <div className="focus-progress" title="今日已回复或标记处理的客户邮件">
+        <div className={'focus-progress' + (pct === 100 && total ? ' done' : '')} title="今日已回复或标记处理的客户邮件">
           <div className="fp-bar"><i style={{ width: pct + '%' }} /></div>
-          <span>今日已处理 <b>{handled}</b> / {total}</span>
+          <span>今日已处理 <b>{handled}</b> / {total}{total > 0 ? <> · <b className="fp-pct">{pct}%</b></> : null}</span>
         </div>
 
         <div className="focus-tools">
@@ -121,6 +121,18 @@ export default function Focus({
             <PartyPopper size={42} strokeWidth={1.2} />
             <p>全部处理完了</p>
             <small>没有等待你回复的客户邮件，也没有需要跟进的报价。</small>
+            <div className="focus-empty-stats">
+              <span>今日已处理 <b>{handled}</b></span>
+              <span className="dot">·</span>
+              <span>今日来信 <b>{stats?.todayIn ?? 0}</b></span>
+              {handled > 0 && (
+                <>
+                  <span className="dot">·</span>
+                  <span className="focus-empty-pct">进度 {pct}%</span>
+                </>
+              )}
+            </div>
+            <small className="focus-empty-hint">智能分诊仍在后台工作 · 按 <kbd>J</kbd>/<kbd>K</kbd> 巡航 · <kbd>G</kbd> 再 <kbd>T</kbd> 随时回到此处</small>
           </div>
         )}
 

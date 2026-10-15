@@ -94,7 +94,7 @@ export default function Sidebar({
           const Icon = s.icon;
           const v = { mailboxId: 'all', box: s.box };
           return (
-            <button key={s.box} className={'folder' + (isActive(v) ? ' active' : '')} onClick={() => go(v)}>
+            <button key={s.box} className={'folder' + (isActive(v) ? ' active' : '') + (s.box === 'today' ? ' folder-today' : '')} onClick={() => go(v)}>
               <Icon size={17} />
               <span className="folder-name">{multi || s.box !== 'inbox' ? s.label : '收件箱'}</span>
               {s.box === 'today' && counts.focus?.overdue > 0 ? (
