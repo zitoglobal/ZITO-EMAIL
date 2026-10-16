@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Menu, RefreshCw, Hourglass } from 'lucide-react';
 import { Row } from './MailList.jsx';
+import ClaimFilter, { filterByClaim, loadClaimFilter, saveClaimFilter } from './ClaimFilter.jsx';
 
 const TABS = [
   { key: 'mine', label: '等我' },
@@ -15,18 +16,41 @@ export default function Waiting({
   const reply = messages.filter((m) => m._section === 'reply');
   const follow = messages.filter((m) => m._section === 'follow');
   const overdue = reply.filter((m) => m.priority?.overdue);
-  const mine = reply;
-  const them = follow;
+  const [claimFilter, setClaimFilter] = useState(() => loadClaimFilter('zm_waiting_claim'));
+
+  const setClaim = (v) => {
+    setClaimFilter(v);
+    saveClaimFilter(v, 'zm_waiting_claim');
+  };
+
+  const filteredReply = useMemo(() => filterByClaim(reply, claimFilter), [reply, claimFilter]);
+  const filteredFollow = useMemo(() => filterByClaim(follow, claimFilter), [follow, claimFilter]);
+  const filteredOverdue = useMemo(() => filterByClaim(overdue, claimFilter), [overdue, claimFilter]);
 
   const list = useMemo(() => {
-    if (tab === 'overdue') return overdue.map((m) => ({ ...m, _wait: 'overdue' }));
-    if (tab === 'them') return them.map((m) => ({ ...m, _wait: 'them' }));
-    return mine.map((m) => ({ ...m, _wait: 'mine' }));
-  }, [tab, overdue, them, mine]);
+    if (tab === 'overdue') return filteredOverdue.map((m) => ({ ...m, _wait: 'overdue' }));
+    if (tab === 'them') return filteredFollow.map((m) => ({ ...m, _wait: 'them' }));
+    return filteredReply.map((m) => ({ ...m, _wait: 'mine' }));
+  }, [tab, filteredOverdue, filteredFollow, filteredReply]);
 
-  const counts = { mine: mine.length, them: them.length, overdue: overdue.length };
+  const counts = {
+    mine: filteredReply.length,
+    them: filteredFollow.length,
+    overdue: filteredOverdue.length,
+  };
+  const unclaimedN =
+    (tab === 'them' ? follow : tab === 'overdue' ? overdue : reply).filter((m) => !m.deal).length;
+  const mineN =
+    (tab === 'them' ? follow : tab === 'overdue' ? overdue : reply).filter((m) => m.deal?.mine).length;
   const multi = Object.keys(mailboxMap).length > 1;
-  const emptyText = tab === 'them' ? '没有正在等待客户回复的线索' : tab === 'overdue' ? '很好，没有超时邮件' : '没有等待你回复的邮件';
+  const emptyText =
+    claimFilter !== 'all' && (tab === 'them' ? follow.length : tab === 'overdue' ? overdue.length : reply.length) > 0
+      ? '当前认领筛选下没有邮件'
+      : tab === 'them'
+        ? '没有正在等待客户回复的线索'
+        : tab === 'overdue'
+          ? '很好，没有超时邮件'
+          : '没有等待你回复的邮件';
 
   return (
     <section className="list-pane waiting-pane">
@@ -54,7 +78,8 @@ export default function Waiting({
             </button>
           ))}
         </div>
-        <p className="waiting-hint">等我 = 需你回；等对方 = 你已回待回音；已超时 = 超过回复时限</p>
+        <ClaimFilter value={claimFilter} onChange={setClaim} unclaimedN={unclaimedN} mineN={mineN} />
+        <p className="waiting-hint">等我 = 需你回；等对方 = 你已回待回音；已超时 = 超过回复时限 · 可用认领筛选避免催同事客户</p>
       </header>
       <div className="list-body">
         {error && <div className="list-error">{error}</div>}
@@ -69,6 +94,9 @@ export default function Waiting({
           <div className="empty">
             <Hourglass size={42} strokeWidth={1.2} />
             <p>{emptyText}</p>
+            {claimFilter !== 'all' && (
+              <button type="button" className="btn-ghost sm" onClick={() => setClaim('all')}>查看全部</button>
+            )}
           </div>
         )}
         {list.map((m) => (

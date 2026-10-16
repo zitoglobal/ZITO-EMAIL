@@ -95,8 +95,20 @@ export const upsertMessages = tx((mailboxId, folder, items) => {
       category: m.category || 'people',
       signals: signalsOf(m.subject, m.snippet).join(','),
     });
-    if (info.changes) inserted.push({ id: Number(info.lastInsertRowid), ...m });
-    else upd.run(m.seen ? 1 : 0, m.flagged ? 1 : 0, m.answered ? 1 : 0, mailboxId, folder, m.uid);
+    if (info.changes) {
+      const id = Number(info.lastInsertRowid);
+      inserted.push({ id, ...m });
+      try {
+        upsertFts(id, {
+          subject: m.subject,
+          snippet: m.snippet,
+          fromName: m.from?.name,
+          fromAddr: m.from?.address,
+        });
+      } catch {
+        /* fts optional */
+      }
+    } else upd.run(m.seen ? 1 : 0, m.flagged ? 1 : 0, m.answered ? 1 : 0, mailboxId, folder, m.uid);
   }
   return inserted;
 });
@@ -141,6 +153,7 @@ export function patchMessages(ids, patch) {
 
 export function deleteMessageRows(ids) {
   if (!ids.length) return;
+  removeFts(ids);
   db.prepare(`DELETE FROM messages WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
 }
 
@@ -176,12 +189,102 @@ export function rowToMessage(r) {
   };
 }
 
-/** 旧数据补算业务意图 */
+/** 用主题 + 正文/摘要重算意图；有正文时覆盖仅摘要的弱信号 */
+export function refreshSignals(messagePk, subject, text = '') {
+  const blob = String(text || '').slice(0, 8000);
+  const sig = signalsOf(subject, blob).join(',');
+  const row = db.prepare('SELECT signals FROM messages WHERE id = ?').get(messagePk);
+  if (!row) return [];
+  if (row.signals === sig) return sig ? sig.split(',') : [];
+  db.prepare('UPDATE messages SET signals = ? WHERE id = ?').run(sig, messagePk);
+  return sig ? sig.split(',') : [];
+}
+
+/** 旧数据补算业务意图（优先用已缓存正文） */
 export function backfillSignals() {
-  const rows = db.prepare('SELECT id, subject, snippet FROM messages WHERE signals IS NULL LIMIT 20000').all();
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.subject, m.snippet, b.text AS body_text
+       FROM messages m
+       LEFT JOIN bodies b ON b.message_pk = m.id
+       WHERE m.signals IS NULL
+       LIMIT 20000`
+    )
+    .all();
   if (!rows.length) return;
   const st = db.prepare('UPDATE messages SET signals = ? WHERE id = ?');
-  tx(() => rows.forEach((r) => st.run(signalsOf(r.subject, r.snippet).join(','), r.id)))();
+  tx(() =>
+    rows.forEach((r) => {
+      const text = (r.body_text || r.snippet || '').slice(0, 8000);
+      st.run(signalsOf(r.subject, text).join(','), r.id);
+    })
+  )();
+}
+
+function ftsEscape(term) {
+  return String(term || '')
+    .replace(/["']/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => `"${t.replace(/"/g, '')}"`)
+    .join(' ');
+}
+
+export function upsertFts(messagePk, { subject = '', snippet = '', fromName = '', fromAddr = '', body = '' } = {}) {
+  const fromText = `${fromName} ${fromAddr}`.trim();
+  db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(messagePk);
+  db.prepare(
+    `INSERT INTO messages_fts (rowid, subject, snippet, from_text, body) VALUES (?, ?, ?, ?, ?)`
+  ).run(messagePk, subject || '', snippet || '', fromText, String(body || '').slice(0, 50000));
+}
+
+export function removeFts(messagePks = []) {
+  const ids = messagePks.map(Number).filter((n) => Number.isInteger(n));
+  if (!ids.length) return;
+  const st = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
+  tx(() => ids.forEach((id) => st.run(id)))();
+}
+
+/** 全文检索命中的 message id（最多 limit）；FTS 不可用时返回 null 以回退 LIKE */
+export function searchFtsIds(terms = [], limit = 500) {
+  const q = terms.map(ftsEscape).filter(Boolean).join(' ');
+  if (!q) return null;
+  try {
+    const n = db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get().n;
+    if (!n) return null; // 尚未建索引 → LIKE
+    return db
+      .prepare(`SELECT rowid AS id FROM messages_fts WHERE messages_fts MATCH ? LIMIT ?`)
+      .all(q, limit)
+      .map((r) => r.id);
+  } catch {
+    return null;
+  }
+}
+
+/** 启动时补齐 FTS（主题/摘要/正文） */
+export function backfillFts(limit = 15000) {
+  const n = db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get().n;
+  if (n > 0) return;
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.subject, m.snippet, m.from_name, m.from_addr, b.text AS body
+       FROM messages m LEFT JOIN bodies b ON b.message_pk = m.id
+       ORDER BY m.date DESC LIMIT ?`
+    )
+    .all(limit);
+  const run = tx(() => {
+    for (const r of rows) {
+      upsertFts(r.id, {
+        subject: r.subject,
+        snippet: r.snippet,
+        fromName: r.from_name,
+        fromAddr: r.from_addr,
+        body: r.body || '',
+      });
+    }
+  });
+  run();
 }
 
 /** 解析搜索语法：from/to/subject/has/is + label:/is:vip/category:，其余为关键词 */
@@ -283,10 +386,22 @@ export function queryMessages(userId, { mailboxId, box = 'inbox', folder, catego
 
   if (q) {
     const pq = parseQuery(q);
-    pq.terms.forEach((t, i) => {
-      where.push(`(m.subject LIKE @t${i} ESCAPE '\\' OR m.from_name LIKE @t${i} ESCAPE '\\' OR m.from_addr LIKE @t${i} ESCAPE '\\' OR m.snippet LIKE @t${i} ESCAPE '\\' OR m.to_json LIKE @t${i} ESCAPE '\\')`);
-      p[`t${i}`] = like(t);
-    });
+    const ftsIds = pq.terms.length ? searchFtsIds(pq.terms, 800) : null;
+    if (pq.terms.length && Array.isArray(ftsIds)) {
+      if (!ftsIds.length) return { messages: [], nextCursor: null };
+      const ph = ftsIds.map((_, i) => `@fts${i}`).join(',');
+      where.push(`m.id IN (${ph})`);
+      ftsIds.forEach((id, i) => {
+        p[`fts${i}`] = id;
+      });
+    } else {
+      pq.terms.forEach((t, i) => {
+        where.push(
+          `(m.subject LIKE @t${i} ESCAPE '\\' OR m.from_name LIKE @t${i} ESCAPE '\\' OR m.from_addr LIKE @t${i} ESCAPE '\\' OR m.snippet LIKE @t${i} ESCAPE '\\' OR m.to_json LIKE @t${i} ESCAPE '\\' OR EXISTS (SELECT 1 FROM bodies b WHERE b.message_pk = m.id AND b.text LIKE @t${i} ESCAPE '\\'))`
+        );
+        p[`t${i}`] = like(t);
+      });
+    }
     pq.from.forEach((t, i) => {
       where.push(`(m.from_name LIKE @f${i} ESCAPE '\\' OR m.from_addr LIKE @f${i} ESCAPE '\\')`);
       p[`f${i}`] = like(t);
@@ -403,6 +518,21 @@ export function saveBody(pk, { html, text, meta }) {
     JSON.stringify(meta),
     now()
   );
+  const row = db.prepare('SELECT subject, snippet, from_name, from_addr FROM messages WHERE id = ?').get(pk);
+  if (row) {
+    refreshSignals(pk, row.subject, text || row.snippet || '');
+    try {
+      upsertFts(pk, {
+        subject: row.subject,
+        snippet: row.snippet,
+        fromName: row.from_name,
+        fromAddr: row.from_addr,
+        body: text || '',
+      });
+    } catch {
+      /* ignore */
+    }
+  }
 }
 export function pruneBodies(keep = 3000) {
   db.prepare('DELETE FROM bodies WHERE message_pk NOT IN (SELECT message_pk FROM bodies ORDER BY fetched_at DESC LIMIT ?)').run(keep);

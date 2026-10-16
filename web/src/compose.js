@@ -76,7 +76,7 @@ export function buildComposeState(mode, msg, ctx, extra = {}) {
     quoteText: plain.slice(0, 4000),
     inReplyTo: forward ? undefined : msg.messageId,
     references: forward ? undefined : [...(msg.references || []), msg.messageId].filter(Boolean).slice(-20),
-    replyTo: forward ? undefined : { id: msg.id },
+    replyTo: forward ? undefined : { id: msg.id, threadId: msg.threadId || null },
     sourceId: msg.id,
     forward: forward && msg.attachments?.length ? { id: msg.id, attachments: msg.attachments } : undefined,
     ...extra,

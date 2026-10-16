@@ -4,6 +4,8 @@ import { emit } from './events.js';
 import { now } from './db.js';
 import * as priority from './priority.js';
 import * as mailRules from './mail_rules.js';
+import * as push from './push.js';
+import * as users from './users.js';
 
 const SYNC_SPECIALS = ['\\Inbox', '\\Sent', '\\Drafts', '\\Archive', '\\Junk', '\\Trash'];
 const INITIAL_INBOX = 400;
@@ -238,6 +240,27 @@ class Engine {
           count: fresh.length,
           important: fresh.filter((m) => m.important).length,
         });
+        try {
+          const settings = users.settingsOf(mb.user_id);
+          if (settings.notify) {
+            const first = fresh[0];
+            const important = !!first.important;
+            push
+              .notifyUser(mb.user_id, {
+                title: important ? '重要来信' : '新邮件',
+                body:
+                  fresh.length > 1
+                    ? `${mb.email || ''} 收到 ${fresh.length} 封新邮件`
+                    : `${first.from?.name || first.from?.address || ''}：${first.subject || '(无主题)'}`,
+                url: '/',
+                tag: 'zm-' + mb.id,
+                urgency: important ? 'high' : 'normal',
+              })
+              .catch(() => {});
+          }
+        } catch {
+          /* push optional */
+        }
       }
     }
   }

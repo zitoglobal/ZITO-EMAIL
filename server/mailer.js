@@ -7,6 +7,8 @@ import * as sync from './sync.js';
 import { sendMail } from './smtp.js';
 import { emit } from './events.js';
 import { DATA_DIR, db } from './db.js';
+import * as deals from './deals.js';
+import * as users from './users.js';
 
 export const OUTBOX_DIR = path.join(DATA_DIR, 'outbox');
 
@@ -104,10 +106,23 @@ async function tick() {
       repo.setOutboxStatus(job.id, 'sending');
       const mb = repo.getMailboxById(job.mailbox_id);
       try {
-        await deliver(mb, JSON.parse(job.payload), loadOutboxFiles(job.files_dir));
+        const payload = JSON.parse(job.payload);
+        await deliver(mb, payload, loadOutboxFiles(job.files_dir));
         repo.deleteOutbox(job.id);
         removeOutboxFiles(job.files_dir);
         emit(job.user_id, 'outbox', { id: job.id, status: 'sent' });
+        try {
+          const settings = users.settingsOf(job.user_id);
+          if (settings.sendAutoClaim !== 'off') {
+            const selfEmails = repo.listMailboxes(job.user_id).map((m) => m.email).filter(Boolean);
+            const meta = deals.afterOutboundSend(job.user_id, payload, { mode: 'auto', selfEmails });
+            if (meta?.claimed || meta?.conflict) {
+              for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
+            }
+          }
+        } catch (e) {
+          console.warn('[deals] outbox claim', e.message);
+        }
       } catch (e) {
         repo.setOutboxStatus(job.id, 'failed', e.message);
         emit(job.user_id, 'outbox', { id: job.id, status: 'failed', error: e.message });

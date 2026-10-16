@@ -26,6 +26,9 @@ import * as contacts from './contacts.js';
 import * as deals from './deals.js';
 import { assertSafeMailHosts } from './net_guard.js';
 import { sanitizeMailHtml } from './sanitize_mail.js';
+import * as totp from './totp.js';
+import * as analytics from './analytics.js';
+import * as push from './push.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
@@ -141,7 +144,7 @@ function stateFor(user, dayStart) {
 }
 
 
-// ---------- 健康检查（探针用，无需登录） ----------
+// ---------- 健康检查（探针用，无需登录；生产默认精简） ----------
 app.get('/api/health', (req, res) => {
   let dbOk = false;
   try {
@@ -150,19 +153,28 @@ app.get('/api/health', (req, res) => {
   } catch (e) {
     console.error('[health]', e.message);
   }
+  const detail =
+    process.env.HEALTH_DETAIL === '1' ||
+    req.query.detail === '1' ||
+    !IS_PROD ||
+    req.ip === '127.0.0.1' ||
+    req.ip === '::1' ||
+    req.ip === '::ffff:127.0.0.1';
+  if (!detail) {
+    return res.status(dbOk ? 200 : 503).json({ ok: dbOk });
+  }
   let errorMailboxes = 0;
   try {
     errorMailboxes = repo.errorMailboxCount();
   } catch (_) {}
-  const body = {
+  res.status(dbOk ? 200 : 503).json({
     ok: dbOk,
     db: dbOk ? 'up' : 'down',
     uptime: Math.round(process.uptime()),
     aiConfigured: ai.aiConfigured(),
     lastBackupAt: backup.lastBackupAt(),
     errorMailboxes,
-  };
-  res.status(dbOk ? 200 : 503).json(body);
+  });
 });
 
 // ---------- 账号 ----------
@@ -198,8 +210,24 @@ app.post(
     const u = users.authenticate(req.body.email, req.body.password);
     if (!u) throw httpError(401, '账号或密码错误');
     buckets.delete('login:' + req.ip);
+    if (totp.isTotpEnabled(u)) {
+      const ticket = totp.createLoginTicket(u.id);
+      return res.json({ needsTotp: true, ticket });
+    }
     setCookie(res, users.createSession(u.id, req.headers['user-agent']), users.sessionPolicy().absDays * 24 * 3600);
     res.json({ user: users.publicUser(u) });
+  })
+);
+
+app.post(
+  '/api/auth/login/totp',
+  wrap(async (req, res) => {
+    rateLimit('login-totp:' + req.ip, 20, 10 * 60_000);
+    const ticketKey = String(req.body?.ticket || '').slice(0, 80);
+    if (ticketKey) rateLimit('login-totp-ticket:' + ticketKey, 8, 10 * 60_000);
+    const { user: u, via, recoveryLeft } = totp.consumeLoginTicket(req.body?.ticket, req.body?.code);
+    setCookie(res, users.createSession(u.id, req.headers['user-agent']), users.sessionPolicy().absDays * 24 * 3600);
+    res.json({ user: users.publicUser(u), via, recoveryLeft });
   })
 );
 
@@ -208,6 +236,51 @@ app.post('/api/auth/logout', (req, res) => {
   setCookie(res, '', 0);
   res.json({ ok: true });
 });
+
+app.get(
+  '/api/me/totp',
+  auth,
+  wrap(async (req, res) => {
+    res.json(totp.userTotpStatus(req.user.id));
+  })
+);
+
+app.post(
+  '/api/me/totp/setup',
+  auth,
+  wrap(async (req, res) => {
+    rateLimit('totp-setup:' + req.user.id, 10, 3600_000);
+    const data = await totp.beginSetup(req.user.id, req.user.email);
+    res.json(data);
+  })
+);
+
+app.post(
+  '/api/me/totp/confirm',
+  auth,
+  wrap(async (req, res) => {
+    rateLimit('totp-confirm:' + req.user.id, 20, 3600_000);
+    res.json(totp.confirmSetup(req.user.id, req.body?.code));
+  })
+);
+
+app.post(
+  '/api/me/totp/disable',
+  auth,
+  wrap(async (req, res) => {
+    rateLimit('totp-disable:' + req.user.id, 10, 3600_000);
+    res.json(totp.disable(req.user.id, req.body?.code));
+  })
+);
+
+app.post(
+  '/api/me/totp/recovery',
+  auth,
+  wrap(async (req, res) => {
+    rateLimit('totp-recovery:' + req.user.id, 8, 3600_000);
+    res.json(totp.regenerateRecovery(req.user.id, req.body?.code));
+  })
+);
 
 app.get(
   '/api/me/sessions',
@@ -293,6 +366,33 @@ app.get(
   })
 );
 app.get('/api/deals/stages', auth, (_req, res) => res.json({ stages: deals.STAGES }));
+app.get(
+  '/api/deals',
+  auth,
+  wrap(async (req, res) => {
+    const owner = ['mine', 'all', 'others'].includes(req.query.owner) ? req.query.owner : 'mine';
+    const list = deals.listDeals(req.user.id, {
+      owner,
+      stage: req.query.stage,
+      limit: Number(req.query.limit) || 100,
+    });
+    res.json({ deals: list, stages: deals.STAGES });
+  })
+);
+app.get(
+  '/api/deals/events',
+  auth,
+  wrap(async (req, res) => {
+    const dealId = req.query.dealId != null ? Number(req.query.dealId) : undefined;
+    res.json({
+      events: deals.listEvents(req.user.id, {
+        dealId: Number.isInteger(dealId) ? dealId : undefined,
+        address: req.query.address,
+        limit: Number(req.query.limit) || 12,
+      }),
+    });
+  })
+);
 app.post(
   '/api/deals/claim',
   auth,
@@ -304,6 +404,38 @@ app.post(
       if (u.id !== req.user.id) emit(u.id, 'sync', { local: true, deal: true });
     }
     res.json({ deal });
+  })
+);
+app.post(
+  '/api/deals/claim-batch',
+  auth,
+  wrap(async (req, res) => {
+    rateLimit('claim-batch:' + req.user.id, 30, 60_000);
+    const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 40) : [];
+    const claimed = [];
+    const skipped = [];
+    const seenScope = new Set();
+    for (const it of items) {
+      const scope = deals.scopeFromAddress(it.address);
+      if (!scope) {
+        skipped.push({ address: it.address, error: '发件人地址无效', deal: null });
+        continue;
+      }
+      if (seenScope.has(scope.key)) continue;
+      seenScope.add(scope.key);
+      try {
+        const deal = deals.claim(req.user.id, {
+          address: it.address,
+          threadId: it.threadId,
+          force: false,
+        });
+        claimed.push(deal);
+      } catch (e) {
+        skipped.push({ address: it.address, error: e.message, deal: e.deal || null });
+      }
+    }
+    for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
+    res.json({ claimed, skipped, claimedCount: claimed.length, skippedCount: skipped.length });
   })
 );
 app.post(
@@ -321,15 +453,27 @@ app.patch(
   wrap(async (req, res) => {
     const id = Number(req.params.id);
     let deal = null;
-    if (req.body?.stage != null) deal = deals.setStage(req.user.id, id, req.body.stage);
+    let stageLabel = null;
+    if (req.body?.stage != null) {
+      deal = deals.setStage(req.user.id, id, req.body.stage);
+      const mid = Number(req.body.messageId);
+      if (Number.isInteger(mid)) {
+        try {
+          stageLabel = labels.applyStageLabel(req.user.id, mid, req.body.stage).label;
+        } catch (e) {
+          console.warn('[deals] stage label', e.message);
+        }
+      }
+    }
     if (req.body?.note != null) deal = deals.setNote(req.user.id, id, req.body.note);
+    if ('nextFollowAt' in (req.body || {})) deal = deals.setNextFollowAt(req.user.id, id, req.body.nextFollowAt);
     if (!deal) {
       const row = deals.getDealById(id);
       if (!row) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
       deal = deals.lookup(req.user.id, { address: row.last_address }).deal;
     }
     for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
-    res.json({ deal });
+    res.json({ deal, stageLabel });
   })
 );
 
@@ -657,11 +801,15 @@ async function deepSearch(userId, opts) {
 // ---------- 邮件详情 ----------
 async function loadBody(row) {
   const cached = repo.getBody(row.id);
-  if (cached) return { html: cached.html, text: cached.text, meta: JSON.parse(cached.meta) };
+  if (cached) {
+    const signals = repo.refreshSignals(row.id, row.subject, cached.text || row.snippet || '');
+    return { html: cached.html, text: cached.text, meta: JSON.parse(cached.meta), signals };
+  }
   const mb = repo.getMailboxById(row.mailbox_id);
   const body = imap.serializeParsed(await imap.fetchParsed(mb, row.folder, row.uid));
   repo.saveBody(row.id, body);
-  return body;
+  const signals = repo.refreshSignals(row.id, row.subject, body.text || row.snippet || '');
+  return { ...body, signals };
 }
 
 function markSeen(row) {
@@ -690,7 +838,7 @@ app.get(
     const shouldMark = req.query.markSeen === '1' || req.query.markSeen === 'true';
     if (shouldMark) markSeen(row);
     const seen = shouldMark ? 1 : row.seen;
-    const base = repo.rowToMessage({ ...row, seen });
+    const base = repo.rowToMessage({ ...row, seen, signals: body.signals != null ? body.signals.join(',') : row.signals });
     const [withLabels] = labels.attachLabels(req.user.id, [base]);
     const safeHtml = body.html ? sanitizeMailHtml(body.html) : body.html;
     res.json({
@@ -698,6 +846,7 @@ app.get(
       ...body.meta,
       html: safeHtml,
       text: body.text,
+      signals: body.signals ?? withLabels.signals,
       knownSender: repo.isKnownContact(req.user.id, row.from_addr),
       sender: priority.senderInfo(req.user.id, row.from_addr),
       conflict: priority.conflictHints(req.user.id, { fromAddr: row.from_addr, threadId: row.thread_id }),
@@ -924,6 +1073,23 @@ function filesFrom(req) {
   }));
 }
 
+function outboundClaimMeta(userId, payload) {
+  const settings = users.settingsOf(userId);
+  const selfEmails = repo
+    .listMailboxes(userId)
+    .map((m) => m.email)
+    .filter(Boolean);
+  try {
+    return deals.afterOutboundSend(userId, payload, {
+      mode: settings.sendAutoClaim === 'off' ? 'off' : 'auto',
+      selfEmails,
+    });
+  } catch (e) {
+    console.warn('[deals] after send', e.message);
+    return null;
+  }
+}
+
 app.post(
   '/api/send',
   auth,
@@ -940,11 +1106,20 @@ app.post(
     const sendAt = payload.sendAt && Number(payload.sendAt) > Date.now() + 5000 ? Number(payload.sendAt) : Date.now() + delay;
     if (sendAt - Date.now() < 1000) {
       await mailer.deliver(mb, payload, files);
-      return res.json({ sent: true });
+      const dealMeta = outboundClaimMeta(req.user.id, payload);
+      if (dealMeta?.claimed || dealMeta?.conflict || dealMeta?.stageSuggest) {
+        for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
+      }
+      return res.json({ sent: true, dealMeta });
     }
     const dir = mailer.saveOutboxFiles(files);
     const id = repo.addOutbox(req.user.id, mb.id, payload, dir, sendAt);
-    res.json({ outboxId: id, sendAt, scheduled: !!payload.sendAt });
+    // 延迟发送：入队时先认领，避免撤回前同事撞单；真正发出时 mailer 再确认一次
+    const dealMeta = outboundClaimMeta(req.user.id, payload);
+    if (dealMeta?.claimed || dealMeta?.conflict) {
+      for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
+    }
+    res.json({ outboxId: id, sendAt, scheduled: !!payload.sendAt, dealMeta });
   })
 );
 
@@ -1565,6 +1740,37 @@ app.get('/api/events', auth, (req, res) => {
   });
 });
 
+app.get(
+  '/api/insights',
+  auth,
+  wrap(async (req, res) => {
+    res.json(analytics.teamInsights(req.user.id, { dayStart: req.query.dayStart }));
+  })
+);
+
+app.get('/api/push/vapid', auth, (_req, res) => res.json({ publicKey: push.publicKey() }));
+app.post(
+  '/api/push/subscribe',
+  auth,
+  wrap(async (req, res) => {
+    res.json(push.saveSubscription(req.user.id, req.body?.subscription || req.body, req.headers['user-agent']));
+  })
+);
+app.post(
+  '/api/push/unsubscribe',
+  auth,
+  wrap(async (req, res) => {
+    res.json(push.removeSubscription(req.user.id, req.body?.endpoint));
+  })
+);
+app.get(
+  '/api/push/status',
+  auth,
+  wrap(async (req, res) => {
+    res.json({ subscriptions: push.listForUser(req.user.id), publicKey: push.publicKey() });
+  })
+);
+
 app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在' }));
 
 // ---------- 前端静态资源 ----------
@@ -1578,6 +1784,7 @@ if (fs.existsSync(DIST)) {
     "font-src 'self' data: https:",
     "connect-src 'self'",
     "frame-src 'self' blob: data:",
+    "worker-src 'self'",
     "object-src 'none'",
     "form-action 'none'",
   ].join('; ');
@@ -1591,6 +1798,11 @@ if (fs.existsSync(DIST)) {
 }
 
 repo.backfillSignals();
+try {
+  repo.backfillFts();
+} catch (e) {
+  console.warn('[fts]', e.message);
+}
 mailer.startScheduler();
 sync.startAll();
 backup.startBackupScheduler();
@@ -1598,10 +1810,22 @@ backup.startBackupScheduler();
 /** 客户邮件超过回复时限仍未处理时分阶段提醒（冷却后升级，最多 3 级） */
 function remindUser(u) {
   const settings = users.publicUser(u).settings;
-  if (!settings.remindOverdue || !isOnline(u.id) || !repo.listMailboxes(u.id).length) return;
+  if (!settings.remindOverdue || !repo.listMailboxes(u.id).length) return;
   try {
     const r = priority.overdueToRemind(u.id, settings);
-    if (r) emit(u.id, 'remind', r);
+    if (r) {
+      if (isOnline(u.id)) emit(u.id, 'remind', r);
+      if (settings.notify) {
+        push
+          .notifyUser(u.id, {
+            title: r.escalate ? '超时升级提醒' : '客户邮件待回复',
+            body: r.subject || `${r.count || ''} 封待处理`,
+            url: '/',
+            tag: 'zm-remind',
+          })
+          .catch(() => {});
+      }
+    }
   } catch (e) {
     console.error('[remind]', e.message);
   }

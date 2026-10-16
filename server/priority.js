@@ -282,7 +282,25 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     }
   }
   const replyWithDeals = attachDeals(userId, reply);
-  const followWithDeals = attachDeals(userId, followups);
+  let followWithDeals = attachDeals(userId, followups);
+  // 客户级下次跟进日：到期/临近的优先排前
+  const atNow = Date.now();
+  followWithDeals = followWithDeals
+    .map((m) => {
+      const nf = m.deal?.nextFollowAt;
+      if (!nf) return m;
+      const dueBoost = nf <= atNow ? 80 : nf <= atNow + DAY ? 40 : nf <= atNow + 3 * DAY ? 15 : 0;
+      return {
+        ...m,
+        follow: {
+          ...m.follow,
+          nextFollowAt: nf,
+          score: (m.follow?.score || 0) + dueBoost,
+          due: nf <= atNow,
+        },
+      };
+    })
+    .sort((a, b) => (b.follow?.score || 0) - (a.follow?.score || 0));
 
   return {
     reply: replyWithDeals,

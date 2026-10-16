@@ -13,6 +13,8 @@ import Digest from './components/Digest.jsx';
 import Settings from './components/Settings.jsx';
 import Focus from './components/Focus.jsx';
 import Waiting from './components/Waiting.jsx';
+import Deals from './components/Deals.jsx';
+import Insights from './components/Insights.jsx';
 import CustomerPanel from './components/CustomerPanel.jsx';
 import ColumnSplitter from './components/ColumnSplitter.jsx';
 import Palette from './components/Palette.jsx';
@@ -27,7 +29,7 @@ import {
   saveLayoutLocal,
   widthsFromSettings,
 } from './layout.js';
-import { ACTION_TEXT, DEFAULT_VIEW, FOLLOW_UP_AI, PAGE, REMOVING, SHORTCUTS, UNDO_OF } from './appConstants.js';
+import { ACTION_TEXT, DEFAULT_VIEW, followUpAiForStage, followUpBodyForStage, PAGE, REMOVING, SHORTCUTS, UNDO_OF } from './appConstants.js';
 import { useRealtimeMail } from './hooks/useRealtimeMail.js';
 
 function mergeLocalLabels(current = [], add = [], remove = [], allLabels = []) {
@@ -39,11 +41,6 @@ function mergeLocalLabels(current = [], add = [], remove = [], allLabels = []) {
     if (meta) byId.set(id, { id: meta.id, name: meta.name, color: meta.color });
   }
   return [...byId.values()];
-}
-
-function followUpBody(person, signature) {
-  const first = String(person?.name || '').split(/\s+/)[0] || 'there';
-  return `<div>Hi ${first},</div><div><br></div><div>Just following up on my email below — have you had a chance to review it? I'm happy to answer any questions or adjust the details if needed.</div><div><br></div><div>Looking forward to hearing from you.</div><br>${signatureHtml(signature)}`;
 }
 
 function loadView() {
@@ -91,6 +88,7 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [outboxVersion, setOutboxVersion] = useState(0);
+  const [dealsVersion, setDealsVersion] = useState(0);
   const [focusData, setFocusData] = useState(null);
   const [groupMode, setGroupModeState] = useState(() => localStorage.getItem('zm_group') || 'priority');
   const [aiBusy, setAiBusy] = useState(false);
@@ -296,7 +294,7 @@ export default function App() {
   // ---------- 列表 ----------
   const loadList = useCallback(
     async ({ append = false, silent = false } = {}) => {
-      if (view.box === 'scheduled') return;
+      if (view.box === 'scheduled' || view.box === 'deals' || view.box === 'insights') return;
       if (view.box === 'today' || view.box === 'waiting') {
         if (append) return;
         const id = ++reqId.current;
@@ -662,9 +660,44 @@ export default function App() {
     try {
       const d = await api(`/messages/${m.id}?markSeen=0`);
       const mb = mailboxMap[d.mailboxId];
-      openCompose('reply', d, ai ? { aiInstruction: FOLLOW_UP_AI } : { body: followUpBody(m.follow?.to, mb?.signature) });
+      const stage = m.deal?.stage || d.deal?.stage;
+      openCompose(
+        'reply',
+        d,
+        ai
+          ? { aiInstruction: followUpAiForStage(stage) }
+          : { body: followUpBodyForStage(m.follow?.to, signatureHtml(mb?.signature), stage) }
+      );
     } catch (e) {
       notify(e.message, 'error');
+    }
+  }
+
+  function handleDealMeta(meta) {
+    if (!meta) return;
+    if (meta.conflict && meta.deal) {
+      notify(`${meta.deal.owner?.name || '同事'} 已认领 ${meta.deal.scopeLabel}，请先沟通再跟进`, 'error', null, 7000);
+      return;
+    }
+    if (meta.claimed && meta.deal) {
+      notify(`已自动认领 ${meta.deal.scopeLabel}`, 'success');
+    }
+    if (meta.stageSuggest && meta.deal?.mine) {
+      const sug = meta.stageSuggest;
+      const dealId = meta.deal.id;
+      notify(`要推进到「${sug.label}」吗？`, 'info', {
+        label: '推进',
+        fn: async () => {
+          try {
+            const r = await api(`/deals/${dealId}`, { method: 'PATCH', body: { stage: sug.stage } });
+            notify(`阶段已更新为 ${r.deal.stageLabel}`, 'success');
+            if (view.box === 'today' || view.box === 'waiting') loadList({ silent: true });
+            setDealsVersion((v) => v + 1);
+          } catch (e) {
+            notify(e.message, 'error');
+          }
+        },
+      }, 10000);
     }
   }
 
@@ -695,6 +728,7 @@ export default function App() {
         const ms = Math.max(1500, res.sendAt - Date.now());
         const id = notify('正在发送…', 'info', { label: '撤销', fn: () => { dismiss(id); reopen(); } }, ms);
       }
+      handleDealMeta(res.dealMeta);
       if (payload.replyTo?.id) {
         const rid = payload.replyTo.id;
         setList((l) => ({
@@ -842,7 +876,7 @@ export default function App() {
     setBoot('auth');
   }
 
-  async function onAuthed(u) {
+  async function onAuthed(u, meta) {
     setUser(u);
     try {
       const d = await api('/me');
@@ -854,6 +888,17 @@ export default function App() {
     // 登录后默认进入今日待办作战台
     setView(DEFAULT_VIEW);
     setBoot('ready');
+    if (meta?.via === 'recovery') {
+      const left = meta.recoveryLeft;
+      notify(
+        left != null
+          ? `已用备用码登录，还剩 ${left} 条。建议尽快在设置中重新生成`
+          : '已用备用码登录，建议尽快在设置中重新生成备用码',
+        'info',
+        null,
+        8000
+      );
+    }
   }
 
   async function onMailboxBound(res) {
@@ -909,7 +954,7 @@ export default function App() {
       const item = s.selectedItem || s.currentMsg;
       if (gPending.current && Date.now() - gPending.current < 1500) {
         gPending.current = 0;
-        const target = { t: 'today', w: 'waiting', i: 'inbox', u: 'unread', s: 'flagged' }[e.key];
+        const target = { t: 'today', w: 'waiting', i: 'inbox', u: 'unread', s: 'flagged', d: 'deals', a: 'insights' }[e.key];
         if (target) {
           e.preventDefault();
           setView({ mailboxId: 'all', box: target });
@@ -1158,6 +1203,7 @@ export default function App() {
           checked={checked}
           setChecked={setChecked}
           salesDensity={layoutMode === 'sales'}
+          notify={notify}
         />
       ) : view.box === 'waiting' ? (
         <Waiting
@@ -1176,6 +1222,17 @@ export default function App() {
           tab={waitingTab}
           setTab={setWaitingTab}
         />
+      ) : view.box === 'deals' ? (
+        <Deals
+          key={dealsVersion}
+          onMenu={() => setSidebarOpen(true)}
+          notify={notify}
+          onOpenDeal={(d) => {
+            if (d.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
+          }}
+        />
+      ) : view.box === 'insights' ? (
+        <Insights onMenu={() => setSidebarOpen(true)} />
       ) : (
         <MailList
           title={title}

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Search, RefreshCw, Star, Paperclip, MailOpen, Mail, Trash2, Archive, FolderInput, X, Menu, CornerUpLeft, Loader2, Inbox, Clock, Pin,
-  ServerCrash, ShieldAlert, CheckCheck, Crown, Flame, Hourglass, Sparkles, CheckCircle2, Reply, BellOff, Send, Tag, Bookmark,
+  ServerCrash, ShieldAlert, CheckCheck, Crown, Flame, Hourglass, Sparkles, CheckCircle2, Reply, BellOff, Send, Tag, Bookmark, Hand,
 } from 'lucide-react';
 import LabelMenu from './LabelMenu.jsx';
 import {
@@ -40,6 +40,11 @@ function Chips({ m, variant }) {
     p.signals.filter((s) => SIGNALS[s] && !(p.tier === 'new' && s === 'inquiry')).slice(0, 1).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
   } else if (variant === 'follow' && m.follow) {
     chips.push(<span key="wot" className="tag waiting-them">等对方{m.follow.days ? ` · ${m.follow.days}天` : ''}</span>);
+    if (m.follow.due || (m.follow.nextFollowAt && m.follow.nextFollowAt <= Date.now())) {
+      chips.push(<span key="due" className="tag follow-due">跟进到期</span>);
+    } else if (m.follow.nextFollowAt || m.deal?.nextFollowAt) {
+      chips.push(<span key="nf" className="tag follow-plan">有跟进日</span>);
+    }
     if (m.follow.tier === 'vip') chips.push(<span key="t" className="tag tier-vip"><Crown size={10} /> VIP</span>);
     else if (m.follow.tier === 'customer') chips.push(<span key="t" className="tag tier-customer">客户</span>);
     m.follow.signals.filter((s) => SIGNALS[s]).slice(0, 1).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
@@ -66,6 +71,12 @@ function Chips({ m, variant }) {
         {m.deal.mine ? '我跟' : (m.deal.owner?.name || '同事').slice(0, 4)} · {m.deal.stageLabel}
       </span>
     );
+  } else if (variant === 'reply' || variant === 'focus') {
+    chips.push(
+      <span key="deal-open" className="tag deal-tag open" title="尚未有人认领，可在读信页或今日待办一键认领">
+        未认领
+      </span>
+    );
   }
   const userLabels = Array.isArray(m.labels) ? m.labels : [];
   const labelShown = userLabels.slice(0, 2).map((l) => (
@@ -84,7 +95,7 @@ function Chips({ m, variant }) {
   return shown.length ? <div className="row-tags" title={all.length > 4 ? '更多状态已收起' : undefined}>{shown}</div> : null;
 }
 
-export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp }) {
+export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp, onClaim, claimBusy }) {
   const [snooze, setSnooze] = useState(false);
   const follow = variant === 'follow';
   const focus = variant !== 'mail';
@@ -158,6 +169,17 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
 
       {focus && (
         <div className="focus-ctas" onClick={(e) => e.stopPropagation()}>
+          {variant === 'reply' && !m.deal && onClaim && (
+            <button
+              type="button"
+              className="focus-cta focus-cta-claim"
+              title="认领此客户，避免同事撞单"
+              disabled={claimBusy}
+              onClick={() => onClaim(m)}
+            >
+              <Hand size={14} /> 认领
+            </button>
+          )}
           {variant === 'reply' && (
             <button type="button" className="focus-cta" title="已处理，无需回复 (D)" onClick={() => onAction([m.id], 'done')}>
               <CheckCircle2 size={14} /> 处理

@@ -28,6 +28,8 @@ const DEFAULT_SETTINGS = {
   slaCustomerHours: 24,
   slaNewInquiryHours: 8,
   followupDays: 3,
+  /** 发信后认领：auto 自动认领客户 / off 关闭 */
+  sendAutoClaim: 'auto',
   remindOverdue: true,
   translateTarget: '简体中文',
   autoTranslate: false,
@@ -44,6 +46,7 @@ function sanitizeLayout(merged) {
   if ('layoutSidebar' in merged) merged.layoutSidebar = clampInt(merged.layoutSidebar, 180, 320, 252);
   if ('layoutList' in merged) merged.layoutList = clampInt(merged.layoutList, 280, 520, 360);
   if ('layoutCustomer' in merged) merged.layoutCustomer = clampInt(merged.layoutCustomer, 240, 380, 280);
+  if ('sendAutoClaim' in merged) merged.sendAutoClaim = merged.sendAutoClaim === 'off' ? 'off' : 'auto';
 }
 
 
@@ -54,6 +57,7 @@ export function publicUser(u) {
     email: u.email,
     name: u.name,
     role: u.role,
+    totpEnabled: !!(u.totp_enabled && u.totp_enc),
     settings: (() => {
       const s = { ...DEFAULT_SETTINGS, ...JSON.parse(u.settings || '{}') };
       s.glossary = sanitizeGlossary(s.glossary);
@@ -72,10 +76,18 @@ export const userCount = () => db.prepare('SELECT COUNT(*) n FROM users').get().
 const loginId = (v) => String(v || '').trim().toLowerCase();
 const validLoginId = (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) || /^[a-z0-9][a-z0-9._-]{2,31}$/.test(v);
 
+/** 密码：至少 8 位，且同时含字母与数字 */
+export function assertPasswordStrength(password) {
+  const p = String(password || '');
+  if (p.length < 8) throw new Error('密码至少 8 位');
+  if (!/[A-Za-z]/.test(p) || !/\d/.test(p)) throw new Error('密码需同时包含字母和数字');
+  return p;
+}
+
 export function createUser({ email, name, password, role = 'member' }) {
   const id = loginId(email);
   if (!validLoginId(id)) throw new Error('账号请填写邮箱地址，或 3–32 位的字母、数字用户名');
-  if (String(password || '').length < 8) throw new Error('密码至少 8 位');
+  assertPasswordStrength(password);
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(id)) throw new Error('该账号已存在');
   const info = db
     .prepare('INSERT INTO users (email, name, pass_hash, role, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -92,13 +104,13 @@ export function authenticate(email, password) {
 export function changePassword(userId, oldPassword, newPassword, keepToken) {
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
   if (!verifyPassword(oldPassword, u.pass_hash)) throw new Error('原密码不正确');
-  if (String(newPassword || '').length < 8) throw new Error('新密码至少 8 位');
+  assertPasswordStrength(newPassword);
   db.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').run(hashPassword(newPassword), userId);
   db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(userId, keepToken ? sha256(keepToken) : '');
 }
 
 export function resetPassword(userId, newPassword) {
-  if (String(newPassword || '').length < 8) throw new Error('新密码至少 8 位');
+  assertPasswordStrength(newPassword);
   db.prepare('UPDATE users SET pass_hash = ? WHERE id = ?').run(hashPassword(newPassword), userId);
   db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
 }

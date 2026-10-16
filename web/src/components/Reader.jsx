@@ -200,6 +200,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
           stages={m.dealStages}
           address={item.from?.address}
           threadId={item.threadId || m.threadId}
+          messageId={item.id}
           notify={onNotify}
           onChange={(deal) => onDealChange?.(item.id, deal)}
         />

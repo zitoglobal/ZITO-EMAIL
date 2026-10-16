@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Crown, Bell, BellOff, Hourglass, Users, Reply, Clock, Plus, Loader2, UserPlus } from 'lucide-react';
+import { X, Crown, Bell, BellOff, Hourglass, Users, Reply, Clock, Plus, Loader2, UserPlus, CalendarClock } from 'lucide-react';
 import { api } from '../api.js';
-import { avatarColor, displayName, formatListDate, initials, relativeTime, waitText } from '../utils.js';
+import { avatarColor, displayName, formatListDate, formatShortDateTime, initials, relativeTime, waitText } from '../utils.js';
 
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
 
@@ -301,6 +301,59 @@ export default function CustomerPanel({
               rows={3}
               placeholder="付款习惯、旺季、对接人…"
             />
+            <div className="customer-section-title" style={{ marginTop: 10 }}>
+              <CalendarClock size={12} /> 下次跟进
+            </div>
+            <div className="customer-follow-row">
+              {[1, 3, 7].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  className="deal-follow-chip"
+                  disabled={busy === 'follow'}
+                  onClick={async () => {
+                    const d = new Date();
+                    d.setHours(9, 0, 0, 0);
+                    d.setDate(d.getDate() + n);
+                    setBusy('follow');
+                    try {
+                      const r = await api(`/contact-persons/${person.id}`, {
+                        method: 'PATCH',
+                        body: { nextFollowAt: d.getTime() },
+                      });
+                      setPerson(r.person);
+                    } finally {
+                      setBusy('');
+                    }
+                  }}
+                >
+                  {n === 1 ? '明天' : n === 3 ? '3 天' : '一周'}
+                </button>
+              ))}
+              {person.nextFollowAt && (
+                <>
+                  <small className="muted">{formatShortDateTime(person.nextFollowAt)}</small>
+                  <button
+                    type="button"
+                    className="deal-follow-chip"
+                    onClick={async () => {
+                      setBusy('follow');
+                      try {
+                        const r = await api(`/contact-persons/${person.id}`, {
+                          method: 'PATCH',
+                          body: { nextFollowAt: null },
+                        });
+                        setPerson(r.person);
+                      } finally {
+                        setBusy('');
+                      }
+                    }}
+                  >
+                    清除
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         )}
 

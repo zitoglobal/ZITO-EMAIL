@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Menu, RefreshCw, Sparkles, Loader2, Crown, CornerDownRight, Send, PartyPopper, Info, AlertTriangle, ChevronDown, Archive, Trash2, CheckCircle2, MailOpen } from 'lucide-react';
+import { Menu, RefreshCw, Sparkles, Loader2, Crown, CornerDownRight, Send, PartyPopper, Info, AlertTriangle, ChevronDown, Archive, Trash2, CheckCircle2, MailOpen, Hand } from 'lucide-react';
 import { Row } from './MailList.jsx';
+import ClaimFilter, { filterByClaim, loadClaimFilter, saveClaimFilter } from './ClaimFilter.jsx';
+import { api } from '../api.js';
 import { avatarColor, greeting, waitText } from '../utils.js';
 
 function SectionHead({ id, title, count, hint }) {
@@ -25,7 +27,7 @@ function loadExpanded() {
 
 export default function Focus({
   user, data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, aiEnabled, onAiTriage, aiBusy,
-  groupMode, setGroupMode, onFollowUp, onMenu, checked, setChecked, salesDensity = false,
+  groupMode, setGroupMode, onFollowUp, onMenu, checked, setChecked, salesDensity = false, notify,
 }) {
   const body = useRef();
   const reply = messages.filter((m) => m._section === 'reply');
@@ -45,6 +47,67 @@ export default function Focus({
     return saved == null ? false : saved;
   });
   const [autoOpened, setAutoOpened] = useState(false);
+  const [claimFilter, setClaimFilter] = useState(() => loadClaimFilter());
+  const [claimBusy, setClaimBusy] = useState(false);
+
+  const filteredReply = useMemo(() => filterByClaim(reply, claimFilter), [reply, claimFilter]);
+  const filteredFollow = useMemo(() => filterByClaim(follow, claimFilter), [follow, claimFilter]);
+
+  const unclaimedN = reply.filter((m) => !m.deal).length + follow.filter((m) => !m.deal).length;
+  const mineN = reply.filter((m) => m.deal?.mine).length + follow.filter((m) => m.deal?.mine).length;
+
+  async function claimOne(m) {
+    const address = m.from?.address;
+    if (!address || claimBusy) return;
+    setClaimBusy(true);
+    try {
+      const d = await api('/deals/claim', {
+        method: 'POST',
+        body: { address, threadId: m.threadId },
+      });
+      notify?.(`已认领 ${d.deal.scopeLabel}`, 'success');
+      onRefresh?.();
+    } catch (e) {
+      notify?.(e.message, 'error');
+      if (e.status === 409) onRefresh?.();
+    } finally {
+      setClaimBusy(false);
+    }
+  }
+
+  async function claimSelected() {
+    if (!checked?.size || claimBusy) return;
+    const items = [];
+    const seen = new Set();
+    for (const id of checked) {
+      const m = messages.find((x) => x.id === id);
+      if (!m || m.deal || m._section !== 'reply') continue;
+      const address = m.from?.address;
+      if (!address || seen.has(address.toLowerCase())) continue;
+      seen.add(address.toLowerCase());
+      items.push({ address, threadId: m.threadId });
+    }
+    if (!items.length) {
+      notify?.('所选邮件中没有未认领客户', 'info');
+      return;
+    }
+    setClaimBusy(true);
+    try {
+      const r = await api('/deals/claim-batch', { method: 'POST', body: { items } });
+      notify?.(
+        r.skippedCount
+          ? `已认领 ${r.claimedCount} 个客户，${r.skippedCount} 个跳过（可能已被同事认领）`
+          : `已认领 ${r.claimedCount} 个客户`,
+        r.claimedCount ? 'success' : 'info'
+      );
+      setChecked?.(new Set());
+      onRefresh?.();
+    } catch (e) {
+      notify?.(e.message, 'error');
+    } finally {
+      setClaimBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (overdue > 0 && !autoOpened && loadExpanded() == null) {
@@ -63,12 +126,17 @@ export default function Focus({
 
   const groupSizes = useMemo(() => {
     const map = new Map();
-    for (const m of reply) {
+    for (const m of filteredReply) {
       const k = m.priority.company?.key;
       map.set(k, (map.get(k) || 0) + 1);
     }
     return map;
-  }, [reply]);
+  }, [filteredReply]);
+
+  const setClaim = (v) => {
+    setClaimFilter(v);
+    saveClaimFilter(v);
+  };
 
   const jump = (id) => body.current?.querySelector('#' + id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -101,6 +169,8 @@ export default function Focus({
     onAction,
     variant,
     onFollowUp,
+    onClaim: variant === 'reply' ? claimOne : undefined,
+    claimBusy,
   });
 
   const today = new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' });
@@ -190,6 +260,7 @@ export default function Focus({
             <button type="button" className={groupMode !== 'customer' ? 'on' : ''} onClick={() => setGroupMode('priority')}>按优先级</button>
             <button type="button" className={groupMode === 'customer' ? 'on' : ''} onClick={() => setGroupMode('customer')}>按客户</button>
           </div>
+          <ClaimFilter value={claimFilter} onChange={setClaim} unclaimedN={unclaimedN} mineN={mineN} />
           <span className="focus-legend" title={`排序依据：客户等级 × 意图 × 等待时长。分层 SLA：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h · 默认 ${slaTier.default}h`}>
             <Info size={12} /> 智能排序
           </span>
@@ -198,6 +269,9 @@ export default function Focus({
         {checked && checked.size > 0 && (
           <div className="bulk" style={{ padding: '0 0 2px' }}>
             <span>已选 {checked.size}</span>
+            <button type="button" title="批量认领未跟客户" aria-label="批量认领" disabled={claimBusy} onClick={claimSelected}>
+              {claimBusy ? <Loader2 size={15} className="spin" /> : <Hand size={15} />}
+            </button>
             <button type="button" title="标为已读" aria-label="标为已读" onClick={() => onAction(ids, 'read')}><MailOpen size={15} /></button>
             <button type="button" title="归档" aria-label="归档" onClick={() => onAction(ids, 'archive')}><Archive size={15} /></button>
             <button type="button" title="删除" aria-label="删除" onClick={() => onAction(ids, 'trash')}><Trash2 size={15} /></button>
@@ -237,10 +311,21 @@ export default function Focus({
           </div>
         )}
 
-        {reply.length > 0 && (
-          <SectionHead id="fs-reply" title="需要你回复" count={reply.length} hint={`VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 询盘 ${slaTier.inquiry}h`} />
+        {filteredReply.length > 0 && (
+          <SectionHead
+            id="fs-reply"
+            title="需要你回复"
+            count={filteredReply.length}
+            hint={claimFilter !== 'all' ? `筛选后 ${filteredReply.length}/${reply.length}` : `VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 询盘 ${slaTier.inquiry}h`}
+          />
         )}
-        {reply.map((m) => {
+        {!loading && !error && data && reply.length > 0 && !filteredReply.length && (
+          <div className="empty focus-empty sm">
+            <p>当前筛选下没有待回复邮件</p>
+            <button type="button" className="btn-ghost sm" onClick={() => setClaim('all')}>查看全部</button>
+          </div>
+        )}
+        {filteredReply.map((m) => {
           const k = m.priority.company?.key;
           const head = groupMode === 'customer' && k !== lastGroup;
           lastGroup = k;
@@ -260,10 +345,21 @@ export default function Focus({
           );
         })}
 
-        {follow.length > 0 && (
-          <SectionHead id="fs-follow" title="等待对方回复" count={follow.length} hint={`发出 ${followDays} 天以上仍无回音`} />
+        {filteredFollow.length > 0 && (
+          <SectionHead
+            id="fs-follow"
+            title="等待对方回复"
+            count={filteredFollow.length}
+            hint={claimFilter !== 'all' ? `筛选后 ${filteredFollow.length}/${follow.length}` : `发出 ${followDays} 天以上仍无回音`}
+          />
         )}
-        {follow.map((m) => <Row key={m.id} {...rowProps(m, 'follow')} />)}
+        {!loading && !error && data && follow.length > 0 && !filteredFollow.length && claimFilter !== 'all' && !filteredReply.length && (
+          <div className="empty focus-empty sm">
+            <p>当前筛选下没有待跟进邮件</p>
+            <button type="button" className="btn-ghost sm" onClick={() => setClaim('all')}>查看全部</button>
+          </div>
+        )}
+        {filteredFollow.map((m) => <Row key={m.id} {...rowProps(m, 'follow')} />)}
 
         {(reply.length > 0 || follow.length > 0) && (
           <div className="focus-foot">

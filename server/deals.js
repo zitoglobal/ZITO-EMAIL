@@ -60,6 +60,7 @@ function publicDeal(row, viewerId) {
     note: row.note || '',
     claimedAt: row.claimed_at,
     stageUpdatedAt: row.stage_updated_at,
+    nextFollowAt: row.next_follow_at || null,
     lastThreadId: row.last_thread_id || null,
     lastAddress: row.last_address || null,
     owner: owner
@@ -69,6 +70,48 @@ function publicDeal(row, viewerId) {
     canRelease: row.owner_user_id === viewerId || userRow(viewerId)?.role === 'admin',
     canTakeover: row.owner_user_id !== viewerId && userRow(viewerId)?.role === 'admin',
   };
+}
+
+function logEvent(dealId, scopeKey, actorUserId, action, detail = '') {
+  db.prepare(
+    `INSERT INTO deal_events (deal_id, scope_key, actor_user_id, action, detail, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(dealId || null, scopeKey, actorUserId, action, String(detail || '').slice(0, 200), now());
+}
+
+/** 最近认领/阶段变更（按 scope 或 deal） */
+export function listEvents(viewerId, { dealId, address, limit = 12 } = {}) {
+  void viewerId;
+  let scopeKey = null;
+  if (dealId) {
+    const row = getDealById(dealId);
+    if (row) scopeKey = row.scope_key;
+  }
+  if (!scopeKey && address) {
+    const scope = scopeFromAddress(address);
+    if (scope) scopeKey = scope.key;
+  }
+  if (!scopeKey) return [];
+  const lim = Math.min(40, Math.max(1, Number(limit) || 12));
+  const rows = db
+    .prepare(
+      `SELECT id, deal_id, scope_key, actor_user_id, action, detail, created_at
+       FROM deal_events WHERE scope_key = ? ORDER BY created_at DESC LIMIT ?`
+    )
+    .all(scopeKey, lim);
+  return rows.map((r) => {
+    const actor = userRow(r.actor_user_id);
+    return {
+      id: r.id,
+      dealId: r.deal_id,
+      action: r.action,
+      detail: r.detail || '',
+      at: r.created_at,
+      actor: actor
+        ? { id: actor.id, name: actor.name || actor.email }
+        : { id: r.actor_user_id, name: '未知同事' },
+    };
+  });
 }
 
 export function getDealById(id) {
@@ -108,11 +151,13 @@ export function claim(userId, { address, threadId, note, force = false } = {}) {
       });
       throw err;
     }
+    const prev = userRow(existing.owner_user_id);
     db.prepare(
       `UPDATE deals SET owner_user_id = ?, claimed_at = ?, note = CASE WHEN ? != '' THEN ? ELSE note END,
         last_thread_id = COALESCE(?, last_thread_id), last_address = ?, updated_at = ?
        WHERE id = ?`
     ).run(userId, t, String(note || '').trim(), String(note || '').trim().slice(0, 200), threadId || null, scope.address, t, existing.id);
+    logEvent(existing.id, scope.key, userId, 'takeover', `从 ${prev?.name || prev?.email || '同事'} 接管`);
     return publicDeal(getDealById(existing.id), userId);
   }
 
@@ -122,6 +167,7 @@ export function claim(userId, { address, threadId, note, force = false } = {}) {
         last_thread_id = COALESCE(?, last_thread_id), last_address = ?, updated_at = ?
        WHERE id = ?`
     ).run(t, String(note || '').trim(), String(note || '').trim().slice(0, 200), threadId || null, scope.address, t, existing.id);
+    logEvent(existing.id, scope.key, userId, 'claim', '重新确认认领');
     return publicDeal(getDealById(existing.id), userId);
   }
 
@@ -142,7 +188,9 @@ export function claim(userId, { address, threadId, note, force = false } = {}) {
       scope.address,
       t
     );
-  return publicDeal(getDealById(Number(info.lastInsertRowid)), userId);
+  const newId = Number(info.lastInsertRowid);
+  logEvent(newId, scope.key, userId, 'claim', '认领客户');
+  return publicDeal(getDealById(newId), userId);
 }
 
 export function release(userId, dealId) {
@@ -152,6 +200,7 @@ export function release(userId, dealId) {
   if (row.owner_user_id !== userId && user?.role !== 'admin') {
     throw Object.assign(new Error('只有认领人或管理员可以释放'), { status: 403 });
   }
+  logEvent(row.id, row.scope_key, userId, 'release', userId === row.owner_user_id ? '释放认领' : '管理员释放认领');
   db.prepare('DELETE FROM deals WHERE id = ?').run(dealId);
   return { ok: true };
 }
@@ -164,7 +213,10 @@ export function setStage(userId, dealId, stage) {
     throw Object.assign(new Error('只有认领人或管理员可以改阶段'), { status: 403 });
   }
   const t = now();
+  const from = stageMeta(row.stage).label;
+  const to = stageMeta(stage).label;
   db.prepare('UPDATE deals SET stage = ?, stage_updated_at = ?, updated_at = ? WHERE id = ?').run(stage, t, t, dealId);
+  if (row.stage !== stage) logEvent(dealId, row.scope_key, userId, 'stage', `${from} → ${to}`);
   return publicDeal(getDealById(dealId), userId);
 }
 
@@ -176,6 +228,24 @@ export function setNote(userId, dealId, note) {
   }
   const t = now();
   db.prepare('UPDATE deals SET note = ?, updated_at = ? WHERE id = ?').run(String(note || '').trim().slice(0, 200), t, dealId);
+  return publicDeal(getDealById(dealId), userId);
+}
+
+/** nextFollowAt: 时间戳毫秒，或 null/'' 清除 */
+export function setNextFollowAt(userId, dealId, nextFollowAt) {
+  const row = getDealById(dealId);
+  if (!row) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
+  if (row.owner_user_id !== userId && userRow(userId)?.role !== 'admin') {
+    throw Object.assign(new Error('只有认领人或管理员可以设跟进日'), { status: 403 });
+  }
+  let ts = null;
+  if (nextFollowAt != null && nextFollowAt !== '') {
+    ts = Number(nextFollowAt);
+    if (!Number.isFinite(ts)) throw Object.assign(new Error('无效的跟进日期'), { status: 400 });
+  }
+  const t = now();
+  db.prepare('UPDATE deals SET next_follow_at = ?, updated_at = ? WHERE id = ?').run(ts, t, dealId);
+  if (ts) logEvent(dealId, row.scope_key, userId, 'follow', `下次跟进 ${new Date(ts).toLocaleDateString('zh-CN')}`);
   return publicDeal(getDealById(dealId), userId);
 }
 
@@ -202,4 +272,122 @@ export function attachDeals(viewerId, messages = []) {
     const deal = k ? byKey.get(k) : null;
     return deal ? { ...m, deal } : m;
   });
+}
+
+/** 我的客户 / 团队管线轻列表 */
+export function listDeals(viewerId, { owner = 'mine', stage, limit = 100 } = {}) {
+  const lim = Math.min(200, Math.max(1, Number(limit) || 100));
+  const clauses = [];
+  const params = [];
+  if (owner === 'mine') {
+    clauses.push('owner_user_id = ?');
+    params.push(viewerId);
+  } else if (owner === 'others') {
+    clauses.push('owner_user_id != ?');
+    params.push(viewerId);
+  }
+  if (stage && isValidStage(stage)) {
+    clauses.push('stage = ?');
+    params.push(stage);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const rows = db
+    .prepare(`SELECT * FROM deals ${where} ORDER BY updated_at DESC LIMIT ?`)
+    .all(...params, lim);
+  return rows.map((r) => publicDeal(r, viewerId));
+}
+
+/** 从主题/正文推断「发信后可推进到」的阶段（软建议，不自动改） */
+export function suggestStageAfterSend(currentStage, subject = '', text = '') {
+  const blob = `${subject}\n${text}`.toLowerCase();
+  let hint = null;
+  if (/\b(pi|proforma|invoice|payment|tt\b|wire|deposit|付款|形式发票|定金|尾款)\b/i.test(blob)) hint = 'payment';
+  else if (/\b(po\b|purchase order|bulk order|大货|订单确认|confirm.*(order|po))\b/i.test(blob)) hint = 'bulk';
+  else if (/\b(sample|lab dip|strike off|样品|色卡|产前样)\b/i.test(blob)) hint = 'sample';
+  else if (/\b(quot(e|ation)|offer|price list|报价|单价|fob|cif)\b/i.test(blob)) hint = 'quote';
+  else if (/\b(inquiry|enquiry|rfq|询盘|询价)\b/i.test(blob)) hint = 'inquiry';
+  if (!hint) return null;
+  const order = STAGES.map((s) => s.id);
+  const cur = order.indexOf(currentStage || 'inquiry');
+  const next = order.indexOf(hint);
+  // 仅建议前进（或同级确认到 quote/sample），不建议回退到更早阶段
+  if (next < 0) return null;
+  if (cur >= 0 && next < cur) return null;
+  if (hint === currentStage) return null;
+  const meta = stageMeta(hint);
+  return { stage: meta.id, label: meta.label, color: meta.color };
+}
+
+function firstClaimAddress(payload = {}, selfEmails = []) {
+  const self = new Set((selfEmails || []).map((e) => String(e || '').toLowerCase()));
+  const parseList = (v) => {
+    if (!v) return [];
+    if (Array.isArray(v)) {
+      return v
+        .map((x) => (typeof x === 'string' ? x : x?.address || ''))
+        .filter(Boolean);
+    }
+    return String(v)
+      .split(/[,;，；]/)
+      .map((s) => {
+        const m = s.match(/<?([^\s<>]+@[^\s<>]+)>?/);
+        return (m ? m[1] : s).trim();
+      })
+      .filter((a) => a.includes('@'));
+  };
+  const candidates = [
+    ...parseList(payload.to),
+    ...parseList(payload.cc),
+    payload.replyTo?.from?.address,
+    payload.replyTo?.address,
+  ].filter(Boolean);
+  for (const raw of candidates) {
+    const a = String(raw).trim().toLowerCase();
+    if (!a.includes('@') || self.has(a)) continue;
+    if (scopeFromAddress(a)) return a;
+  }
+  return null;
+}
+
+/**
+ * 发信后认领闭环。mode: auto | off
+ * - 未认领 / 自己已认领 → auto 时认领或刷新
+ * - 同事已认领 → 不抢，返回 conflict
+ */
+export function afterOutboundSend(userId, payload = {}, { mode = 'auto', selfEmails = [] } = {}) {
+  if (mode === 'off') return { mode, skipped: 'off' };
+  const address = firstClaimAddress(payload, selfEmails);
+  if (!address) return { mode, skipped: 'no_address' };
+  const threadId = payload.replyTo?.threadId || payload.threadId || null;
+  const subject = payload.subject || '';
+  const text = String(payload.text || payload.bodyText || '').slice(0, 2000);
+  const existing = lookup(userId, { address, threadId });
+  let deal = existing.deal;
+  let claimed = false;
+  let conflict = false;
+  const wasMine = !!deal?.mine;
+
+  if (deal && !deal.mine) {
+    conflict = true;
+  } else if (mode === 'auto') {
+    try {
+      deal = claim(userId, { address, threadId, note: '' });
+      claimed = !wasMine;
+    } catch (e) {
+      if (e.status === 409) {
+        conflict = true;
+        deal = e.deal || deal;
+      } else throw e;
+    }
+  }
+
+  const stageSuggest = deal?.mine ? suggestStageAfterSend(deal.stage, subject, text) : null;
+  return {
+    mode,
+    address,
+    deal,
+    claimed: !!claimed && !!deal?.mine,
+    conflict,
+    stageSuggest,
+  };
 }
