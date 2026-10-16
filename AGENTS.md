@@ -14,3 +14,8 @@
 - Nginx 配置源文件：`deploy/nginx-zito-mail.conf`；`/api/events` 必须保持 `proxy_buffering off`
 - 常用命令：`python deploy/deploy.py app` / `nginx` / `cert` / `status`
 - 不要改动同机其它站点的 Nginx/进程配置
+
+## 与 ZITO.AI 工作区的链接
+- 真实仓库目录：`D:\ZITO-AI-EMAIL`
+- 在 `D:\ZITO.AI项目` 中通过 junction `ZITO-EMAIL/` 可见；也可打开 `D:\ZITO.AI项目\ZITO.AI.code-workspace`
+- GitHub：`https://github.com/zitoglobal/ZITO-EMAIL`
