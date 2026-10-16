@@ -144,7 +144,35 @@ export function scoreRow(idx, row, { slaHours = 24, at = now() } = {}) {
   if (TIER_LABEL[tier]) reasons.push(tier === 'new' && signals.includes('inquiry') ? '新询盘' : TIER_LABEL[tier]);
   for (const s of signals) if (SIGNAL_LABEL[s] && s !== 'question') reasons.push(SIGNAL_LABEL[s]);
   if (!direct && to.length) reasons.push('抄送我');
-  return { score, level, tier, signals, reasons, waitingHours: Math.round(waitingHours * 10) / 10, overdue, slaHours };
+  const waitingHoursR = Math.round(waitingHours * 10) / 10;
+  const whyParts = [...reasons];
+  if (slaHours != null) whyParts.push(`时限 ${slaHours}h`);
+  if (overdue) whyParts.push('已超时未回');
+  else if (waitingHoursR >= 1) whyParts.push(`已等 ${waitingHoursR}h`);
+  return {
+    score,
+    level,
+    tier,
+    signals,
+    reasons,
+    why: [...new Set(whyParts.filter(Boolean))].slice(0, 6).join(' · '),
+    waitingHours: waitingHoursR,
+    overdue,
+    slaHours,
+  };
+}
+
+function followWhy(f) {
+  const parts = [];
+  if (f.due) parts.push('跟进日到期');
+  else if (f.nextFollowAt) parts.push('已设跟进日');
+  if (f.tier === 'vip') parts.push('VIP');
+  else if (f.tier === 'customer') parts.push('老客户');
+  else if (f.tier === 'new') parts.push('新联系人');
+  for (const s of f.signals || []) if (SIGNAL_LABEL[s]) parts.push(SIGNAL_LABEL[s]);
+  if (f.days != null) parts.push(`${f.days} 天未回`);
+  parts.push('对方尚未回复');
+  return [...new Set(parts.filter(Boolean))].slice(0, 6).join(' · ');
 }
 
 // ---------- 今日待办 ----------
@@ -279,9 +307,11 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     const days = Math.floor((at - r.date) / DAY);
     const signals = signalsFrom(r);
     const score = (TIER_SCORE[tier] || 0) + Math.min(30, days * 4) + (signals.includes('inquiry') || signals.includes('sample') ? 10 : 0);
+    const follow = { days, tier, to: external, score, company: companyOf(idx, external), signals };
+    follow.why = followWhy(follow);
     followups.push({
       ...rowToMessage(r),
-      follow: { days, tier, to: external, score, company: companyOf(idx, external), signals },
+      follow,
     });
   }
   followups.sort((a, b) => b.follow.score - a.follow.score);
@@ -326,19 +356,21 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     if (sent.my_last && sent.my_last > sent.date) continue;
     followScope.add(d.scopeKey);
     const to = { name: '', address: d.lastAddress || '' };
+    const follow = {
+      days: Math.floor((atNow - sent.date) / DAY),
+      tier: tierOf(idx, d.lastAddress),
+      to,
+      score: 120,
+      company: companyOf(idx, d.lastAddress),
+      signals: signalsFrom(sent),
+      nextFollowAt: d.nextFollowAt,
+      due: true,
+    };
+    follow.why = followWhy(follow);
     followWithDeals.push({
       ...rowToMessage(sent),
       deal: d,
-      follow: {
-        days: Math.floor((atNow - sent.date) / DAY),
-        tier: tierOf(idx, d.lastAddress),
-        to,
-        score: 120,
-        company: companyOf(idx, d.lastAddress),
-        signals: signalsFrom(sent),
-        nextFollowAt: d.nextFollowAt,
-        due: true,
-      },
+      follow,
       _section: undefined,
     });
   }
@@ -350,15 +382,14 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       const due = nf <= atNow;
       // 未到期：仍可在列表但降权；到期强提升
       const dueBoost = due ? 80 : nf <= atNow + DAY ? 40 : nf <= atNow + 3 * DAY ? 15 : 0;
-      return {
-        ...m,
-        follow: {
-          ...m.follow,
-          nextFollowAt: nf,
-          score: (m.follow?.score || 0) + dueBoost,
-          due,
-        },
+      const follow = {
+        ...m.follow,
+        nextFollowAt: nf,
+        score: (m.follow?.score || 0) + dueBoost,
+        due,
       };
+      follow.why = followWhy(follow);
+      return { ...m, follow };
     })
     .filter((m) => {
       const nf = m.follow?.nextFollowAt;
@@ -395,6 +426,73 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     },
     settings: { slaHours, followDays, slaByTier: tiers },
   };
+}
+
+/**
+ * 单封验真：是否在今日待办/等待，以及进/出原因（供 UI 与排查）
+ */
+export function explainMessage(userId, messageId, settings = {}) {
+  const id = Number(messageId);
+  if (!Number.isInteger(id)) return { inFocus: false, section: null, why: '', out: ['无效邮件'] };
+  const data = focus(userId, settings);
+  const inReply = data.reply.find((m) => m.id === id);
+  if (inReply) {
+    return {
+      inFocus: true,
+      section: 'reply',
+      why: inReply.priority?.why || (inReply.priority?.reasons || []).join(' · '),
+      out: [],
+      priority: inReply.priority,
+    };
+  }
+  const inFollow = data.followups.find((m) => m.id === id);
+  if (inFollow) {
+    return {
+      inFocus: true,
+      section: 'follow',
+      why: inFollow.follow?.why || '',
+      out: [],
+      follow: inFollow.follow,
+    };
+  }
+
+  const row = db
+    .prepare(
+      `SELECT m.*, f.special_use, b.email AS mb_email, ${MY_LAST_SQL} AS my_last, ${THEIR_LAST_SQL} AS their_last
+       FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
+       LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
+       WHERE b.user_id = ? AND m.id = ?`
+    )
+    .get(userId, id);
+  if (!row) return { inFocus: false, section: null, why: '', out: ['邮件不存在或不属于你'] };
+
+  const out = [];
+  const at = now();
+  const idx = relationIndex(userId);
+  if (row.special_use === '\\Inbox') {
+    const tier = tierOf(idx, row.from_addr, row.category);
+    if (handled(row)) {
+      if (row.answered || (row.my_last && row.my_last > row.date)) out.push('你已回复（不再进待办）');
+      if (row.done_at) out.push('已标记处理完成');
+      if (row.snooze_until) out.push('稍后处理中');
+    }
+    if (!['vip', 'customer', 'new', 'colleague'].includes(tier)) out.push(`关系档位「${tier}」不进今日待办`);
+    if (row.category === 'notification' && tier !== 'vip' && tier !== 'customer') out.push('通知类邮件已过滤');
+    if (at - row.date > REPLY_WINDOW) out.push('超出待办时间窗（21 天）');
+    if (!out.length) out.push('未进入候选（可能被会话去重或硬帽截断）');
+  } else if (row.special_use === '\\Sent') {
+    if (row.nudge_off) out.push('已标记无需跟进');
+    if (row.their_last && row.their_last > row.date) out.push('对方已回复');
+    if (row.my_last && row.my_last > row.date) out.push('你有更新的发信');
+    const followDays = Number(settings.followupDays) || 3;
+    if (at - row.date < followDays * DAY) out.push(`未满跟进天数（${followDays} 天）`);
+    if (!expectsReply(row.subject, row.snippet)) out.push('主题/摘要判断为无需跟进');
+    if (at - row.date > FOLLOW_WINDOW) out.push('超出等待时间窗（30 天）');
+    if (!out.length) out.push('未进入等待列表');
+  } else {
+    out.push('非收件箱/已发送，不参与今日待办与等待');
+  }
+  return { inFocus: false, section: null, why: '', out };
 }
 
 /** 认领客户到期时，用最近发给对方的已发送邮件挂到「等待」 */

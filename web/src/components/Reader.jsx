@@ -686,8 +686,10 @@ export default function Reader({
                     </span>
                   )}
                   <small>
-                    {listItem.priority.reasons.join(' · ')}
-                    {listItem.priority.slaHours != null ? ` · 时限 ${listItem.priority.slaHours}h` : ''}
+                    {listItem.priority.why ||
+                      [...(listItem.priority.reasons || []), listItem.priority.slaHours != null ? `时限 ${listItem.priority.slaHours}h` : '']
+                        .filter(Boolean)
+                        .join(' · ')}
                   </small>
                 </div>
                 <div className="strip-actions">
@@ -701,7 +703,10 @@ export default function Reader({
                 <Send size={15} />
                 <div>
                   <b>{listItem.follow.days} 天前发出，对方未回</b>
-                  <small>{displayName(listItem.follow.to)}</small>
+                  <small>
+                    {listItem.follow.why || displayName(listItem.follow.to)}
+                    {listItem.follow.why && listItem.follow.to ? ` · ${displayName(listItem.follow.to)}` : ''}
+                  </small>
                 </div>
                 <div className="strip-actions">
                   <button type="button" className="btn-ghost sm" onClick={() => act('nofollow')}><BellOff size={13} /> 无需跟进</button>

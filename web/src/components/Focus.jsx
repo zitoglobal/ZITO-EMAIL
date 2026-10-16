@@ -261,8 +261,11 @@ export default function Focus({
             <button type="button" className={groupMode === 'customer' ? 'on' : ''} onClick={() => setGroupMode('customer')}>按客户</button>
           </div>
           <ClaimFilter value={claimFilter} onChange={setClaim} unclaimedN={unclaimedN} mineN={mineN} />
-          <span className="focus-legend" title={`排序依据：客户等级 × 意图 × 等待时长。分层 SLA：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h · 默认 ${slaTier.default}h`}>
-            <Info size={12} /> 智能排序
+          <span
+            className="focus-legend"
+            title={`每行「为何待办/等待」可验真。排序：客户等级 × 意图 × 等待时长。SLA：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h · 默认 ${slaTier.default}h · 跟进 ${followDays} 天`}
+          >
+            <Info size={12} /> 验真说明
           </span>
         </div>
 

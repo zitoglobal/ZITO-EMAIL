@@ -13,6 +13,7 @@ import Digest from './components/Digest.jsx';
 import Settings from './components/Settings.jsx';
 import Focus from './components/Focus.jsx';
 import Waiting from './components/Waiting.jsx';
+import AdminEmpty from './components/AdminEmpty.jsx';
 import Deals from './components/Deals.jsx';
 import Insights from './components/Insights.jsx';
 import CustomerPanel from './components/CustomerPanel.jsx';
@@ -1171,7 +1172,14 @@ export default function App() {
         </div>
       ) : null}
 
-      {view.box === 'scheduled' ? (
+      {user.role === 'admin' && !mailboxes.length && ['today', 'waiting', 'inbox', 'unread', 'flagged', 'sent', 'deals', 'insights'].includes(view.box) ? (
+        <AdminEmpty
+          user={user}
+          onAddMailbox={() => setModal({ type: 'add' })}
+          onOpenTeam={() => setModal({ type: 'settings', tab: 'team' })}
+          onOpenSettings={() => setModal({ type: 'settings', tab: 'preferences' })}
+        />
+      ) : view.box === 'scheduled' ? (
         <Outbox
           mailboxMap={mailboxMap}
           onMenu={() => setSidebarOpen(true)}

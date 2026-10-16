@@ -879,6 +879,30 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
   flex: none; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; text-transform: none;
   color: var(--accent-ink); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; line-height: 16px;
 }
+.admin-empty-pane {
+  display: flex; align-items: center; justify-content: center; padding: 32px 24px; min-height: 0;
+  background:
+    radial-gradient(120% 80% at 10% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%),
+    var(--bg);
+}
+.admin-empty {
+  max-width: 440px; width: 100%;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.admin-empty-badge {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+  font-size: 12px; font-weight: 650; color: var(--accent-ink);
+  background: var(--accent-soft); border-radius: 999px; padding: 4px 10px;
+}
+.admin-empty h1 {
+  margin: 0; font-size: clamp(1.45rem, 2.4vw, 1.85rem); font-weight: 700; letter-spacing: -0.03em; line-height: 1.25;
+}
+.admin-empty > p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.admin-empty-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.admin-empty-hints {
+  margin: 8px 0 0; padding: 0 0 0 1.1em; color: var(--muted); font-size: 12.5px; line-height: 1.65;
+}
+.admin-empty-hints li { margin: 0 0 2px; }
 .focus-ctas {
   display: flex; flex-direction: column; align-items: stretch; gap: 4px; flex: none; align-self: center;
   margin-left: 4px; margin-right: 2px; opacity: 0.92; transition: opacity 0.12s var(--ease);

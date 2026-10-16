@@ -158,8 +158,9 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
         )}
         {(!compact || focus) && !(focus && why) && <Chips m={m} variant={variant} />}
         {why && (
-          <div className="why-priority" title="为何出现在今日待办">
-            <span className="why-label">为何优先</span>{why}
+          <div className="why-priority" title={variant === 'follow' ? '为何出现在等待对方' : '为何出现在今日待办'}>
+            <span className="why-label">{variant === 'follow' ? '为何等待' : '为何待办'}</span>
+            {why}
           </div>
         )}
         {!focus && m.category !== 'people' && m.specialUse === '\\Inbox' && (

@@ -59,7 +59,18 @@ function httpsPostJson(urlStr, bodyObj, { headers = {}, timeoutMs = AI_TIMEOUT_M
   });
 }
 
-async function chat(messages, { json = false, temperature = 0.4, maxTokens = 1500 } = {}) {
+function friendlyAiError(e) {
+  const msg = String(e?.message || e || '');
+  if (/超时|ETIMEDOUT|timeout/i.test(msg)) return new Error('AI 服务超时，请稍后重试');
+  if (/ECONNRESET|ECONNREFUSED|ENOTFOUND|socket|network|fetch failed/i.test(msg)) {
+    return new Error('AI 服务暂时不可达，请稍后重试');
+  }
+  if (/返回错误 401|Unauthorized/i.test(msg)) return new Error('AI 密钥无效，请检查服务器 AI_API_KEY');
+  if (/返回错误 429/i.test(msg)) return new Error('AI 调用过于频繁，请稍后再试');
+  return e instanceof Error ? e : new Error(msg || 'AI 调用失败');
+}
+
+async function chatOnce(messages, { json = false, temperature = 0.4, maxTokens = 1500 } = {}) {
   if (!aiConfigured()) throw new Error('AI 未配置：请在服务器 .env 中设置 AI_API_KEY（以及 AI_BASE_URL / AI_MODEL）');
   const { status, text } = await httpsPostJson(
     `${BASE_URL()}/chat/completions`,
@@ -89,6 +100,26 @@ async function chat(messages, { json = false, temperature = 0.4, maxTokens = 150
   } catch {
     throw new Error('AI 返回格式异常，请重试');
   }
+}
+
+/** 网络类错误自动重试 1 次，并转成可读中文错误 */
+async function chat(messages, opts = {}) {
+  let last;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await chatOnce(messages, opts);
+    } catch (e) {
+      last = e;
+      const msg = String(e?.message || e);
+      const retryable = /超时|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|socket|network|fetch failed/i.test(msg);
+      if (attempt === 0 && retryable) {
+        await new Promise((r) => setTimeout(r, 700));
+        continue;
+      }
+      throw friendlyAiError(e);
+    }
+  }
+  throw friendlyAiError(last);
 }
 
 function mailContext(m) {

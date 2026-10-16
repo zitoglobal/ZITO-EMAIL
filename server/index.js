@@ -82,6 +82,22 @@ const wrap = (fn) => (req, res, next) =>
     res.status(e.status || 400).json(body);
   });
 
+/** IMAP 副作用失败时：本地状态已改则不回滚，只标邮箱错误（避免整页操作失败） */
+function softImapFail(mb, e) {
+  const msg = imap.friendlyImapError(e);
+  console.warn('[imap-soft]', mb?.email || mb?.id, msg);
+  if (mb?.id) {
+    try {
+      repo.setMailboxStatus(mb.id, 'error', msg);
+      emit(mb.user_id, 'mailbox', { id: mb.id, status: 'error', error: msg });
+      emit(mb.user_id, 'sync', { mailboxId: mb.id, local: true });
+    } catch {
+      /* ignore */
+    }
+  }
+  return msg;
+}
+
 const buckets = new Map();
 function rateLimit(key, max, windowMs) {
   const t = Date.now();
@@ -167,11 +183,13 @@ app.get('/api/health', (req, res) => {
   try {
     errorMailboxes = repo.errorMailboxCount();
   } catch (_) {}
+  const mailSecret = String(process.env.MAIL_SECRET || '').trim();
   res.status(dbOk ? 200 : 503).json({
     ok: dbOk,
     db: dbOk ? 'up' : 'down',
     uptime: Math.round(process.uptime()),
     aiConfigured: ai.aiConfigured(),
+    mailSecretConfigured: !!(mailSecret && mailSecret !== 'change-me-to-a-long-random-string'),
     lastBackupAt: backup.lastBackupAt(),
     errorMailboxes,
   });
@@ -325,6 +343,17 @@ app.get(
     data.reply = labels.attachLabels(req.user.id, data.reply || []);
     data.followups = labels.attachLabels(req.user.id, data.followups || []);
     res.json(data);
+  })
+);
+
+/** 单封：为何进/出今日待办或等待 */
+app.get(
+  '/api/focus/explain',
+  auth,
+  wrap(async (req, res) => {
+    const id = Number(req.query.id || req.query.messageId);
+    if (!Number.isInteger(id)) throw httpError(400, '请提供邮件 id');
+    res.json(priority.explainMessage(req.user.id, id, users.publicUser(req.user).settings));
   })
 );
 
@@ -973,8 +1002,12 @@ app.post(
         const seen = action === 'read';
         repo.patchMessages(ids, { seen: seen ? 1 : 0 });
         await each(async (g) => {
-          await imap.setFlags(g.mb, g.folder, g.rows.map((r) => r.uid), { seen });
-          sync.touch(g.mb.id, g.folder);
+          try {
+            await imap.setFlags(g.mb, g.folder, g.rows.map((r) => r.uid), { seen });
+            sync.touch(g.mb.id, g.folder);
+          } catch (e) {
+            softImapFail(g.mb, e);
+          }
         });
         break;
       }
@@ -982,7 +1015,13 @@ app.post(
       case 'unflag': {
         const flagged = action === 'flag';
         repo.patchMessages(ids, { flagged: flagged ? 1 : 0 });
-        await each((g) => imap.setFlags(g.mb, g.folder, g.rows.map((r) => r.uid), { flagged }));
+        await each(async (g) => {
+          try {
+            await imap.setFlags(g.mb, g.folder, g.rows.map((r) => r.uid), { flagged });
+          } catch (e) {
+            softImapFail(g.mb, e);
+          }
+        });
         break;
       }
       case 'pin':
