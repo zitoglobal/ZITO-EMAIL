@@ -1014,8 +1014,8 @@ export default function App() {
   }
   if (boot === 'auth' || !user) return <Auth onAuthed={onAuthed} />;
 
-  // 测试账号免绑定：登录即进入，内置演示邮件
-  if (!mailboxes.length && user.role !== 'tester') {
+  // 管理员 / 测试账号免绑定：登录即进主界面（管理员可先管团队，稍后再绑邮箱）
+  if (!mailboxes.length && user.role !== 'tester' && user.role !== 'admin') {
     return (
       <div className="login-page onboarding">
         <div className="login-hero">
