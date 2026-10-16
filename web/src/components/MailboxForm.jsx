@@ -44,10 +44,21 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
         const p = await api('/providers/detect' + qs({ email }));
         setDetected(p);
         if (p?.imap && !advTouched.current) {
-          setAdv((a) => ({ ...a, imapHost: p.imap.host, imapPort: p.imap.port, imapSecure: p.imap.secure, smtpHost: p.smtp.host, smtpPort: p.smtp.port, smtpSecure: p.smtp.secure }));
+          setAdv((a) => ({
+            ...a,
+            imapHost: p.imap.host,
+            imapPort: p.imap.port,
+            imapSecure: p.imap.secure,
+            smtpHost: p.smtp.host,
+            smtpPort: p.smtp.port,
+            smtpSecure: p.smtp.secure,
+          }));
         }
+        // 未能识别服务商时自动展开服务器设置，减少「无法解析主机」误绑
+        if (p?.key === 'custom' || p?.hint?.includes('未能自动识别')) setShowAdv(true);
       } catch {
         setDetected(null);
+        setShowAdv(true);
       }
     }, 450);
   }, [email, editing]);
@@ -68,7 +79,9 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
         : await api('/mailboxes', { method: 'POST', body: { email, password, name, color, advanced } });
       onDone(res);
     } catch (err) {
-      setError(err.message);
+      const msg = err.message || '绑定失败';
+      setError(msg);
+      if (/无法解析|ENOTFOUND|主机|IMAP|SMTP|服务器/i.test(msg)) setShowAdv(true);
     } finally {
       setLoading(false);
     }
@@ -99,6 +112,12 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
           <Server size={14} />
           <div>
             <b>已识别：{detected.name}</b>
+            {detected.imap?.host && (
+              <div className="provider-hosts">
+                IMAP {detected.imap.host}:{detected.imap.port}
+                {detected.smtp?.host ? ` · SMTP ${detected.smtp.host}:${detected.smtp.port}` : ''}
+              </div>
+            )}
             {detected.hint && <div>{detected.hint}</div>}
           </div>
         </div>

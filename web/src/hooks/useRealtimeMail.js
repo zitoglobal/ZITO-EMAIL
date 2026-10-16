@@ -26,6 +26,7 @@ export function useRealtimeMail({
   useEffect(() => {
     if (boot !== 'ready') return;
     const es = new EventSource('/api/events');
+    let fastTimer;
     const parse = (e) => {
       try {
         return JSON.parse(e.data);
@@ -34,7 +35,16 @@ export function useRealtimeMail({
       }
     };
 
-    es.addEventListener('sync', () => scheduleRef.current());
+    es.addEventListener('sync', (e) => {
+      const d = parse(e);
+      // Sent / 发信本地同步：更快刷新，稳住今日待办与等待
+      if (d?.sent || d?.deal) {
+        clearTimeout(fastTimer);
+        fastTimer = setTimeout(() => scheduleRef.current(), 200);
+      } else {
+        scheduleRef.current();
+      }
+    });
     es.addEventListener('mailbox', (e) => {
       const d = parse(e);
       setMailboxes((list) =>
@@ -44,7 +54,7 @@ export function useRealtimeMail({
             : m
         )
       );
-      if (d.status === 'ok') scheduleRef.current();
+      if (d.status === 'ok' || d.status === 'error') scheduleRef.current();
     });
     es.addEventListener('new', (e) => {
       const d = parse(e);
@@ -115,6 +125,9 @@ export function useRealtimeMail({
       setOutboxVersion((v) => v + 1);
       scheduleRef.current();
     });
-    return () => es.close();
+    return () => {
+      clearTimeout(fastTimer);
+      es.close();
+    };
   }, [boot, notify, setMailboxes, setOutboxVersion, settingsRef, mbRef]);
 }

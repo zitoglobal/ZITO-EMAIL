@@ -456,6 +456,27 @@ export default function App() {
           setSelectedId(next && window.innerWidth > 900 ? next.id : null);
         }
         setList((l) => ({ ...l, messages: l.messages.filter((m) => !ids.includes(m.id)), pinned: l.pinned.filter((m) => !ids.includes(m.id)) }));
+        if ((view.box === 'today' || view.box === 'waiting') && (action === 'done' || action === 'nofollow')) {
+          const idSet = new Set(ids);
+          setFocusData((d) => {
+            if (!d) return d;
+            const wasReply = (d.reply || []).filter((m) => idSet.has(m.id)).length;
+            const wasFollow = (d.followups || []).filter((m) => idSet.has(m.id)).length;
+            return {
+              ...d,
+              reply: (d.reply || []).filter((m) => !idSet.has(m.id)),
+              followups: (d.followups || []).filter((m) => !idSet.has(m.id)),
+              stats: d.stats
+                ? {
+                    ...d.stats,
+                    needReply: Math.max(0, (d.stats.needReply || 0) - wasReply),
+                    followups: Math.max(0, (d.stats.followups || 0) - wasFollow),
+                    handledToday: (d.stats.handledToday || 0) + (action === 'done' ? wasReply : 0),
+                  }
+                : d.stats,
+            };
+          });
+        }
       } else {
         const patch = {
           read: { seen: true }, unread: { seen: false }, flag: { flagged: true }, unflag: { flagged: false }, pin: { pinned: true }, unpin: { pinned: false },
@@ -654,6 +675,15 @@ export default function App() {
 
   function openCompose(mode = 'new', msg = null, extra = {}) {
     if (mode !== 'new' && !msg) return;
+    if (!mailboxes.length) {
+      notify(
+        user?.role === 'admin' ? '请先绑定邮箱后再写信' : '请先绑定邮箱',
+        'info',
+        { label: '去绑定', fn: () => setModal({ type: 'add' }) },
+        6000
+      );
+      return;
+    }
     pushComposer(buildComposeState(mode, msg, composeCtx, extra));
   }
 
@@ -735,12 +765,29 @@ export default function App() {
         setList((l) => ({
           ...l,
           messages:
-            view.box === 'today'
+            view.box === 'today' || view.box === 'waiting'
               ? l.messages.filter((m) => m.id !== rid)
               : l.messages.map((m) => (m.id === rid ? { ...m, answered: true, awaiting: false, overdue: false } : m)),
         }));
+        setFocusData((d) => {
+          if (!d) return d;
+          return {
+            ...d,
+            reply: (d.reply || []).filter((m) => m.id !== rid),
+            stats: d.stats
+              ? {
+                  ...d.stats,
+                  needReply: Math.max(0, (d.stats.needReply || 0) - 1),
+                  handledToday: (d.stats.handledToday || 0) + 1,
+                }
+              : d.stats,
+          };
+        });
       }
       loadState();
+      // 发信后尽快拉 Sent / 刷新 Focus，缩短「已回仍待办」窗口
+      setTimeout(() => loadList({ silent: true }), 800);
+      setTimeout(() => loadList({ silent: true }), 2800);
       setOutboxVersion((v) => v + 1);
       return true;
     } catch (e) {

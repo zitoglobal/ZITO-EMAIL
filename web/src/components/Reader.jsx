@@ -4,7 +4,7 @@ import {
   AlertTriangle, CheckCircle2, ListChecks, FolderInput, Eye, Clock, Pin, ShieldAlert, ShieldCheck, MoreHorizontal, ImageOff,
   BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass, Tag, Users,
 } from 'lucide-react';
-import { api } from '../api.js';
+import { api, qs } from '../api.js';
 import {
   addrString, avatarColor, detectMailLang, displayName, folderLabel, formatFullDate, formatListDate, formatSize, hasRemoteImages, initials,
   mostlyChinese, normalizeTranslateTarget, relativeTime, replyIdeas, smartReplyInstruction, snoozePresets, sortFolders,
@@ -260,6 +260,7 @@ export default function Reader({
   const [pinning, setPinning] = useState(false);
   const [intel, setIntel] = useState(null); // 'summary' | 'translate' | null
   const [translateLayout, setTranslateLayout] = useState(() => localStorage.getItem('zm_translate_layout') || 'split');
+  const [focusExplain, setFocusExplain] = useState(null);
   const alive = useRef(0);
   const scroller = useRef();
 
@@ -298,10 +299,23 @@ export default function Reader({
     setQuick('');
     setPinning(false);
     setIntel(null);
+    setFocusExplain(null);
     setExpanded(new Set([id]));
     scroller.current?.scrollTo(0, 0);
 
     loadDetail(id, token, { markSeen: true });
+    // 读信验真：已在今日待办/等待则用列表 why；否则问后端为何未进
+    if (listItem?._section === 'reply' || listItem?._section === 'follow') {
+      setFocusExplain({
+        inFocus: true,
+        section: listItem._section,
+        why: listItem.priority?.why || listItem.follow?.why || '',
+      });
+    } else {
+      api('/focus/explain' + qs({ id }))
+        .then((d) => token === alive.current && setFocusExplain(d))
+        .catch(() => {});
+    }
     if (settings.conversationView !== false) {
       api(`/messages/${id}/thread`)
         .then(({ messages }) => {
@@ -711,6 +725,15 @@ export default function Reader({
                 <div className="strip-actions">
                   <button type="button" className="btn-ghost sm" onClick={() => act('nofollow')}><BellOff size={13} /> 无需跟进</button>
                   <button type="button" className="btn-primary sm" onClick={() => onFollowUp?.(listItem)}><Reply size={13} /> 写跟进</button>
+                </div>
+              </div>
+            )}
+            {!listItem?._section && focusExplain && !focusExplain.inFocus && (focusExplain.out || []).length > 0 && (
+              <div className="await-strip explain-out" role="status">
+                <Hourglass size={15} />
+                <div>
+                  <b>未进入今日待办 / 等待</b>
+                  <small>{focusExplain.out.slice(0, 4).join(' · ')}</small>
                 </div>
               </div>
             )}
