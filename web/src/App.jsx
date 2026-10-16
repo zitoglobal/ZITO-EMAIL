@@ -17,7 +17,7 @@ import CustomerPanel from './components/CustomerPanel.jsx';
 import ColumnSplitter from './components/ColumnSplitter.jsx';
 import Palette from './components/Palette.jsx';
 import SaveSearchModal from './components/SaveSearchModal.jsx';
-import { SMART_VIEWS, dayStart, displayName, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
+import { SMART_VIEWS, dayStart, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
 import { buildComposeState, signatureHtml, toForm } from './compose.js';
 import {
   LAYOUT_LIMITS,
@@ -27,9 +27,8 @@ import {
   saveLayoutLocal,
   widthsFromSettings,
 } from './layout.js';
-
-const PAGE = 50;
-const DEFAULT_VIEW = { mailboxId: 'all', box: 'today' };
+import { ACTION_TEXT, DEFAULT_VIEW, FOLLOW_UP_AI, PAGE, REMOVING, SHORTCUTS, UNDO_OF } from './appConstants.js';
+import { useRealtimeMail } from './hooks/useRealtimeMail.js';
 
 function mergeLocalLabels(current = [], add = [], remove = [], allLabels = []) {
   const byId = new Map((current || []).map((l) => [l.id, l]));
@@ -42,20 +41,6 @@ function mergeLocalLabels(current = [], add = [], remove = [], allLabels = []) {
   return [...byId.values()];
 }
 
-const REMOVING = new Set(['archive', 'trash', 'spam', 'notspam', 'move', 'delete']);
-const ACTION_TEXT = {
-  archive: '已归档', trash: '已移到已删除', spam: '已标记为垃圾邮件', notspam: '已移回收件箱', move: '已移动', delete: '已彻底删除', snooze: '已设为稍后提醒',
-  done: '已标记为处理完成', nofollow: '已移出待跟进',
-};
-const UNDO_OF = { done: 'undone', nofollow: 'follow' };
-
-const SHORTCUTS = [
-  ['C', '写邮件'], ['R / A / F', '回复 / 全部回复 / 转发'], ['D', '标记已处理（移出待回复）'], ['E', '归档'], ['#  或 Delete', '删除'], ['!', '垃圾邮件'],
-  ['B', '稍后提醒（明天 8:00）'], ['S', '星标'], ['P', '置顶'], ['U', '标为未读'], ['X', '勾选当前邮件'], ['J / K 或 ↓ / ↑', '下一封 / 上一封'], ['/', '搜索'],
-  ['G 然后 T / W / I / U / S', '前往 今日待办 / 等待 / 收件箱 / 未读 / 星标'], ['Ctrl + K', '搜索邮件与命令'], ['Ctrl + Enter', '发送邮件'], ['Ctrl + S', '保存草稿'], ['Esc', '关闭阅读 / 最小化写信窗口'], ['?', '显示快捷键'],
-];
-
-const FOLLOW_UP_AI = '礼貌地跟进这封邮件：询问对方是否已查看、有无疑问，并推动下一步（如确认订单细节或安排样品），保持简短';
 function followUpBody(person, signature) {
   const first = String(person?.name || '').split(/\s+/)[0] || 'there';
   return `<div>Hi ${first},</div><div><br></div><div>Just following up on my email below — have you had a chance to review it? I'm happy to answer any questions or adjust the details if needed.</div><div><br></div><div>Looking forward to hearing from you.</div><br>${signatureHtml(signature)}`;
@@ -290,6 +275,24 @@ export default function App() {
     setDeep(false);
   }
 
+  /** 通知点达：切换视图时保留目标邮件选中 */
+  const openMessage = useCallback((id, { box = 'today', mailboxId = 'all' } = {}) => {
+    if (!id) return;
+    const next = { mailboxId, box };
+    setViewState(next);
+    localStorage.setItem('zm_view', JSON.stringify(next));
+    setChecked(new Set());
+    setCategory('all');
+    setQ('');
+    setDeep(false);
+    setSelectedId(id);
+    setSidebarOpen(false);
+  }, []);
+
+  const goToday = useCallback(() => {
+    setView({ mailboxId: 'all', box: 'today' });
+  }, []);
+
   // ---------- 列表 ----------
   const loadList = useCallback(
     async ({ append = false, silent = false } = {}) => {
@@ -408,80 +411,22 @@ export default function App() {
       loadList({ silent: true });
     }, 600);
   }, [loadState, loadList]);
-  const scheduleRef = useRef(scheduleRefresh);
-  scheduleRef.current = scheduleRefresh;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const mbRef = useRef(mailboxMap);
   mbRef.current = mailboxMap;
-  const setViewRef = useRef();
-  setViewRef.current = setView;
 
-  useEffect(() => {
-    if (boot !== 'ready') return;
-    const es = new EventSource('/api/events');
-    const parse = (e) => {
-      try {
-        return JSON.parse(e.data);
-      } catch {
-        return {};
-      }
-    };
-    es.addEventListener('sync', () => scheduleRef.current());
-    es.addEventListener('mailbox', (e) => {
-      const d = parse(e);
-      setMailboxes((list) => list.map((m) => (m.id === d.id ? { ...m, status: d.status, lastError: d.error || null, lastSync: d.status === 'ok' ? Date.now() : m.lastSync } : m)));
-      if (d.status === 'ok') scheduleRef.current();
-    });
-    es.addEventListener('new', (e) => {
-      const d = parse(e);
-      const mb = mbRef.current[d.mailboxId];
-      const first = d.items?.[0];
-      const important = !d.snooze && first?.important;
-      const text = d.snooze
-        ? `稍后提醒：${first?.subject || ''}`
-        : important
-          ? `${first.label}来信 · ${displayName(first.from)}：${first.subject || '(无主题)'}${d.count > 1 ? `（另有 ${d.count - 1} 封）` : ''}`
-          : d.count > 1
-            ? `${mb?.email || ''} 收到 ${d.count} 封新邮件`
-            : `${displayName(first?.from)}：${first?.subject || '(无主题)'}`;
-      notify(text, important ? 'important' : 'info', first ? { label: '查看', fn: () => setSelectedId(first.id) } : null, important ? 10_000 : 6000);
-      if (settingsRef.current.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-        const n = new Notification(d.snooze ? '稍后提醒' : important ? `重要 · ${first.label}来信` : `新邮件 · ${mb?.email || ''}`, { body: text, tag: 'zm-' + d.mailboxId, icon: '/favicon-180.png' });
-        n.onclick = () => {
-          window.focus();
-          if (first) setSelectedId(first.id);
-        };
-      }
-      scheduleRef.current();
-    });
-    es.addEventListener('remind', (e) => {
-      const d = parse(e);
-      const first = d.items?.[0];
-      const escalate = !!d.escalate;
-      const text =
-        d.count > 1
-          ? `${escalate ? '再次提醒：' : ''}有 ${d.count} 封客户邮件已超过回复时限，最早的来自 ${displayName(first?.from)}`
-          : `${escalate ? '再次提醒 · ' : ''}${displayName(first?.from)} 的邮件已超过回复时限：${first?.subject || ''}`;
-      notify(text, 'important', { label: '去处理', fn: () => setViewRef.current({ mailboxId: 'all', box: 'today' }) }, 15_000);
-      if (settingsRef.current.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-        const n = new Notification(escalate ? '超时升级提醒' : '客户邮件待回复', { body: text, tag: 'zm-remind', icon: '/favicon-180.png' });
-        n.onclick = () => {
-          window.focus();
-          setViewRef.current({ mailboxId: 'all', box: 'today' });
-        };
-      }
-      scheduleRef.current();
-    });
-    es.addEventListener('outbox', (e) => {
-      const d = parse(e);
-      if (d.status === 'sent') notify('邮件已发送 ✓', 'success');
-      if (d.status === 'failed') notify(`发送失败：${d.error}（可在「定时发送」中重试）`, 'error', null, 10_000);
-      setOutboxVersion((v) => v + 1);
-      scheduleRef.current();
-    });
-    return () => es.close();
-  }, [boot, notify]);
+  useRealtimeMail({
+    boot,
+    notify,
+    scheduleRefresh,
+    settingsRef,
+    mbRef,
+    setMailboxes,
+    setOutboxVersion,
+    openMessage,
+    goToday,
+  });
 
   // ---------- 邮件操作 ----------
   function nextAfter(ids) {

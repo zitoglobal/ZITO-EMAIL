@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   X, Trash2, Plus, Moon, Sun, Bell, Sparkles, RefreshCw, ArrowUp, ArrowDown, Server, Loader2, AlertCircle, CheckCircle2, Mail,
   SlidersHorizontal, FileStack, User, Users, Pencil, LogOut, Image, Undo2, MessagesSquare, Rows3, KeyRound, ListTodo, Hourglass, Send,
-  BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft, Tag,
+  BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft, Tag, ShieldCheck,
 } from 'lucide-react';
 import { LAYOUT_MODES } from '../layout.js';
 import { api } from '../api.js';
@@ -458,6 +458,22 @@ function Account({ user, onUserChange, onLogout, notify }) {
   const [name, setName] = useState(user.name || '');
   const [pwd, setPwd] = useState({ oldPassword: '', newPassword: '', confirm: '' });
   const [busy, setBusy] = useState(false);
+  const [sessions, setSessions] = useState(null);
+  const [policy, setPolicy] = useState(null);
+  const [revoking, setRevoking] = useState(false);
+
+  function loadSessions() {
+    api('/me/sessions')
+      .then((d) => {
+        setSessions(d.sessions || []);
+        setPolicy(d.policy || null);
+      })
+      .catch(() => setSessions([]));
+  }
+
+  useEffect(() => {
+    loadSessions();
+  }, []);
 
   async function saveName() {
     try {
@@ -477,12 +493,29 @@ function Account({ user, onUserChange, onLogout, notify }) {
       await api('/me/password', { method: 'POST', body: pwd });
       setPwd({ oldPassword: '', newPassword: '', confirm: '' });
       notify('密码已修改，其他设备上的登录已失效');
+      loadSessions();
     } catch (err) {
       notify(err.message, 'error');
     } finally {
       setBusy(false);
     }
   }
+
+  async function revokeOthers() {
+    if (!window.confirm('确定注销其他设备上的登录？当前浏览器仍保持登录。')) return;
+    setRevoking(true);
+    try {
+      const d = await api('/me/sessions/revoke-others', { method: 'POST', body: {} });
+      notify(`已注销 ${d.revoked || 0} 个其他会话`, 'success');
+      loadSessions();
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setRevoking(false);
+    }
+  }
+
+  const otherCount = (sessions || []).filter((s) => !s.current).length;
 
   return (
     <>
@@ -500,6 +533,30 @@ function Account({ user, onUserChange, onLogout, notify }) {
         </div>
         <div className="set-actions"><button className="btn-primary sm" disabled={busy}>{busy && <Loader2 size={13} className="spin" />} 修改密码</button></div>
       </form>
+      <div className="set-account">
+        <h4><ShieldCheck size={15} /> 登录设备</h4>
+        <p className="set-hint">
+          空闲 {policy?.idleDays ?? 14} 天未使用将自动失效；单次登录最长 {policy?.absDays ?? 30} 天。
+        </p>
+        {sessions == null && <div className="muted"><Loader2 size={14} className="spin" /> 加载会话…</div>}
+        {sessions && (
+          <ul className="session-list">
+            {sessions.map((s, i) => (
+              <li key={i} className={s.current ? 'current' : ''}>
+                <b>{s.current ? '当前设备' : '其他设备'}</b>
+                <span>{s.userAgent ? s.userAgent.slice(0, 72) : '未知浏览器'}</span>
+                <small>最近活动 {relativeTime(s.lastSeen)}</small>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="set-actions">
+          <button type="button" className="btn-ghost sm" disabled={revoking || !otherCount} onClick={revokeOthers}>
+            {revoking ? <Loader2 size={13} className="spin" /> : null}
+            注销其他设备{otherCount ? `（${otherCount}）` : ''}
+          </button>
+        </div>
+      </div>
       <button className="btn-ghost danger" onClick={onLogout}><LogOut size={15} /> 退出登录</button>
     </>
   );

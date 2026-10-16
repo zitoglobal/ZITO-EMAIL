@@ -2,7 +2,10 @@ import { db, now } from './db.js';
 import { hashPassword, randomToken, sha256, verifyPassword } from './security.js';
 import { sanitizeGlossary } from './glossary.js';
 
-const SESSION_TTL = 30 * 24 * 3600 * 1000;
+/** 空闲超时：超过此时间未活动则会话失效（滑动窗口） */
+const SESSION_IDLE_TTL = Number(process.env.SESSION_IDLE_DAYS || 14) * 24 * 3600 * 1000;
+/** 绝对上限：自创建起最长存活，防止无限续期 */
+const SESSION_ABS_TTL = Number(process.env.SESSION_ABS_DAYS || 30) * 24 * 3600 * 1000;
 
 const LAYOUT_MODES = new Set(['standard', 'sales', 'focus']);
 const clampInt = (n, min, max, fallback) => {
@@ -140,17 +143,47 @@ export function sessionUser(token) {
   if (!token) return null;
   const s = db.prepare('SELECT * FROM sessions WHERE token_hash = ?').get(sha256(token));
   if (!s) return null;
-  if (now() - s.last_seen > SESSION_TTL) {
+  const t = now();
+  if (t - s.last_seen > SESSION_IDLE_TTL || t - s.created_at > SESSION_ABS_TTL) {
     db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(s.token_hash);
     return null;
   }
-  if (now() - s.last_seen > 60_000) db.prepare('UPDATE sessions SET last_seen = ? WHERE token_hash = ?').run(now(), s.token_hash);
+  if (t - s.last_seen > 60_000) db.prepare('UPDATE sessions SET last_seen = ? WHERE token_hash = ?').run(t, s.token_hash);
   return db.prepare('SELECT * FROM users WHERE id = ?').get(s.user_id) || null;
 }
 
 export function destroySession(token) {
   if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(sha256(token));
 }
+
+/** 注销其他设备；keepToken 为当前会话则保留 */
+export function destroyOtherSessions(userId, keepToken) {
+  if (keepToken) {
+    return db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(userId, sha256(keepToken)).changes;
+  }
+  return db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId).changes;
+}
+
+export function listSessions(userId, currentToken) {
+  const cur = currentToken ? sha256(currentToken) : '';
+  return db
+    .prepare(
+      `SELECT token_hash, created_at, last_seen, user_agent FROM sessions
+       WHERE user_id = ? ORDER BY last_seen DESC LIMIT 20`
+    )
+    .all(userId)
+    .map((s) => ({
+      current: s.token_hash === cur,
+      createdAt: s.created_at,
+      lastSeen: s.last_seen,
+      userAgent: s.user_agent || '',
+    }));
+}
+
+export const sessionPolicy = () => ({
+  idleDays: Math.round(SESSION_IDLE_TTL / (24 * 3600 * 1000)),
+  absDays: Math.round(SESSION_ABS_TTL / (24 * 3600 * 1000)),
+});
 
 export function listUsers() {
   return db

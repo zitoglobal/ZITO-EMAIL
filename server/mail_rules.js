@@ -306,7 +306,8 @@ function isVipSender(userId, fromAddr) {
   return false;
 }
 
-function matchCondition(cond, ctx) {
+/** 导出供单测与调试；生产路径仍走 applyRulesForInserted */
+export function matchCondition(cond, ctx) {
   const from = String(ctx.fromAddr || '').toLowerCase();
   const subject = String(ctx.subject || '');
   const snippet = String(ctx.snippet || '');
@@ -350,7 +351,7 @@ function matchCondition(cond, ctx) {
   }
 }
 
-function matchRule(rule, ctx) {
+export function matchRule(rule, ctx) {
   const why = [];
   for (const c of rule.conditions || []) {
     if (!matchCondition(c, ctx)) return null;

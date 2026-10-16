@@ -23,11 +23,19 @@ import * as labels from './labels.js';
 import * as savedSearches from './saved_searches.js';
 import * as mailRules from './mail_rules.js';
 import * as contacts from './contacts.js';
+import * as deals from './deals.js';
+import { assertSafeMailHosts } from './net_guard.js';
+import { sanitizeMailHtml } from './sanitize_mail.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
+const IS_PROD = process.env.NODE_ENV === 'production';
+/** 生产默认只绑本机，必须经 Nginx；开发可 BIND_HOST=0.0.0.0 */
+const BIND_HOST = process.env.BIND_HOST || (IS_PROD ? '127.0.0.1' : '0.0.0.0');
 const COOKIE = 'zm_token';
-const COOKIE_SECURE = process.env.COOKIE_SECURE === '1';
+/** 生产默认 Secure；可用 COOKIE_SECURE=0 显式关闭（仅排查用） */
+const COOKIE_SECURE =
+  process.env.COOKIE_SECURE === '1' || (IS_PROD && process.env.COOKIE_SECURE !== '0');
 const MAX_MAILBOXES = Number(process.env.MAX_MAILBOXES_PER_USER || 20);
 const COLORS = ['#0a66ff', '#00b4e6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#64748b'];
 
@@ -66,7 +74,9 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 const wrap = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch((e) => {
     if (!e.status) console.error('[api]', req.method, req.path, e.message);
-    res.status(e.status || 400).json({ error: e.message || String(e) });
+    const body = { error: e.message || String(e) };
+    if (e.deal) body.deal = e.deal;
+    res.status(e.status || 400).json(body);
   });
 
 const buckets = new Map();
@@ -171,7 +181,7 @@ app.post(
       if (mode === 'code' && req.body.code !== process.env.SIGNUP_CODE) throw httpError(403, '邀请码不正确');
     }
     const u = users.createUser({ ...req.body, role: first ? 'admin' : 'member' });
-    setCookie(res, users.createSession(u.id, req.headers['user-agent']), 30 * 24 * 3600);
+    setCookie(res, users.createSession(u.id, req.headers['user-agent']), users.sessionPolicy().absDays * 24 * 3600);
     res.json({ user: users.publicUser(u) });
   })
 );
@@ -180,10 +190,15 @@ app.post(
   '/api/auth/login',
   wrap(async (req, res) => {
     rateLimit('login:' + req.ip, 10, 10 * 60_000);
+    const loginKey = String(req.body?.email || '')
+      .trim()
+      .toLowerCase()
+      .slice(0, 80);
+    if (loginKey) rateLimit('login-user:' + loginKey, 8, 15 * 60_000);
     const u = users.authenticate(req.body.email, req.body.password);
     if (!u) throw httpError(401, '账号或密码错误');
     buckets.delete('login:' + req.ip);
-    setCookie(res, users.createSession(u.id, req.headers['user-agent']), 30 * 24 * 3600);
+    setCookie(res, users.createSession(u.id, req.headers['user-agent']), users.sessionPolicy().absDays * 24 * 3600);
     res.json({ user: users.publicUser(u) });
   })
 );
@@ -193,6 +208,26 @@ app.post('/api/auth/logout', (req, res) => {
   setCookie(res, '', 0);
   res.json({ ok: true });
 });
+
+app.get(
+  '/api/me/sessions',
+  auth,
+  wrap(async (req, res) => {
+    res.json({
+      sessions: users.listSessions(req.user.id, readCookie(req, COOKIE)),
+      policy: users.sessionPolicy(),
+    });
+  })
+);
+
+app.post(
+  '/api/me/sessions/revoke-others',
+  auth,
+  wrap(async (req, res) => {
+    const n = users.destroyOtherSessions(req.user.id, readCookie(req, COOKIE));
+    res.json({ ok: true, revoked: n });
+  })
+);
 
 app.get(
   '/api/me',
@@ -246,6 +281,55 @@ app.get(
   auth,
   wrap(async (req, res) => {
     res.json({ suggestions: priority.vipSuggestions(req.user.id) });
+  })
+);
+
+/** 团队认领 + 业务阶段（邮箱内，不对接已下线 CRM） */
+app.get(
+  '/api/deals/lookup',
+  auth,
+  wrap(async (req, res) => {
+    res.json(deals.lookup(req.user.id, { address: req.query.address, threadId: req.query.threadId }));
+  })
+);
+app.get('/api/deals/stages', auth, (_req, res) => res.json({ stages: deals.STAGES }));
+app.post(
+  '/api/deals/claim',
+  auth,
+  wrap(async (req, res) => {
+    const deal = deals.claim(req.user.id, req.body || {});
+    emit(req.user.id, 'sync', { local: true, deal: true });
+    // 通知其他在线同事刷新（轻量：全员 sync 事件由各自 SSE 订阅——这里至少推给自己）
+    for (const u of users.listUsers()) {
+      if (u.id !== req.user.id) emit(u.id, 'sync', { local: true, deal: true });
+    }
+    res.json({ deal });
+  })
+);
+app.post(
+  '/api/deals/:id/release',
+  auth,
+  wrap(async (req, res) => {
+    deals.release(req.user.id, Number(req.params.id));
+    for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
+    res.json({ ok: true });
+  })
+);
+app.patch(
+  '/api/deals/:id',
+  auth,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    let deal = null;
+    if (req.body?.stage != null) deal = deals.setStage(req.user.id, id, req.body.stage);
+    if (req.body?.note != null) deal = deals.setNote(req.user.id, id, req.body.note);
+    if (!deal) {
+      const row = deals.getDealById(id);
+      if (!row) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
+      deal = deals.lookup(req.user.id, { address: row.last_address }).deal;
+    }
+    for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
+    res.json({ deal });
   })
 );
 
@@ -343,6 +427,7 @@ app.post(
     const detected = custom ? null : await detectProvider(email);
     const conn = connectionFrom({ ...req.body, email }, detected, null);
     if (!conn.imap_host || !conn.smtp_host) throw httpError(400, '无法识别邮件服务器，请在高级设置中填写');
+    await assertSafeMailHosts(conn);
     const probe = { ...conn, email };
 
     const [, smtpCheck] = await Promise.all([imap.verifyLogin(probe, req.body.password), verifySmtp(probe, req.body.password)]);
@@ -396,6 +481,7 @@ app.patch(
     let reconnect = false;
     if (b.password || b.advanced) {
       const conn = connectionFrom({ ...b, email: mb.email }, null, mb);
+      await assertSafeMailHosts(conn);
       const password = b.password || null;
       const probe = { ...mb, ...conn };
       if (password) await imap.verifyLogin(probe, password);
@@ -600,17 +686,36 @@ app.get(
       }
       throw e;
     }
-    if (req.query.markSeen !== '0') markSeen(row);
-    const base = repo.rowToMessage({ ...row, seen: 1 });
+    // 默认不因 GET 标已读（防链接诱导）；显式 markSeen=1 或 POST /seen
+    const shouldMark = req.query.markSeen === '1' || req.query.markSeen === 'true';
+    if (shouldMark) markSeen(row);
+    const seen = shouldMark ? 1 : row.seen;
+    const base = repo.rowToMessage({ ...row, seen });
     const [withLabels] = labels.attachLabels(req.user.id, [base]);
+    const safeHtml = body.html ? sanitizeMailHtml(body.html) : body.html;
     res.json({
       ...withLabels,
       ...body.meta,
-      html: body.html,
+      html: safeHtml,
       text: body.text,
       knownSender: repo.isKnownContact(req.user.id, row.from_addr),
       sender: priority.senderInfo(req.user.id, row.from_addr),
+      conflict: priority.conflictHints(req.user.id, { fromAddr: row.from_addr, threadId: row.thread_id }),
+      ...(() => {
+        const d = deals.lookup(req.user.id, { address: row.from_addr, threadId: row.thread_id });
+        return { deal: d.deal, dealScope: d.scope, dealStages: d.stages };
+      })(),
     });
+  })
+);
+
+app.post(
+  '/api/messages/:id/seen',
+  auth,
+  wrap(async (req, res) => {
+    const row = messageOf(req);
+    markSeen(row);
+    res.json({ ok: true, id: row.id, seen: true });
   })
 );
 
@@ -1504,7 +1609,9 @@ function remindUser(u) {
 const remindOverdue = () => db.prepare('SELECT * FROM users').all().forEach(remindUser);
 setTimeout(remindOverdue, 60_000).unref();
 setInterval(remindOverdue, 10 * 60_000).unref();
-const server = app.listen(PORT, () => console.log(`[zito-mail] 服务已启动 http://localhost:${PORT}`));
+const server = app.listen(PORT, BIND_HOST, () =>
+  console.log(`[zito-mail] 服务已启动 http://${BIND_HOST === '0.0.0.0' ? 'localhost' : BIND_HOST}:${PORT} (bind ${BIND_HOST})`)
+);
 
 function shutdown(signal) {
   console.log(`[zito-mail] 收到 ${signal}，正在关闭…`);

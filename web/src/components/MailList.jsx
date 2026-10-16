@@ -56,6 +56,17 @@ function Chips({ m, variant }) {
       m.signals?.filter((s) => SIGNALS[s]).slice(0, 1).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
     }
   }
+  if (m.deal) {
+    chips.push(
+      <span
+        key="deal"
+        className={'tag deal-tag' + (m.deal.mine ? ' mine' : ' taken')}
+        title={m.deal.mine ? `我已认领 · ${m.deal.stageLabel}` : `${m.deal.owner?.name || '同事'}已认领 · ${m.deal.stageLabel}`}
+      >
+        {m.deal.mine ? '我跟' : (m.deal.owner?.name || '同事').slice(0, 4)} · {m.deal.stageLabel}
+      </span>
+    );
+  }
   const userLabels = Array.isArray(m.labels) ? m.labels : [];
   const labelShown = userLabels.slice(0, 2).map((l) => (
     <span key={'lb' + l.id} className="tag user-label" style={{ '--lc': l.color }}>

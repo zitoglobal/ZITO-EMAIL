@@ -1,6 +1,7 @@
 import { db, now } from './db.js';
 import { MY_LAST_SQL, rowToMessage } from './repo.js';
 import { expectsReply, signalsOf } from './classify.js';
+import { attachDeals } from './deals.js';
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -49,6 +50,10 @@ const TIER_LABEL = { vip: 'VIP 客户', customer: '老客户', new: '新联系�
 const cache = new Map();
 export const invalidate = (userId) => cache.delete(userId);
 
+/** 关系索引只扫近 180 天、最多 3000 封已发——对「是否老客户」足够，避免全库 JSON 解析 */
+const RELATION_LOOKBACK = 180 * DAY;
+const RELATION_SENT_CAP = 3000;
+
 export function relationIndex(userId) {
   const hit = cache.get(userId);
   if (hit && now() - hit.at < 60_000) return hit.idx;
@@ -61,9 +66,13 @@ export function relationIndex(userId) {
       `SELECT m.to_json, m.cc_json FROM messages m
        JOIN mailboxes b ON b.id = m.mailbox_id
        LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
-       WHERE b.user_id = ? AND m.from_addr = b.email AND IFNULL(f.special_use, '') NOT IN ('\\Drafts', '\\Trash')`
+       WHERE b.user_id = ? AND m.from_addr = b.email
+         AND m.date >= ?
+         AND IFNULL(f.special_use, '') NOT IN ('\\Drafts', '\\Trash')
+       ORDER BY m.date DESC
+       LIMIT ?`
     )
-    .all(userId);
+    .all(userId, now() - RELATION_LOOKBACK, RELATION_SENT_CAP);
   for (const r of rows) {
     for (const a of [...JSON.parse(r.to_json || '[]'), ...JSON.parse(r.cc_json || '[]')]) {
       const addr = String(a.address || '').toLowerCase();
@@ -143,6 +152,10 @@ const BASE_SELECT = `SELECT m.*, f.special_use, b.email AS mb_email,
   (SELECT COUNT(DISTINCT IFNULL(t.message_id, t.id)) FROM messages t WHERE t.mailbox_id = m.mailbox_id AND t.thread_id = m.thread_id AND m.thread_id IS NOT NULL) AS thread_count,
   ${MY_LAST_SQL} AS my_last`;
 
+/** Focus 候选上限：配合窗口天数，避免一次打分上千封拖住「今日打开」 */
+const REPLY_CANDIDATE_CAP = 500;
+const SENT_CANDIDATE_CAP = 300;
+
 function replyCandidates(userId, mailboxId, since) {
   return db
     .prepare(
@@ -159,7 +172,7 @@ function replyCandidates(userId, mailboxId, since) {
                AND (sr.key = lower(m.from_addr) OR (sr.key LIKE '@%' AND lower(m.from_addr) LIKE '%' || sr.key))
            )
          )
-       ORDER BY m.date DESC LIMIT 800`
+       ORDER BY m.date DESC LIMIT ${REPLY_CANDIDATE_CAP}`
     )
     .all({ userId, mb: mailboxId, since });
 }
@@ -175,7 +188,7 @@ function sentCandidates(userId, mailboxId, since) {
        LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
        WHERE b.user_id = @userId AND (@mb = 'all' OR m.mailbox_id = @mb) AND f.special_use = '\\Sent'
          AND m.from_addr = b.email AND m.date >= @since
-       ORDER BY m.date DESC LIMIT 400`
+       ORDER BY m.date DESC LIMIT ${SENT_CANDIDATE_CAP}`
     )
     .all({ userId, mb: mailboxId, since });
 }
@@ -268,9 +281,12 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       if (m.priority?.overdue) m.remindStage = stages.get(m.id) || 0;
     }
   }
+  const replyWithDeals = attachDeals(userId, reply);
+  const followWithDeals = attachDeals(userId, followups);
+
   return {
-    reply,
-    followups,
+    reply: replyWithDeals,
+    followups: followWithDeals,
     stats: {
       needReply: reply.length,
       overdue,
@@ -388,6 +404,128 @@ export function importance(userId, item) {
   const important = tier === 'vip' || (tier === 'customer' && signals.some((s) => ['urgent', 'complaint', 'order', 'payment'].includes(s))) ||
     (tier === 'new' && signals.includes('inquiry'));
   return { tier, important, label: tier === 'vip' ? 'VIP 客户' : tier === 'new' ? '新询盘' : tier === 'customer' ? '客户' : '' };
+}
+
+/**
+ * 团队询盘冲突提示（MVP）：其他同事近 14 天是否与同一买家/同公司有过往来。
+ * 公共邮箱只按完整地址匹配；企业域可按域名聚合。
+ */
+export function conflictHints(userId, { fromAddr, threadId } = {}) {
+  const a = String(fromAddr || '').toLowerCase();
+  if (!a || ROBOT.test(a)) return null;
+  const d = domainOf(a);
+  const since = now() - 14 * DAY;
+  const likeAddr = `%"${a}"%`;
+  const useDomain = !!(d && !isFreeDomain(d));
+  const likeDomain = useDomain ? `%@${d}%` : null;
+
+  const peers = useDomain
+    ? db
+        .prepare(
+          `SELECT u.id AS user_id, u.name AS user_name, u.email AS user_email,
+                  MAX(CASE WHEN m.from_addr = b.email THEN m.date END) AS last_sent,
+                  MAX(CASE WHEN lower(m.from_addr) = ? THEN m.date END) AS last_recv,
+                  SUM(CASE WHEN m.from_addr = b.email THEN 1 ELSE 0 END) AS sent_n,
+                  SUM(CASE WHEN lower(m.from_addr) LIKE ? THEN 1 ELSE 0 END) AS recv_n
+           FROM messages m
+           JOIN mailboxes b ON b.id = m.mailbox_id
+           JOIN users u ON u.id = b.user_id
+           WHERE b.user_id != ?
+             AND m.date >= ?
+             AND (
+               lower(m.from_addr) LIKE ?
+               OR m.to_json LIKE ? OR m.cc_json LIKE ?
+               OR m.to_json LIKE ? OR m.cc_json LIKE ?
+             )
+           GROUP BY u.id
+           HAVING sent_n > 0 OR recv_n > 0
+           ORDER BY IFNULL(last_sent, 0) DESC, IFNULL(last_recv, 0) DESC
+           LIMIT 5`
+        )
+        .all(a, `%@${d}`, userId, since, `%@${d}`, likeAddr, likeAddr, likeDomain, likeDomain)
+    : db
+        .prepare(
+          `SELECT u.id AS user_id, u.name AS user_name, u.email AS user_email,
+                  MAX(CASE WHEN m.from_addr = b.email THEN m.date END) AS last_sent,
+                  MAX(CASE WHEN lower(m.from_addr) = ? THEN m.date END) AS last_recv,
+                  SUM(CASE WHEN m.from_addr = b.email THEN 1 ELSE 0 END) AS sent_n,
+                  SUM(CASE WHEN lower(m.from_addr) = ? THEN 1 ELSE 0 END) AS recv_n
+           FROM messages m
+           JOIN mailboxes b ON b.id = m.mailbox_id
+           JOIN users u ON u.id = b.user_id
+           WHERE b.user_id != ?
+             AND m.date >= ?
+             AND (lower(m.from_addr) = ? OR m.to_json LIKE ? OR m.cc_json LIKE ?)
+           GROUP BY u.id
+           HAVING sent_n > 0 OR recv_n > 0
+           ORDER BY IFNULL(last_sent, 0) DESC, IFNULL(last_recv, 0) DESC
+           LIMIT 5`
+        )
+        .all(a, a, userId, since, a, likeAddr, likeAddr);
+
+  const threadPeers = threadId
+    ? db
+        .prepare(
+          `SELECT u.id AS user_id, u.name AS user_name, u.email AS user_email, MAX(m.date) AS last_at,
+                  SUM(CASE WHEN m.from_addr = b.email THEN 1 ELSE 0 END) AS sent_n
+           FROM messages m
+           JOIN mailboxes b ON b.id = m.mailbox_id
+           JOIN users u ON u.id = b.user_id
+           WHERE b.user_id != ? AND m.thread_id = ? AND m.date >= ?
+           GROUP BY u.id
+           HAVING sent_n > 0
+           ORDER BY last_at DESC
+           LIMIT 3`
+        )
+        .all(userId, threadId, since)
+    : [];
+
+  if (!peers.length && !threadPeers.length) return null;
+
+  const colleagues = peers.map((p) => {
+    const parts = [];
+    if (p.sent_n > 0) parts.push(`已发 ${p.sent_n} 封`);
+    if (p.recv_n > 0) parts.push('也收到过');
+    return {
+      userId: p.user_id,
+      name: p.user_name || p.user_email,
+      email: p.user_email,
+      lastSent: p.last_sent || null,
+      lastRecv: p.last_recv || null,
+      summary: parts.join(' · ') || '有往来',
+      level: p.sent_n > 0 ? 'replied' : 'watching',
+    };
+  });
+
+  const threadHits = threadPeers.map((p) => ({
+    userId: p.user_id,
+    name: p.user_name || p.user_email,
+    email: p.user_email,
+    lastAt: p.last_at,
+    summary: '同一会话中已有回复',
+    level: 'thread',
+  }));
+
+  const byId = new Map();
+  for (const c of [...threadHits, ...colleagues]) {
+    const prev = byId.get(c.userId);
+    if (!prev || (c.level === 'thread' && prev.level !== 'thread') || (c.level === 'replied' && prev.level === 'watching')) {
+      byId.set(c.userId, c);
+    }
+  }
+  const list = [...byId.values()];
+  const replied = list.filter((c) => c.level === 'replied' || c.level === 'thread');
+  const scope = useDomain ? `同公司 @${d}` : a;
+  const headName = replied[0]?.name || list[0]?.name || '同事';
+  return {
+    scope,
+    count: list.length,
+    severity: replied.length ? 'high' : 'medium',
+    headline: replied.length
+      ? `${headName}${replied.length > 1 ? ` 等 ${replied.length} 人` : ''}近期已与该买家互动，请先确认再回复`
+      : `${list.length} 位同事也收到过${useDomain ? scope : '此发件人'}的邮件`,
+    colleagues: list,
+  };
 }
 
 /** 发件人画像：往来统计 */

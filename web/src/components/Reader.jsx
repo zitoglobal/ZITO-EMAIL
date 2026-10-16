@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Star, Mail, Sparkles, Languages, Paperclip, Download, ArrowLeft, Loader2,
   AlertTriangle, CheckCircle2, ListChecks, FolderInput, Eye, Clock, Pin, ShieldAlert, ShieldCheck, MoreHorizontal, ImageOff,
-  BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass, Tag,
+  BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass, Tag, Users,
 } from 'lucide-react';
 import { api } from '../api.js';
 import {
@@ -15,9 +15,31 @@ import MailFrame from './MailFrame.jsx';
 import { BrandSymbol } from './Brand.jsx';
 import TimeMenu from './TimeMenu.jsx';
 import LabelMenu from './LabelMenu.jsx';
+import DealBar from './DealBar.jsx';
 
 const URGENCY = { high: ['紧急', 'high'], medium: ['一般', 'medium'], low: ['不急', 'low'] };
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
+
+function ConflictBanner({ conflict }) {
+  if (!conflict?.colleagues?.length) return null;
+  const high = conflict.severity === 'high';
+  return (
+    <div className={'conflict-banner' + (high ? ' high' : '')} role="status">
+      <Users size={14} />
+      <div className="conflict-banner-text">
+        <b>{high ? '可能重复跟进' : '团队往来提示'}</b>
+        <span>{conflict.headline}</span>
+        <span className="conflict-peers">
+          {conflict.colleagues.slice(0, 3).map((c) => (
+            <span key={c.userId} className={'conflict-peer level-' + c.level} title={c.email}>
+              {c.name} · {c.summary}
+            </span>
+          ))}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 function RelationCard({ info, onRule, slaHours, onOpenCustomer }) {
   if (!info || info.tier === 'self' || info.tier === 'bulk') return null;
@@ -120,7 +142,7 @@ function Attachments({ msg }) {
   );
 }
 
-function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer }) {
+function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer, onNotify, onDealChange }) {
   const [allowImages, setAllowImages] = useState(false);
   const loading = expanded && !detail;
   const isDraft = item.specialUse === '\\Drafts';
@@ -170,6 +192,18 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
           {mailbox && <div className="meta-mb"><span className="mb-dot" style={{ background: mailbox.color }} />{mailbox.email}</div>}
         </div>
       </div>
+      {m && primary && <ConflictBanner conflict={m.conflict} />}
+      {m && primary && (
+        <DealBar
+          deal={m.deal}
+          scope={m.dealScope}
+          stages={m.dealStages}
+          address={item.from?.address}
+          threadId={item.threadId || m.threadId}
+          notify={onNotify}
+          onChange={(deal) => onDealChange?.(item.id, deal)}
+        />
+      )}
       {m && primary && <RelationCard info={m.sender && { ...m.sender, address: item.from?.address }} onRule={onRule} slaHours={slaHours} onOpenCustomer={onOpenCustomer} />}
 
       {loading && <div className="reader-loading sm"><Loader2 size={16} className="spin" /> 正在加载…</div>}
@@ -232,9 +266,21 @@ export default function Reader({
   const base = msg || listItem;
   const displayLabels = (listItem?.labels || base?.labels || []);
 
-  function loadDetail(mid, token) {
+  function loadDetail(mid, token, { markSeen = false } = {}) {
     return api(`/messages/${mid}`)
-      .then((d) => token === alive.current && setDetails((s) => ({ ...s, [mid]: d })))
+      .then((d) => {
+        if (token !== alive.current) return;
+        setDetails((s) => ({ ...s, [mid]: d }));
+        // 读信标已读走 POST，避免 GET 链接诱导
+        if (markSeen && !d.seen) {
+          api(`/messages/${mid}/seen`, { method: 'POST', body: {} })
+            .then(() => {
+              if (token !== alive.current) return;
+              setDetails((s) => (s[mid] ? { ...s, [mid]: { ...s[mid], seen: true } } : s));
+            })
+            .catch(() => {});
+        }
+      })
       .catch((e) => token === alive.current && setDetails((s) => ({ ...s, [mid]: { error: e.message } })));
   }
 
@@ -254,7 +300,7 @@ export default function Reader({
     setExpanded(new Set([id]));
     scroller.current?.scrollTo(0, 0);
 
-    loadDetail(id, token);
+    loadDetail(id, token, { markSeen: true });
     if (settings.conversationView !== false) {
       api(`/messages/${id}/thread`)
         .then(({ messages }) => {
@@ -265,7 +311,7 @@ export default function Reader({
           if (last) open.add(last.id);
           messages.forEach((m) => !m.seen && open.add(m.id));
           setExpanded(open);
-          open.forEach((mid) => mid !== id && loadDetail(mid, token));
+          open.forEach((mid) => mid !== id && loadDetail(mid, token, { markSeen: false }));
         })
         .catch(() => {});
     }
@@ -841,6 +887,10 @@ export default function Reader({
                     mailbox={mailboxMap[it.mailboxId]}
                     slaHours={listItem?.priority?.slaHours}
                     onOpenCustomer={onOpenCustomer}
+                    onNotify={notify}
+                    onDealChange={(mid, deal) => {
+                      setDetails((s) => (s[mid] ? { ...s, [mid]: { ...s[mid], deal } } : s));
+                    }}
                   />
                 </div>
               ))}

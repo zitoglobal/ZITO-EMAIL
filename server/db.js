@@ -331,3 +331,22 @@ CREATE INDEX IF NOT EXISTS idx_contact_tag_map_tag ON contact_tag_map(tag_id);
     migrate(pending);
   }
 }
+
+// ---------- 团队认领 + 业务阶段（邮箱内销售台，不依赖已下线 CRM） ----------
+db.exec(`
+CREATE TABLE IF NOT EXISTS deals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope_key TEXT NOT NULL UNIQUE,
+  scope_kind TEXT NOT NULL,
+  owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  claimed_at INTEGER NOT NULL,
+  stage TEXT NOT NULL DEFAULT 'inquiry',
+  stage_updated_at INTEGER NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  last_thread_id TEXT,
+  last_address TEXT,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deals_owner ON deals(owner_user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage);
+`);
