@@ -19,3 +19,6 @@
 - 真实仓库目录：`D:\ZITO-AI-EMAIL`
 - 在 `D:\ZITO.AI项目` 中通过 junction `ZITO-EMAIL/` 可见；也可打开 `D:\ZITO.AI项目\ZITO.AI.code-workspace`
 - GitHub：`https://github.com/zitoglobal/ZITO-EMAIL`
+- 正式域名：`https://mail.zitoglobal.com/`
+- 本机每小时自动同步：计划任务 `ZITO-EMAIL-AutoSync` → `D:\ZITO-AI-EMAIL-sync\sync.ps1`（pull/push `main`；密钥类文件会本地 HOLD）
+- 旧路径 `D:\ZITO智能邮箱` 已废弃，勿再使用
