@@ -1,12 +1,12 @@
 import { db, now } from './db.js';
-import { MY_LAST_SQL, rowToMessage } from './repo.js';
+import { MY_LAST_SQL, THEIR_LAST_SQL, rowToMessage } from './repo.js';
 import { expectsReply, signalsOf } from './classify.js';
-import { attachDeals } from './deals.js';
+import { attachDeals, dueFollowDeals } from './deals.js';
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
-const REPLY_WINDOW = 14 * DAY;
-const FOLLOW_WINDOW = 21 * DAY;
+const REPLY_WINDOW = 21 * DAY;
+const FOLLOW_WINDOW = 30 * DAY;
 
 /** 分层 SLA：VIP / 老客户 / 新询盘可不同时限；其余回落到 replySlaHours */
 export function slaFor(settings = {}, tier, signals = []) {
@@ -152,9 +152,9 @@ const BASE_SELECT = `SELECT m.*, f.special_use, b.email AS mb_email,
   (SELECT COUNT(DISTINCT IFNULL(t.message_id, t.id)) FROM messages t WHERE t.mailbox_id = m.mailbox_id AND t.thread_id = m.thread_id AND m.thread_id IS NOT NULL) AS thread_count,
   ${MY_LAST_SQL} AS my_last`;
 
-/** Focus 候选上限：配合窗口天数，避免一次打分上千封拖住「今日打开」 */
-const REPLY_CANDIDATE_CAP = 500;
-const SENT_CANDIDATE_CAP = 300;
+/** Focus 候选上限：配合窗口天数；高峰期另补 VIP/未读急件 */
+const REPLY_CANDIDATE_CAP = 900;
+const SENT_CANDIDATE_CAP = 500;
 
 function replyCandidates(userId, mailboxId, since) {
   return db
@@ -181,14 +181,36 @@ function sentCandidates(userId, mailboxId, since) {
   return db
     .prepare(
       `${BASE_SELECT},
-        (SELECT MAX(t.date) FROM messages t JOIN mailboxes tb ON tb.id = t.mailbox_id
-          WHERE tb.user_id = b.user_id AND m.thread_id IS NOT NULL AND t.thread_id = m.thread_id
-            AND t.from_addr NOT IN (SELECT email FROM mailboxes WHERE user_id = b.user_id)) AS their_last
+        ${THEIR_LAST_SQL} AS their_last
        FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
        LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
        WHERE b.user_id = @userId AND (@mb = 'all' OR m.mailbox_id = @mb) AND f.special_use = '\\Sent'
          AND m.from_addr = b.email AND m.date >= @since
        ORDER BY m.date DESC LIMIT ${SENT_CANDIDATE_CAP}`
+    )
+    .all({ userId, mb: mailboxId, since });
+}
+
+/** 硬帽之外再捞 VIP/未读超时，避免高峰急件进不了今日待办 */
+function replyBoostCandidates(userId, mailboxId, since, excludeIds) {
+  const excl = excludeIds?.size
+    ? `AND m.id NOT IN (${[...excludeIds].map(Number).filter(Number.isInteger).join(',') || '0'})`
+    : '';
+  return db
+    .prepare(
+      `${BASE_SELECT}
+       FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
+       LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
+       WHERE b.user_id = @userId AND (@mb = 'all' OR m.mailbox_id = @mb) AND f.special_use = '\\Inbox'
+         AND m.date >= @since AND m.from_addr != b.email AND m.seen = 0 AND IFNULL(m.answered, 0) = 0
+         AND IFNULL(m.done_at, 0) = 0 AND m.snooze_until IS NULL
+         ${excl}
+         AND EXISTS (
+           SELECT 1 FROM sender_rules sr
+           WHERE sr.user_id = b.user_id AND sr.kind = 'vip'
+             AND (sr.key = lower(m.from_addr) OR (sr.key LIKE '@%' AND lower(m.from_addr) LIKE '%' || sr.key))
+         )
+       ORDER BY m.date DESC LIMIT 80`
     )
     .all({ userId, mb: mailboxId, since });
 }
@@ -210,23 +232,27 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
   const reply = [];
   let todayIn = 0;
   let doneToday = 0;
-  for (const r of replyCandidates(userId, mailboxId, at - REPLY_WINDOW)) {
+  const seenIds = new Set();
+  const pushReplyRow = (r) => {
     const mk = r.message_id || `#${r.id}`;
-    if (seenMsg.has(mk)) continue;
+    if (seenMsg.has(mk)) return;
     seenMsg.add(mk);
+    seenIds.add(r.id);
     const tier = tierOf(idx, r.from_addr, r.category);
     const person = ['vip', 'customer', 'new', 'colleague'].includes(tier);
     if (r.date >= today && person && tier !== 'colleague') todayIn++;
     if (r.done_at && r.done_at >= today) doneToday++;
-    const tk = r.thread_id || mk;
-    if (seenThread.has(tk)) continue;
+    const tk = r.thread_id || r.in_reply_to || mk;
+    if (seenThread.has(tk)) return;
     seenThread.add(tk);
-    if (!person || handled(r)) continue;
-    if (r.category === 'notification' && tier !== 'vip' && tier !== 'customer') continue;
+    if (!person || handled(r)) return;
+    if (r.category === 'notification' && tier !== 'vip' && tier !== 'customer') return;
     const sigs = signalsFrom(r);
     const p = scoreRow(idx, r, { slaHours: slaFor(settings, tier, sigs), at });
     reply.push({ ...rowToMessage(r), priority: { ...p, company: companyOf(idx, { address: r.from_addr, name: r.from_name }) } });
-  }
+  };
+  for (const r of replyCandidates(userId, mailboxId, at - REPLY_WINDOW)) pushReplyRow(r);
+  for (const r of replyBoostCandidates(userId, mailboxId, at - REPLY_WINDOW, seenIds)) pushReplyRow(r);
   reply.sort((a, b) => b.priority.score - a.priority.score || b.date - a.date);
 
   // 等待对方回复：我最后发出、对方还没回、已超过跟进天数
@@ -236,7 +262,7 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
   for (const r of sentCandidates(userId, mailboxId, at - FOLLOW_WINDOW)) {
     const mk = r.message_id || `#${r.id}`;
     if (r.date >= today && r.thread_id && r.thread_id !== r.message_id) repliedToday++;
-    const tk = r.thread_id || mk;
+    const tk = r.thread_id || r.in_reply_to || mk;
     if (seenFollow.has(tk)) continue;
     seenFollow.add(tk);
     if (r.nudge_off || r.snooze_until) continue;
@@ -283,22 +309,63 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
   }
   const replyWithDeals = attachDeals(userId, reply);
   let followWithDeals = attachDeals(userId, followups);
-  // 客户级下次跟进日：到期/临近的优先排前
+
+  // 跟进日闭环：到期认领客户必出现在待跟进（即使未满全局 followDays）
   const atNow = Date.now();
+  const dueDeals = dueFollowDeals(userId, atNow);
+  const followScope = new Set(
+    followWithDeals.map((m) => m.deal?.scopeKey).filter(Boolean)
+  );
+  for (const d of dueDeals) {
+    if (followScope.has(d.scopeKey)) continue;
+    const sent = latestSentForDeal(userId, d);
+    if (!sent) continue;
+    if (sent.nudge_off || sent.snooze_until) continue;
+    // 对方已回 / 我又发了更新信 → 不注入，避免「已回仍等待」
+    if (sent.their_last && sent.their_last > sent.date) continue;
+    if (sent.my_last && sent.my_last > sent.date) continue;
+    followScope.add(d.scopeKey);
+    const to = { name: '', address: d.lastAddress || '' };
+    followWithDeals.push({
+      ...rowToMessage(sent),
+      deal: d,
+      follow: {
+        days: Math.floor((atNow - sent.date) / DAY),
+        tier: tierOf(idx, d.lastAddress),
+        to,
+        score: 120,
+        company: companyOf(idx, d.lastAddress),
+        signals: signalsFrom(sent),
+        nextFollowAt: d.nextFollowAt,
+        due: true,
+      },
+      _section: undefined,
+    });
+  }
+
   followWithDeals = followWithDeals
     .map((m) => {
-      const nf = m.deal?.nextFollowAt;
+      const nf = m.deal?.nextFollowAt || m.follow?.nextFollowAt;
       if (!nf) return m;
-      const dueBoost = nf <= atNow ? 80 : nf <= atNow + DAY ? 40 : nf <= atNow + 3 * DAY ? 15 : 0;
+      const due = nf <= atNow;
+      // 未到期：仍可在列表但降权；到期强提升
+      const dueBoost = due ? 80 : nf <= atNow + DAY ? 40 : nf <= atNow + 3 * DAY ? 15 : 0;
       return {
         ...m,
         follow: {
           ...m.follow,
           nextFollowAt: nf,
           score: (m.follow?.score || 0) + dueBoost,
-          due: nf <= atNow,
+          due,
         },
       };
+    })
+    .filter((m) => {
+      const nf = m.follow?.nextFollowAt;
+      if (!nf) return true;
+      // 未到期且未满全局跟进天数 → 先不进「等待对方」（避免噪音）；到期必出现
+      if (nf > atNow && (m.follow?.days || 0) < followDays && !m.follow?.due) return false;
+      return true;
     })
     .sort((a, b) => (b.follow?.score || 0) - (a.follow?.score || 0));
 
@@ -309,7 +376,7 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       needReply: reply.length,
       overdue,
       high: reply.filter((m) => m.priority.level === 'high').length,
-      followups: followups.length,
+      followups: followWithDeals.length,
       todayIn,
       handledToday: repliedToday + doneToday,
     },
@@ -328,6 +395,30 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     },
     settings: { slaHours, followDays, slaByTier: tiers },
   };
+}
+
+/** 认领客户到期时，用最近发给对方的已发送邮件挂到「等待」 */
+function latestSentForDeal(userId, deal) {
+  if (!deal?.lastAddress && !deal?.scopeKey) return null;
+  const addr = String(deal.lastAddress || '').toLowerCase();
+  const domain = deal.scopeKind === 'company' ? String(deal.scopeLabel || '').replace(/^@/, '') : '';
+  const select = `SELECT m.*, f.special_use, b.email AS mb_email,
+    ${MY_LAST_SQL} AS my_last, ${THEIR_LAST_SQL} AS their_last
+    FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
+    LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
+    WHERE b.user_id = ? AND f.special_use = '\\Sent' AND m.from_addr = b.email`;
+  if (addr) {
+    const row = db
+      .prepare(`${select} AND (m.to_json LIKE ? OR m.cc_json LIKE ?) ORDER BY m.date DESC LIMIT 1`)
+      .get(userId, `%${addr}%`, `%${addr}%`);
+    if (row) return row;
+  }
+  if (domain) {
+    return db
+      .prepare(`${select} AND (m.to_json LIKE ? OR m.cc_json LIKE ?) ORDER BY m.date DESC LIMIT 1`)
+      .get(userId, `%@${domain}%`, `%@${domain}%`);
+  }
+  return null;
 }
 
 /** 批量取会话中对方最后回信时间（用于已发送「等对方」） */

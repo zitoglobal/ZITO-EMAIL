@@ -176,7 +176,7 @@ function decodePart(buf, info) {
   }
 }
 
-function toSnippet(text, isHtml) {
+function toSnippet(text, isHtml, maxLen = 200) {
   let s = text;
   if (isHtml) {
     s = s
@@ -194,7 +194,22 @@ function toSnippet(text, isHtml) {
     .replace(/[\u200b-\u200f\u00ad\ufeff]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 200);
+    .slice(0, maxLen);
+}
+
+export function cleanMessageId(s) {
+  return String(s || '')
+    .trim()
+    .replace(/^<|>$/g, '');
+}
+
+/** 会话根：References 首个 → In-Reply-To → 自身 Message-ID */
+export function threadIdOf(messageId, inReplyTo, references) {
+  const refs = String(references || '').match(/<[^>]+>/g) || [];
+  const firstRef = cleanMessageId(refs[0]);
+  const irt = cleanMessageId(inReplyTo);
+  const mid = cleanMessageId(messageId);
+  return firstRef || irt || mid || null;
 }
 
 function headerMap(buf) {
@@ -208,12 +223,7 @@ function headerMap(buf) {
   return map;
 }
 
-const cleanId = (s) => String(s || '').trim().replace(/^<|>$/g, '');
-
-function threadIdOf(messageId, inReplyTo, references) {
-  const refs = String(references || '').match(/<[^>]+>/g) || [];
-  return cleanId(refs[0] || inReplyTo || messageId) || null;
-}
+const cleanId = cleanMessageId;
 
 const addr = (list) => (list || []).map((a) => ({ name: a.name || '', address: a.address || '' }));
 
@@ -231,7 +241,15 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
       internalDate: true,
       size: true,
       bodyStructure: true,
-      headers: ['list-unsubscribe', 'list-id', 'precedence', 'auto-submitted', 'references', 'x-auto-response-suppress'],
+      headers: [
+        'list-unsubscribe',
+        'list-id',
+        'precedence',
+        'auto-submitted',
+        'references',
+        'in-reply-to',
+        'x-auto-response-suppress',
+      ],
     },
     { uid }
   )) {
@@ -247,16 +265,20 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
     if (!groups.has(gk)) groups.set(gk, { part: info.part, isHtml, targets: new Map() });
     groups.get(gk).targets.set(msg.uid, info);
   }
-  const snippets = new Map();
+  /** uid → { snippet, preview }；preview 更长供入库算意图 */
+  const previews = new Map();
   for (const g of groups.values()) {
     const uids = [...g.targets.keys()];
     for (let i = 0; i < uids.length; i += 100) {
       try {
-        const query = { uid: true, bodyParts: [{ key: g.part, start: 0, maxLength: g.isHtml ? 8000 : 1500 }] };
+        const query = { uid: true, bodyParts: [{ key: g.part, start: 0, maxLength: g.isHtml ? 12000 : 5000 }] };
         for await (const res of client.fetch(uids.slice(i, i + 100).join(','), query, { uid: true })) {
           const info = g.targets.get(res.uid);
           const buf = res?.bodyParts ? [...res.bodyParts.values()][0] : null;
-          if (info) snippets.set(res.uid, toSnippet(decodePart(buf, info), g.isHtml));
+          if (!info) continue;
+          const raw = decodePart(buf, info);
+          const preview = toSnippet(raw, g.isHtml, 2500);
+          previews.set(res.uid, { snippet: preview.slice(0, 200), preview });
         }
       } catch {
         // 预览失败不影响同步
@@ -270,10 +292,13 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
     const from = addr(env.from)[0] || { name: '', address: '' };
     const date = env.date && !isNaN(new Date(env.date)) ? new Date(env.date) : msg.internalDate || new Date();
     const messageId = cleanId(env.messageId);
+    const inReplyTo = cleanId(env.inReplyTo || headers['in-reply-to']);
+    const pv = previews.get(msg.uid) || { snippet: '', preview: '' };
     return {
       uid: msg.uid,
       messageId,
-      threadId: threadIdOf(messageId, env.inReplyTo, headers.references),
+      inReplyTo: inReplyTo || null,
+      threadId: threadIdOf(messageId, inReplyTo, headers.references),
       subject: env.subject || '',
       from,
       to: addr(env.to),
@@ -284,7 +309,8 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
       answered: msg.flags?.has('\\Answered') || false,
       hasAttachments: st.attachments > 0,
       size: msg.size || 0,
-      snippet: snippets.get(msg.uid) || '',
+      snippet: pv.snippet || '',
+      preview: pv.preview || pv.snippet || '',
       category: classify({ from, headers, subject: env.subject || '' }),
     };
   });

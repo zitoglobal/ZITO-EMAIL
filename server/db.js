@@ -167,11 +167,14 @@ for (const [name, def] of [
   ['ai_note', 'TEXT'],
   ['reminded', 'INTEGER NOT NULL DEFAULT 0'],  // 提醒阶段 0→1→2→3（兼容旧的 0/1）
   ['reminded_at', 'INTEGER'],                 // 上次提醒时间，用于冷却
+  ['in_reply_to', 'TEXT'],                     // 断链补会话
 ]) {
   if (!msgCols.has(name)) db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${def}`);
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_tid ON messages(thread_id)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_date ON messages(date DESC)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_msg_in_reply ON messages(in_reply_to) WHERE in_reply_to IS NOT NULL');
+db.exec('CREATE INDEX IF NOT EXISTS idx_msg_message_id ON messages(message_id) WHERE message_id IS NOT NULL');
 
 // Focus / 分诊查询加速：按邮箱+日期窗口、发件人、文件夹 special_use、会话时间线
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_mb_date ON messages(mailbox_id, date DESC)');

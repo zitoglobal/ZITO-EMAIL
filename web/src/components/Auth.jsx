@@ -18,7 +18,8 @@ export function HeroBrand() {
 export default function Auth({ onAuthed }) {
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ email: '', password: '', name: '', code: '' });
+  const [form, setForm] = useState({ email: '', password: '', name: '', code: '', totp: '' });
+  const [totpTicket, setTotpTicket] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -38,7 +39,17 @@ export default function Auth({ onAuthed }) {
     setError('');
     setLoading(true);
     try {
+      if (totpTicket) {
+        const res = await api('/auth/login/totp', { method: 'POST', body: { ticket: totpTicket, code: form.totp } });
+        onAuthed(res.user, { via: res.via, recoveryLeft: res.recoveryLeft });
+        return;
+      }
       const res = await api(mode === 'login' ? '/auth/login' : '/auth/register', { method: 'POST', body: form });
+      if (res.needsTotp && res.ticket) {
+        setTotpTicket(res.ticket);
+        setForm((f) => ({ ...f, totp: '' }));
+        return;
+      }
       onAuthed(res.user);
     } catch (err) {
       setError(err.message);
@@ -49,6 +60,7 @@ export default function Auth({ onAuthed }) {
 
   const first = status && !status.hasUsers;
   const canRegister = first || (status && status.signup !== 'closed');
+  const totpStep = !!totpTicket;
 
   return (
     <div className="login-page">
@@ -72,12 +84,20 @@ export default function Auth({ onAuthed }) {
         <div className="login-brand">
           <BrandIcon size={40} />
           <div>
-            <div className="login-title">{first ? '创建管理员账号' : mode === 'login' ? '登录 ZITO 智能邮箱' : '注册账号'}</div>
-            <div className="login-sub">{first ? '首个注册的账号将成为管理员' : '登录后即可绑定并管理多个邮箱'}</div>
+            <div className="login-title">
+              {totpStep ? '二次验证' : first ? '创建管理员账号' : mode === 'login' ? '登录 ZITO 智能邮箱' : '注册账号'}
+            </div>
+            <div className="login-sub">
+              {totpStep
+                ? '请输入验证器动态码，或一条备用恢复码'
+                : first
+                  ? '首个注册的账号将成为管理员'
+                  : '登录后即可绑定并管理多个邮箱'}
+            </div>
           </div>
         </div>
 
-        {mode === 'register' && (
+        {!totpStep && mode === 'register' && (
           <label className="field">
             <span>姓名</span>
             <div className="input-icon">
@@ -86,21 +106,49 @@ export default function Auth({ onAuthed }) {
             </div>
           </label>
         )}
-        <label className="field">
-          <span>账号</span>
-          <div className="input-icon">
-            <User size={16} />
-            <input required autoFocus value={form.email} onChange={set('email')} placeholder="用户名或邮箱" autoComplete="username" autoCapitalize="none" spellCheck={false} />
-          </div>
-        </label>
-        <label className="field">
-          <span>平台密码</span>
-          <div className="input-icon">
-            <Lock size={16} />
-            <input type="password" required minLength={mode === 'register' ? 8 : undefined} value={form.password} onChange={set('password')} placeholder={mode === 'register' ? '至少 8 位' : '平台登录密码'} autoComplete={mode === 'register' ? 'new-password' : 'current-password'} />
-          </div>
-        </label>
-        {mode === 'register' && !first && status?.signup === 'code' && (
+        {!totpStep && (
+          <>
+            <label className="field">
+              <span>账号</span>
+              <div className="input-icon">
+                <User size={16} />
+                <input required autoFocus value={form.email} onChange={set('email')} placeholder="用户名或邮箱" autoComplete="username" autoCapitalize="none" spellCheck={false} />
+              </div>
+            </label>
+            <label className="field">
+              <span>平台密码</span>
+              <div className="input-icon">
+                <Lock size={16} />
+                <input
+                  type="password"
+                  required
+                  minLength={mode === 'register' ? 8 : undefined}
+                  value={form.password}
+                  onChange={set('password')}
+                  placeholder={mode === 'register' ? '至少 8 位，含字母和数字' : '平台登录密码'}
+                  autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                />
+              </div>
+            </label>
+          </>
+        )}
+        {totpStep && (
+          <label className="field">
+            <span>验证码</span>
+            <div className="input-icon">
+              <ShieldCheck size={16} />
+              <input
+                required
+                autoFocus
+                value={form.totp}
+                onChange={set('totp')}
+                placeholder="6 位动态码或备用码"
+                autoComplete="one-time-code"
+              />
+            </div>
+          </label>
+        )}
+        {!totpStep && mode === 'register' && !first && status?.signup === 'code' && (
           <label className="field">
             <span>邀请码</span>
             <div className="input-icon">
@@ -114,15 +162,29 @@ export default function Auth({ onAuthed }) {
 
         <button className="btn-primary block" disabled={loading || !status}>
           {loading && <Loader2 size={16} className="spin" />}
-          {mode === 'login' ? '登录' : first ? '创建并进入' : '注册'}
+          {totpStep ? '验证并登录' : mode === 'login' ? '登录' : first ? '创建并进入' : '注册'}
         </button>
 
-        {!first && canRegister && (
+        {totpStep && (
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              setTotpTicket('');
+              setForm((f) => ({ ...f, totp: '' }));
+              setError('');
+            }}
+          >
+            返回重新输入密码
+          </button>
+        )}
+
+        {!totpStep && !first && canRegister && (
           <button type="button" className="link-btn" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}>
             {mode === 'login' ? '没有账号？注册' : '已有账号？登录'}
           </button>
         )}
-        {!first && !canRegister && mode === 'login' && <div className="login-foot">没有账号？请联系管理员开通</div>}
+        {!totpStep && !first && !canRegister && mode === 'login' && <div className="login-foot">没有账号？请联系管理员开通</div>}
         <div className="login-foot"><ShieldCheck size={13} /> 平台密码与邮箱授权码分开保存，授权码经 AES-256 加密</div>
       </form>
       </div>

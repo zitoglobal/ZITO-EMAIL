@@ -1001,10 +1001,28 @@ app.post(
       case 'done':
       case 'undone':
         repo.patchMessages(ids, { done_at: action === 'done' ? Date.now() : null });
+        if (action === 'done') {
+          try {
+            const days = Number(users.settingsOf(req.user.id).followupDays) || 3;
+            deals.rollFollowAfterHandled(req.user.id, rows, { days, onlyDue: true });
+          } catch {
+            /* optional */
+          }
+        }
+        priority.invalidate(req.user.id);
         break;
       case 'nofollow':
       case 'follow':
         repo.patchMessages(ids, { nudge_off: action === 'nofollow' ? 1 : 0 });
+        if (action === 'nofollow') {
+          try {
+            const days = Number(users.settingsOf(req.user.id).followupDays) || 3;
+            deals.rollFollowAfterHandled(req.user.id, rows, { days, onlyDue: false });
+          } catch {
+            /* optional */
+          }
+        }
+        priority.invalidate(req.user.id);
         break;
       case 'archive':
       case 'trash':

@@ -67,19 +67,26 @@ export function updateFolderState(mailboxId, path, patch) {
 
 // ---------- 邮件 ----------
 export const upsertMessages = tx((mailboxId, folder, items) => {
+  const mb = getMailboxById(mailboxId);
+  const userId = mb?.user_id;
   const st = db.prepare(`INSERT INTO messages
-    (mailbox_id, folder, uid, message_id, thread_id, subject, from_name, from_addr, to_json, cc_json, date, sort_ts, seen, flagged, answered, has_att, size, snippet, category, signals)
-    VALUES (@mailbox_id, @folder, @uid, @message_id, @thread_id, @subject, @from_name, @from_addr, @to_json, @cc_json, @date, @date, @seen, @flagged, @answered, @has_att, @size, @snippet, @category, @signals)
+    (mailbox_id, folder, uid, message_id, thread_id, in_reply_to, subject, from_name, from_addr, to_json, cc_json, date, sort_ts, seen, flagged, answered, has_att, size, snippet, category, signals)
+    VALUES (@mailbox_id, @folder, @uid, @message_id, @thread_id, @in_reply_to, @subject, @from_name, @from_addr, @to_json, @cc_json, @date, @date, @seen, @flagged, @answered, @has_att, @size, @snippet, @category, @signals)
     ON CONFLICT(mailbox_id, folder, uid) DO NOTHING`);
   const upd = db.prepare('UPDATE messages SET seen = ?, flagged = ?, answered = ? WHERE mailbox_id = ? AND folder = ? AND uid = ?');
   const inserted = [];
   for (const m of items) {
+    const preview = m.preview || m.snippet || '';
+    const threadId = userId
+      ? resolveThreadId(userId, { messageId: m.messageId, inReplyTo: m.inReplyTo, threadId: m.threadId })
+      : m.threadId || m.messageId || null;
     const info = st.run({
       mailbox_id: mailboxId,
       folder,
       uid: m.uid,
       message_id: m.messageId || null,
-      thread_id: m.threadId || null,
+      thread_id: threadId,
+      in_reply_to: m.inReplyTo || null,
       subject: m.subject,
       from_name: m.from?.name || '',
       from_addr: (m.from?.address || '').toLowerCase(),
@@ -93,17 +100,19 @@ export const upsertMessages = tx((mailboxId, folder, items) => {
       size: m.size || 0,
       snippet: m.snippet || '',
       category: m.category || 'people',
-      signals: signalsOf(m.subject, m.snippet).join(','),
+      // 入库即用正文预览算意图（不再只靠 200 字 snippet）
+      signals: signalsOf(m.subject, preview).join(','),
     });
     if (info.changes) {
       const id = Number(info.lastInsertRowid);
-      inserted.push({ id, ...m });
+      inserted.push({ id, ...m, threadId });
       try {
         upsertFts(id, {
           subject: m.subject,
           snippet: m.snippet,
           fromName: m.from?.name,
           fromAddr: m.from?.address,
+          body: preview,
         });
       } catch {
         /* fts optional */
@@ -335,12 +344,91 @@ export function parseQuery(q) {
 
 const like = (s) => `%${String(s).replace(/[%_\\]/g, (c) => '\\' + c)}%`;
 
-/** 同一会话中「我」最后一次发信的时间（任一已绑定邮箱，不含草稿） */
+/**
+ * 同一会话中「我」最后一次发信（含 In-Reply-To 断链补全，不含草稿/已删除）
+ */
 export const MY_LAST_SQL = `(SELECT MAX(s.date) FROM messages s
     JOIN mailboxes sb ON sb.id = s.mailbox_id
     LEFT JOIN folders sf ON sf.mailbox_id = s.mailbox_id AND sf.path = s.folder
-    WHERE sb.user_id = b.user_id AND m.thread_id IS NOT NULL AND s.thread_id = m.thread_id AND s.from_addr = sb.email
-      AND IFNULL(sf.special_use, '') NOT IN ('\\Drafts', '\\Trash'))`;
+    WHERE sb.user_id = b.user_id AND s.from_addr = sb.email
+      AND IFNULL(sf.special_use, '') NOT IN ('\\Drafts', '\\Trash')
+      AND (
+        (m.thread_id IS NOT NULL AND s.thread_id = m.thread_id)
+        OR (m.message_id IS NOT NULL AND s.in_reply_to = m.message_id)
+        OR (m.in_reply_to IS NOT NULL AND (s.message_id = m.in_reply_to OR s.in_reply_to = m.in_reply_to OR s.thread_id = m.in_reply_to))
+      ))`;
+
+/** 对方在同一会话的最后来信（线程键 + In-Reply-To） */
+export const THEIR_LAST_SQL = `(SELECT MAX(t.date) FROM messages t JOIN mailboxes tb ON tb.id = t.mailbox_id
+    WHERE tb.user_id = b.user_id
+      AND t.from_addr NOT IN (SELECT email FROM mailboxes WHERE user_id = b.user_id)
+      AND (
+        (m.thread_id IS NOT NULL AND t.thread_id = m.thread_id)
+        OR (m.message_id IS NOT NULL AND t.in_reply_to = m.message_id)
+        OR (m.in_reply_to IS NOT NULL AND (t.message_id = m.in_reply_to OR t.in_reply_to = m.in_reply_to))
+      ))`;
+
+/** Message-Id 常见带/不带尖括号，匹配时两边都试 */
+function idVariants(...ids) {
+  const out = new Set();
+  for (const raw of ids) {
+    const s = String(raw || '').trim();
+    if (!s) continue;
+    out.add(s);
+    const bare = s.replace(/^<|>$/g, '');
+    if (bare) {
+      out.add(bare);
+      out.add(`<${bare}>`);
+    }
+  }
+  return [...out];
+}
+
+/** 解析会话键：优先继承父信 thread_id，避免断链 */
+export function resolveThreadId(userId, { messageId, inReplyTo, threadId } = {}) {
+  const variants = idVariants(inReplyTo);
+  if (variants.length) {
+    const ph = variants.map(() => '?').join(',');
+    const parent = db
+      .prepare(
+        `SELECT m.thread_id, m.message_id FROM messages m
+         JOIN mailboxes b ON b.id = m.mailbox_id
+         WHERE b.user_id = ? AND m.message_id IN (${ph})
+         ORDER BY m.date DESC LIMIT 1`
+      )
+      .get(userId, ...variants);
+    if (parent?.thread_id) return parent.thread_id;
+    if (parent?.message_id) return parent.message_id;
+  }
+  // 父信未入库时：优先信封 threadId / 本信 Message-Id，再退回 In-Reply-To
+  return threadId || messageId || variants[0] || null;
+}
+
+/** 发出回复后：把同会话收件箱标为已回复 */
+export function markThreadAnswered(userId, { threadId, inReplyTo, messageId } = {}) {
+  const tids = idVariants(threadId, inReplyTo, messageId);
+  if (!tids.length) return 0;
+  const ph = tids.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT m.id FROM messages m
+       JOIN mailboxes b ON b.id = m.mailbox_id
+       LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
+       WHERE b.user_id = ? AND f.special_use = '\\Inbox' AND IFNULL(m.answered, 0) = 0
+         AND (
+           m.thread_id IN (${ph})
+           OR m.message_id IN (${ph})
+           OR m.in_reply_to IN (${ph})
+         )`
+    )
+    .all(userId, ...tids, ...tids, ...tids);
+  if (!rows.length) return 0;
+  patchMessages(
+    rows.map((r) => r.id),
+    { answered: 1 }
+  );
+  return rows.length;
+}
 
 export function queryMessages(userId, { mailboxId, box = 'inbox', folder, category, q, cursor, limit = 50, excludePinned = false, onlyPinned = false, ids, map, labelId }) {
   const where = ['b.user_id = @userId'];

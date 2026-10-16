@@ -249,6 +249,68 @@ export function setNextFollowAt(userId, dealId, nextFollowAt) {
   return publicDeal(getDealById(dealId), userId);
 }
 
+/** 我认领且跟进日已到期的客户（Focus「等待」注入用） */
+export function dueFollowDeals(userId, at = Date.now()) {
+  const rows = db
+    .prepare(
+      `SELECT * FROM deals
+       WHERE owner_user_id = ? AND next_follow_at IS NOT NULL AND next_follow_at <= ?
+       ORDER BY next_follow_at ASC LIMIT 80`
+    )
+    .all(userId, at);
+  return rows.map((r) => publicDeal(r, userId));
+}
+
+/**
+ * 处理完待跟进后滚到下一次：next_follow_at = now + followDays。
+ * onlyDue：仅滚动已到期的跟进日（「无需回复」用）；nofollow 可滚未到期的。
+ */
+export function rollFollowAfterHandled(userId, messageRows = [], { days = 3, onlyDue = false } = {}) {
+  const dayMs = Math.max(1, Number(days) || 3) * 24 * 3600 * 1000;
+  const at = now();
+  const nextAt = at + dayMs;
+  const rolled = [];
+  const seen = new Set();
+  for (const r of messageRows) {
+    let addr = '';
+    try {
+      const to = JSON.parse(r.to_json || '[]');
+      const cc = JSON.parse(r.cc_json || '[]');
+      const own = String(r.from_addr || '').toLowerCase();
+      const pick = [...to, ...cc].find((a) => {
+        const x = String(a?.address || '').toLowerCase();
+        return x && x !== own && scopeFromAddress(x);
+      });
+      addr = pick?.address || r.from_addr || '';
+    } catch {
+      addr = r.from_addr || '';
+    }
+    const scope = scopeFromAddress(addr);
+    if (!scope || seen.has(scope.key)) continue;
+    seen.add(scope.key);
+    const row = db.prepare('SELECT * FROM deals WHERE scope_key = ? AND owner_user_id = ?').get(scope.key, userId);
+    if (!row) continue;
+    // 仅当已设跟进日时滚动；从未设过的不自动开跟进日
+    if (row.next_follow_at == null) continue;
+    if (onlyDue && row.next_follow_at > at) continue;
+    db.prepare('UPDATE deals SET next_follow_at = ?, updated_at = ? WHERE id = ?').run(nextAt, at, row.id);
+    logEvent(row.id, row.scope_key, userId, 'follow', `处理后续跟进 ${new Date(nextAt).toLocaleDateString('zh-CN')}`);
+    rolled.push(publicDeal(getDealById(row.id), userId));
+  }
+  return rolled;
+}
+
+/** 对方来信：若跟进日已到期则清掉，避免「已回仍因到期日挂着」 */
+export function clearDueFollowOnInbound(userId, fromAddr) {
+  const scope = scopeFromAddress(fromAddr);
+  if (!scope) return null;
+  const row = db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(scope.key);
+  if (!row || row.next_follow_at == null || row.next_follow_at > now()) return null;
+  db.prepare('UPDATE deals SET next_follow_at = NULL, updated_at = ? WHERE id = ?').run(now(), row.id);
+  logEvent(row.id, row.scope_key, userId, 'follow', '对方已回，清除到期跟进');
+  return publicDeal(getDealById(row.id), userId);
+}
+
 /** 批量挂到 Focus / 列表：按地址解析 scope */
 export function attachDeals(viewerId, messages = []) {
   if (!messages.length) return messages;

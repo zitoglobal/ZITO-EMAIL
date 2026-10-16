@@ -9,6 +9,7 @@ import { emit } from './events.js';
 import { DATA_DIR, db } from './db.js';
 import * as deals from './deals.js';
 import * as users from './users.js';
+import * as priority from './priority.js';
 
 export const OUTBOX_DIR = path.join(DATA_DIR, 'outbox');
 
@@ -60,6 +61,21 @@ export async function deliver(mb, payload, files) {
     if (orig) {
       repo.patchMessages([orig.id], { answered: 1 });
       jobs.push(imap.setFlags(repo.getMailboxById(orig.mailbox_id), orig.folder, [orig.uid], { answered: true }));
+      try {
+        repo.markThreadAnswered(mb.user_id, {
+          threadId: orig.thread_id || payload.replyTo.threadId,
+          inReplyTo: mail.inReplyTo || orig.message_id,
+          messageId: orig.message_id,
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
+  } else if (mail.inReplyTo) {
+    try {
+      repo.markThreadAnswered(mb.user_id, { inReplyTo: mail.inReplyTo, threadId: payload.threadId });
+    } catch {
+      /* best-effort */
     }
   }
   if (payload.draftUid) {
@@ -68,9 +84,15 @@ export async function deliver(mb, payload, files) {
   }
   await Promise.allSettled(jobs);
   repo.addContacts(mb.user_id, [...mail.to, ...mail.cc, ...mail.bcc], 3);
-  if (sent) sync.touch(mb.id, sent.path);
+  priority.invalidate(mb.user_id);
+  // 近实时：发信后立刻拉 Sent（并短延迟再补一次，覆盖服务器稍后落库）
+  if (sent) {
+    sync.forceSync(mb.id, sent.path).catch(() => {});
+    sync.touch(mb.id, sent.path, 2500);
+  }
   const drafts = repo.specialFolder(mb.id, '\\Drafts');
   if (payload.draftUid && drafts) sync.touch(mb.id, drafts.path);
+  emit(mb.user_id, 'sync', { mailboxId: mb.id, folder: sent?.path, local: true, sent: true });
 }
 
 export function saveOutboxFiles(files) {

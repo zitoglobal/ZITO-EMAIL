@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   X, Trash2, Plus, Moon, Sun, Bell, Sparkles, RefreshCw, ArrowUp, ArrowDown, Server, Loader2, AlertCircle, CheckCircle2, Mail,
   SlidersHorizontal, FileStack, User, Users, Pencil, LogOut, Image, Undo2, MessagesSquare, Rows3, KeyRound, ListTodo, Hourglass, Send,
-  BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft, Tag, ShieldCheck,
+  BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft, Tag, ShieldCheck, Hand, Smartphone,
 } from 'lucide-react';
 import { LAYOUT_MODES } from '../layout.js';
 import { api } from '../api.js';
@@ -10,6 +10,7 @@ import { MAILBOX_COLORS, relativeTime } from '../utils.js';
 import MailboxForm from './MailboxForm.jsx';
 import MailRulesPanel from './MailRulesPanel.jsx';
 import ContactsPanel from './ContactsPanel.jsx';
+import { disableWebPush, enableWebPush, pushStatus } from '../pushClient.js';
 
 const TRADE_GLOSSARY_PRESET = [
   { src: 'MOQ', dst: '最小起订量' },
@@ -261,7 +262,71 @@ function GlossaryEditor({ glossary, onSave }) {
   );
 }
 
-function Preferences({ settings, onSave, aiEnabled }) {
+function PushRow({ notify }) {
+  const [n, setN] = useState(0);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    pushStatus().then((d) => setN((d.subscriptions || []).length)).catch(() => {});
+  }, []);
+  return (
+    <div className="set-row">
+      <div className="set-row-label">
+        <Smartphone size={16} />
+        <div>
+          <b>关闭网页后的推送</b>
+          <small>安装为 PWA / 允许推送后，新邮件与超时提醒可在浏览器关闭时送达（需 HTTPS）</small>
+        </div>
+      </div>
+      <div className="set-actions">
+        {n > 0 && <span className="set-hint">已订阅 {n} 台</span>}
+        <button
+          type="button"
+          className="btn-primary sm"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await enableWebPush();
+              const d = await pushStatus();
+              setN((d.subscriptions || []).length);
+              notify('推送已开启', 'success');
+            } catch (e) {
+              notify(e.message, 'error');
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? <Loader2 size={13} className="spin" /> : null}
+          {n ? '重新订阅' : '开启推送'}
+        </button>
+        {n > 0 && (
+          <button
+            type="button"
+            className="btn-ghost sm"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await disableWebPush();
+                setN(0);
+                notify('已关闭推送');
+              } catch (e) {
+                notify(e.message, 'error');
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            关闭
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Preferences({ settings, onSave, aiEnabled, notify }) {
   const set = (k) => (v) => {
     onSave({ [k]: v });
     if (k === 'notify' && v && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -290,6 +355,7 @@ function Preferences({ settings, onSave, aiEnabled }) {
       <Choice icon={Languages} label="默认翻译目标" value={translateTarget} onChange={set('translateTarget')} options={[['简体中文', '中文'], ['English', 'English']]} />
       <Toggle icon={Languages} label="打开邮件时自动翻译" desc="外文邮件自动译成默认目标语言（消耗 AI 额度，默认关闭）" checked={settings.autoTranslate} onChange={set('autoTranslate')} />
       <Toggle icon={Bell} label="新邮件桌面通知" desc="浏览器在后台时弹出系统通知" checked={settings.notify} onChange={set('notify')} />
+      <PushRow notify={notify || (() => {})} />
       <GlossaryEditor glossary={settings.glossary} onSave={onSave} />
     </>
   );
@@ -354,6 +420,14 @@ function Triage({ settings, onSave, notify, mailboxes = [] }) {
         <Choice icon={Sparkles} label="新询盘" value={settings.slaNewInquiryHours ?? 8} onChange={set('slaNewInquiryHours')} options={[[4, '4 小时'], [8, '8 小时'], [12, '12 小时'], [24, '24 小时']]} />
       </div>
       <Choice icon={Send} label="对方未回复多久提醒跟进" value={settings.followupDays} onChange={set('followupDays')} options={[[2, '2 天'], [3, '3 天'], [5, '5 天'], [7, '7 天']]} />
+      <Choice
+        icon={Hand}
+        label="发信后自动认领客户"
+        value={settings.sendAutoClaim === 'off' ? 'off' : 'auto'}
+        onChange={set('sendAutoClaim')}
+        options={[['auto', '开启（推荐）'], ['off', '关闭']]}
+      />
+      <p className="set-desc muted-note">开启后，发信给外部客户会自动认领，减少「先回了却没认」导致的撞单；同事已认领时不会抢占，仅提示。</p>
       <Toggle icon={BellRing} label="超时提醒" desc="超时后分阶段提醒：首次 → 4 小时后升级 → 再 12 小时终提醒（有冷却，不全量轰炸）" checked={settings.remindOverdue} onChange={set('remindOverdue')} />
 
       <h4 className="set-h"><Crown size={15} /> VIP 建议（需确认）</h4>
@@ -461,6 +535,12 @@ function Account({ user, onUserChange, onLogout, notify }) {
   const [sessions, setSessions] = useState(null);
   const [policy, setPolicy] = useState(null);
   const [revoking, setRevoking] = useState(false);
+  const [totpOn, setTotpOn] = useState(!!user.totpEnabled);
+  const [totpSetup, setTotpSetup] = useState(null); // { qrDataUrl, secret }
+  const [totpCode, setTotpCode] = useState('');
+  const [totpBusy, setTotpBusy] = useState(false);
+  const [recoveryCodes, setRecoveryCodes] = useState(null); // string[] 一次性展示
+  const [recoveryLeft, setRecoveryLeft] = useState(null);
 
   function loadSessions() {
     api('/me/sessions')
@@ -473,6 +553,12 @@ function Account({ user, onUserChange, onLogout, notify }) {
 
   useEffect(() => {
     loadSessions();
+    api('/me/totp')
+      .then((d) => {
+        setTotpOn(!!d.enabled);
+        setRecoveryLeft(d.recoveryLeft ?? null);
+      })
+      .catch(() => {});
   }, []);
 
   async function saveName() {
@@ -528,11 +614,159 @@ function Account({ user, onUserChange, onLogout, notify }) {
         <h4><KeyRound size={15} /> 修改登录密码</h4>
         <label className="field"><span>当前密码</span><input type="password" required value={pwd.oldPassword} onChange={(e) => setPwd({ ...pwd, oldPassword: e.target.value })} autoComplete="current-password" /></label>
         <div className="row-2">
-          <label className="field"><span>新密码（至少 8 位）</span><input type="password" required minLength={8} value={pwd.newPassword} onChange={(e) => setPwd({ ...pwd, newPassword: e.target.value })} autoComplete="new-password" /></label>
+          <label className="field"><span>新密码（至少 8 位，含字母和数字）</span><input type="password" required minLength={8} value={pwd.newPassword} onChange={(e) => setPwd({ ...pwd, newPassword: e.target.value })} autoComplete="new-password" /></label>
           <label className="field"><span>确认新密码</span><input type="password" required value={pwd.confirm} onChange={(e) => setPwd({ ...pwd, confirm: e.target.value })} autoComplete="new-password" /></label>
         </div>
         <div className="set-actions"><button className="btn-primary sm" disabled={busy}>{busy && <Loader2 size={13} className="spin" />} 修改密码</button></div>
       </form>
+      <div className="set-account">
+        <h4><ShieldCheck size={15} /> 二次验证（TOTP）</h4>
+        <p className="set-hint">
+          {totpOn
+            ? '已开启：登录时除密码外还需验证器动态码（推荐管理员开启）。'
+            : '可选：用 Google Authenticator / 微软验证器等 App 增加一层登录保护。'}
+        </p>
+        {!totpOn && !totpSetup && (
+          <div className="set-actions">
+            <button
+              type="button"
+              className="btn-primary sm"
+              disabled={totpBusy}
+              onClick={async () => {
+                setTotpBusy(true);
+                try {
+                  const d = await api('/me/totp/setup', { method: 'POST', body: {} });
+                  setTotpSetup(d);
+                  setTotpCode('');
+                } catch (e) {
+                  notify(e.message, 'error');
+                } finally {
+                  setTotpBusy(false);
+                }
+              }}
+            >
+              {totpBusy ? <Loader2 size={13} className="spin" /> : null}
+              开始绑定验证器
+            </button>
+          </div>
+        )}
+        {totpSetup && (
+          <div className="totp-setup">
+            <img src={totpSetup.qrDataUrl} alt="TOTP QR" width={160} height={160} />
+            <p className="set-hint">用手机验证器扫描二维码，或手动输入密钥：<code>{totpSetup.secret}</code></p>
+            <label className="field">
+              <span>输入验证器中的 6 位码以确认开启</span>
+              <input value={totpCode} onChange={(e) => setTotpCode(e.target.value)} inputMode="numeric" placeholder="6 位动态码" />
+            </label>
+            <div className="set-actions">
+              <button
+                type="button"
+                className="btn-primary sm"
+                disabled={totpBusy || totpCode.replace(/\s/g, '').length < 6}
+                onClick={async () => {
+                  setTotpBusy(true);
+                  try {
+                    const r = await api('/me/totp/confirm', { method: 'POST', body: { code: totpCode } });
+                    setTotpOn(true);
+                    setTotpSetup(null);
+                    setRecoveryCodes(r.recoveryCodes || null);
+                    setRecoveryLeft((r.recoveryCodes || []).length);
+                    onUserChange({ ...user, totpEnabled: true });
+                    notify('二次验证已开启，请立刻保存备用码', 'success');
+                  } catch (e) {
+                    notify(e.message, 'error');
+                  } finally {
+                    setTotpBusy(false);
+                  }
+                }}
+              >
+                确认开启
+              </button>
+              <button type="button" className="btn-ghost sm" onClick={() => setTotpSetup(null)}>取消</button>
+            </div>
+          </div>
+        )}
+        {recoveryCodes?.length > 0 && (
+          <div className="recovery-codes">
+            <p className="set-hint"><b>备用恢复码（只显示一次）</b>：手机丢失时可用其中一条登录或关闭二次验证。请抄写并妥善保存。</p>
+            <ul>
+              {recoveryCodes.map((c) => (
+                <li key={c}><code>{c}</code></li>
+              ))}
+            </ul>
+            <div className="set-actions">
+              <button
+                type="button"
+                className="btn-ghost sm"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(recoveryCodes.join('\n'));
+                    notify('已复制到剪贴板', 'success');
+                  } catch {
+                    notify('复制失败，请手动抄写', 'error');
+                  }
+                }}
+              >
+                复制全部
+              </button>
+              <button type="button" className="btn-ghost sm" onClick={() => setRecoveryCodes(null)}>我已保存</button>
+            </div>
+          </div>
+        )}
+        {totpOn && (
+          <div className="set-actions">
+            {recoveryLeft != null && (
+              <span className="set-hint" style={{ flex: '1 1 100%' }}>剩余备用码 {recoveryLeft} 条</span>
+            )}
+            <button
+              type="button"
+              className="btn-ghost sm"
+              disabled={totpBusy}
+              onClick={async () => {
+                const code = window.prompt('输入验证器 6 位码（或一条备用码）以重新生成备用码');
+                if (!code) return;
+                setTotpBusy(true);
+                try {
+                  const r = await api('/me/totp/recovery', { method: 'POST', body: { code } });
+                  setRecoveryCodes(r.recoveryCodes || null);
+                  setRecoveryLeft(r.recoveryLeft ?? null);
+                  notify('已生成新的备用码，请保存', 'success');
+                } catch (e) {
+                  notify(e.message, 'error');
+                } finally {
+                  setTotpBusy(false);
+                }
+              }}
+            >
+              重新生成备用码
+            </button>
+            <button
+              type="button"
+              className="btn-ghost sm danger"
+              disabled={totpBusy}
+              onClick={async () => {
+                const code = window.prompt('请输入验证器 6 位码或备用码以关闭二次验证');
+                if (!code) return;
+                setTotpBusy(true);
+                try {
+                  await api('/me/totp/disable', { method: 'POST', body: { code } });
+                  setTotpOn(false);
+                  setRecoveryCodes(null);
+                  setRecoveryLeft(0);
+                  onUserChange({ ...user, totpEnabled: false });
+                  notify('二次验证已关闭');
+                } catch (e) {
+                  notify(e.message, 'error');
+                } finally {
+                  setTotpBusy(false);
+                }
+              }}
+            >
+              关闭二次验证
+            </button>
+          </div>
+        )}
+      </div>
       <div className="set-account">
         <h4><ShieldCheck size={15} /> 登录设备</h4>
         <p className="set-hint">
@@ -585,7 +819,7 @@ function Team({ me, notify }) {
   }
 
   async function reset(u) {
-    const password = window.prompt(`为 ${u.email} 设置新密码（至少 8 位）`);
+    const password = window.prompt(`为 ${u.email} 设置新密码（至少 8 位，含字母和数字）`);
     if (!password) return;
     try {
       await api(`/admin/users/${u.id}/password`, { method: 'POST', body: { password } });
@@ -808,7 +1042,7 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
             {tab === 'triage' && <Triage settings={user.settings} onSave={onSettings} notify={notify} mailboxes={mailboxes} />}
             {tab === 'labels' && <LabelsPanel notify={notify} onChanged={onLabelsChanged} />}
             {tab === 'contacts' && <ContactsPanel notify={notify} />}
-            {tab === 'preferences' && <Preferences settings={user.settings} onSave={onSettings} aiEnabled={aiEnabled} />}
+            {tab === 'preferences' && <Preferences settings={user.settings} onSave={onSettings} aiEnabled={aiEnabled} notify={notify} />}
             {tab === 'templates' && <Templates notify={notify} />}
             {tab === 'account' && <Account user={user} onUserChange={onUserChange} onLogout={onLogout} notify={notify} />}
             {tab === 'team' && <Team me={user} notify={notify} />}

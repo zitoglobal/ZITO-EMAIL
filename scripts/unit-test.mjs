@@ -4,9 +4,12 @@
 import { classify, expectsReply, signalsOf } from '../server/classify.js';
 import { slaFor, slaByTier, domainOf, isFreeDomain, normalizeKey, scoreRow, tierOf } from '../server/priority.js';
 import { matchCondition, matchRule } from '../server/mail_rules.js';
-import { scopeFromAddress, isValidStage, stageMeta, STAGES } from '../server/deals.js';
+import { scopeFromAddress, isValidStage, stageMeta, STAGES, suggestStageAfterSend } from '../server/deals.js';
 import { isBlockedHostname } from '../server/net_guard.js';
 import { sanitizeMailHtml } from '../server/sanitize_mail.js';
+import { assertPasswordStrength } from '../server/users.js';
+import { STAGE_TO_LABEL } from '../server/labels.js';
+import { generateSecret, generateSync, verifySync } from 'otplib';
 
 let fail = 0;
 let pass = 0;
@@ -154,6 +157,23 @@ assert('strip script', !sanitizeMailHtml('<p>Hi</p><script>alert(1)</script>').i
 assert('strip onerror', !/<img[^>]+onerror/i.test(sanitizeMailHtml('<img src=x onerror=alert(1)>')));
 assert('keep mailto', sanitizeMailHtml('<a href="mailto:a@b.com">x</a>').includes('mailto:a@b.com'));
 assert('block javascript href', !sanitizeMailHtml('<a href="javascript:alert(1)">x</a>').includes('javascript:'));
+
+// ---------- password + totp ----------
+assert('pwd too short fails', (() => { try { assertPasswordStrength('Ab1'); return false; } catch { return true; } })());
+assert('pwd letters only fails', (() => { try { assertPasswordStrength('abcdefgh'); return false; } catch { return true; } })());
+assert('pwd ok', (() => { try { assertPasswordStrength('Passw0rd!'); return true; } catch { return false; } })());
+{
+  const secret = generateSecret();
+  const token = generateSync({ secret });
+  assert('totp verifySync', !!verifySync({ token, secret })?.valid);
+}
+assert('stage map inquiry', STAGE_TO_LABEL.inquiry === '询盘');
+assert('stage map quote', STAGE_TO_LABEL.quote === '报价中');
+assert('stage map sample', STAGE_TO_LABEL.sample === '样品');
+assert('stage map won', STAGE_TO_LABEL.won === '成交');
+assert('suggest stage quote', suggestStageAfterSend('inquiry', 'Quotation for cotton tees', '')?.stage === 'quote');
+assert('suggest stage sample', suggestStageAfterSend('quote', 'Sample shipment', '')?.stage === 'sample');
+assert('suggest no regress', suggestStageAfterSend('payment', 'Re: inquiry', '') == null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
