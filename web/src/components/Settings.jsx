@@ -808,9 +808,23 @@ function Team({ me, notify }) {
 
   async function create(e) {
     e.preventDefault();
+    const pwd = String(form.password || '');
+    if (pwd.length < 8 || !/[A-Za-z]/.test(pwd) || !/\d/.test(pwd)) {
+      notify('密码至少 8 位，且需同时包含字母和数字', 'error');
+      return;
+    }
     try {
       await api('/admin/users', { method: 'POST', body: form });
-      notify(`已创建账号 ${form.email}，请把登录密码告知对方`);
+      const cred = `${form.email}\n${pwd}`;
+      notify(`已创建 ${form.email}，请把密码发给对方`, 'success', {
+        label: '复制账号密码',
+        fn: () => {
+          navigator.clipboard?.writeText(cred).then(
+            () => notify('已复制到剪贴板', 'success'),
+            () => notify('复制失败，请手动告知对方', 'error')
+          );
+        },
+      }, 12_000);
       setForm(null);
       load();
     } catch (err) {
@@ -849,7 +863,7 @@ function Team({ me, notify }) {
             <label className="field"><span>姓名</span><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
           </div>
           <div className="row-2">
-            <label className="field"><span>初始密码（至少 8 位）</span><input required minLength={8} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
+            <label className="field"><span>初始密码（≥8 位，字母+数字）</span><input required minLength={8} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" /></label>
             <label className="field">
               <span>角色</span>
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>

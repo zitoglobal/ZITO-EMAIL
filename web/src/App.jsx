@@ -515,6 +515,18 @@ export default function App() {
           notify(text, 'info', { label: '撤销', fn: () => doAction(ids, 'restore', { origins }) }, 7000);
         } else if (text) notify(text);
         if (action === 'restore' || action === 'undone' || action === 'follow') notify('已撤销');
+        if (res.followRolled?.length) {
+          const f = res.followRolled[0];
+          const when = f.nextFollowAt ? formatShortDateTime(f.nextFollowAt) : '';
+          notify(
+            res.followRolled.length > 1
+              ? `已滚动 ${res.followRolled.length} 个客户的下次跟进日`
+              : `下次跟进已滚到 ${when}${f.scopeLabel ? ` · ${f.scopeLabel}` : ''}`,
+            'success',
+            null,
+            7000
+          );
+        }
         loadState();
         if (view.box === 'today' || view.box === 'waiting' || ['restore', 'unsnooze', 'pin', 'unpin'].includes(action)) loadList({ silent: true });
       } catch (e) {
@@ -1207,7 +1219,14 @@ export default function App() {
           {syncBad.length ? (
             <>
               <AlertCircle size={14} />
-              <span>{syncBad.length === 1 ? `${syncBad[0].email} 同步失败` : `${syncBad.length} 个邮箱同步失败`}</span>
+              <span title={syncBad[0]?.lastError || ''}>
+                {syncBad.length === 1
+                  ? `${syncBad[0].email} 同步失败${syncBad[0].lastError ? `：${String(syncBad[0].lastError).slice(0, 48)}` : ''}`
+                  : `${syncBad.length} 个邮箱同步失败`}
+              </span>
+              <button type="button" className="mb-sync-link" onClick={() => refresh()} disabled={refreshing}>
+                {refreshing ? '同步中…' : '重试同步'}
+              </button>
               <button type="button" className="mb-sync-link" onClick={() => setModal({ type: 'settings', tab: 'mailboxes', mb: syncBad[0]?.id })}>去设置</button>
             </>
           ) : (

@@ -995,6 +995,7 @@ app.post(
     }
     const each = (fn) => Promise.all([...groups.values()].map((g) => fn(g)));
     let undoable = false;
+    let followRolled = [];
 
     switch (action) {
       case 'read':
@@ -1043,7 +1044,7 @@ app.post(
         if (action === 'done') {
           try {
             const days = Number(users.settingsOf(req.user.id).followupDays) || 3;
-            deals.rollFollowAfterHandled(req.user.id, rows, { days, onlyDue: true });
+            followRolled = deals.rollFollowAfterHandled(req.user.id, rows, { days, onlyDue: true }) || [];
           } catch {
             /* optional */
           }
@@ -1056,7 +1057,7 @@ app.post(
         if (action === 'nofollow') {
           try {
             const days = Number(users.settingsOf(req.user.id).followupDays) || 3;
-            deals.rollFollowAfterHandled(req.user.id, rows, { days, onlyDue: false });
+            followRolled = deals.rollFollowAfterHandled(req.user.id, rows, { days, onlyDue: false }) || [];
           } catch {
             /* optional */
           }
@@ -1116,8 +1117,16 @@ app.post(
       default:
         throw httpError(400, '未知操作');
     }
-    emit(req.user.id, 'sync', { mailboxId: rows[0].mailbox_id, local: true });
-    res.json({ ok: true, undoable });
+    emit(req.user.id, 'sync', { mailboxId: rows[0].mailbox_id, local: true, deal: followRolled.length > 0 });
+    res.json({
+      ok: true,
+      undoable,
+      followRolled: followRolled.map((d) => ({
+        id: d.id,
+        scopeLabel: d.scopeLabel,
+        nextFollowAt: d.nextFollowAt,
+      })),
+    });
   })
 );
 

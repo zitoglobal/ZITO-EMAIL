@@ -310,6 +310,9 @@ export default function Focus({
                 </>
               )}
             </div>
+            <button type="button" className="btn-ghost sm" onClick={onRefresh} disabled={refreshing} style={{ marginTop: 10 }}>
+              <RefreshCw size={13} className={refreshing ? 'spin' : ''} /> {refreshing ? '同步中…' : '同步邮箱'}
+            </button>
             <small className="focus-empty-hint">智能分诊仍在后台工作 · 按 <kbd>J</kbd>/<kbd>K</kbd> 巡航 · <kbd>G</kbd> 再 <kbd>T</kbd> 随时回到此处</small>
           </div>
         )}

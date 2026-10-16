@@ -85,7 +85,9 @@ export function useRealtimeMail({
           if (first) openRef.current(first.id, { box: important ? 'today' : 'inbox' });
         };
       }
-      scheduleRef.current();
+      // 新来信可能消掉「等待对方」或抬高今日待办：快刷
+      clearTimeout(fastTimer);
+      fastTimer = setTimeout(() => scheduleRef.current(), important ? 150 : 350);
     });
     es.addEventListener('remind', (e) => {
       const d = parse(e);
