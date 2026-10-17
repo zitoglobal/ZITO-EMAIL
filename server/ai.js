@@ -20,9 +20,11 @@ const API_KEY = () => process.env.AI_API_KEY || '';
  * 另按问题复杂度升降档 / 开关深度思考（AI_AUTO_ROUTE，默认开）。
  */
 export function aiModels() {
-  const strong = String(process.env.AI_MODEL_STRONG || process.env.AI_MODEL || 'qwen3.8-max').trim() || 'qwen3.8-max';
-  const mid = String(process.env.AI_MODEL_MID || strong).trim() || strong;
-  const fast = String(process.env.AI_MODEL_FAST || mid).trim() || mid;
+  // 个人版 Token Plan 默认三档（可用名以控制台为准；未设 env 时用下列实测可用组合）
+  const strong =
+    String(process.env.AI_MODEL_STRONG || process.env.AI_MODEL || 'qwen3.8-max').trim() || 'qwen3.8-max';
+  const mid = String(process.env.AI_MODEL_MID || 'deepseek-v4.1-flash').trim() || strong;
+  const fast = String(process.env.AI_MODEL_FAST || 'qwen3.6-flash').trim() || mid;
   return { fast, mid, strong, default: strong };
 }
 

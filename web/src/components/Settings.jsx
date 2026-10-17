@@ -393,10 +393,10 @@ function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudCha
       />
       {aiMeta?.models && (
         <p className="set-desc muted-note">
-          {aiMeta.autoRoute !== false ? '自动按问题选档' : '固定按任务选档'}：快 {aiMeta.models.fast} · 中{' '}
+          {aiMeta.autoRoute !== false ? '自动按问题选模' : '固定按任务选模'}：快 {aiMeta.models.fast} · 中{' '}
           {aiMeta.models.mid} · 强 {aiMeta.models.strong}
           {aiMeta.vendorHost ? ` · ${aiMeta.vendorHost}` : ''}
-          。分诊/简报走快档；投诉/付款/合同等复杂回复自动开深度思考。
+          。分诊→快模；摘要/翻译→中模；写信→强模；投诉/付款等复杂信自动开深度思考。
         </p>
       )}
       <Toggle icon={Bell} label="新邮件桌面通知" desc="浏览器在后台时弹出系统通知" checked={settings.notify} onChange={set('notify')} />
