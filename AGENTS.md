@@ -17,6 +17,7 @@
 - Gmail / M365 OAuth：`docs/oauth-setup.md`；设置→团队成员可见就绪态；启动日志提示缺口；IMAP/SMTP XOAUTH2
 - 团队公海：VIP/超时排序；指派；管理员超时催办（SSE `remind-queue` + Push，2h 冷却）；认领自己箱邮件自动打开今日待办并抬分
 - 读信「同事正在看」：`/api/presence/*` + SSE `presence`；管理员「销售洞察」含 `/api/admin/ops`
+- AI 深度：`server/ai_context.js` 向 `/api/ai/reply` 注入阶段/认领/SLA/信号；`/api/ai/triage` 返回可一键执行的 actions（认领/阶段/稍后/回复/催单/已处理），今日待办点按钮即执行
 - 会话：References 链解析 + 入库回填；会话视图跨本账号多邮箱；Focus 去重用 `conversationKey`
 - 路由拆分：`routes_collab.js` / `routes_deals.js` / `routes_focus.js`；前端 boot：`hooks/useAppBoot.js`
 - 勿对接已下线的 crm.zitoglobal.com

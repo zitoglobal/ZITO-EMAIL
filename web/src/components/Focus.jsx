@@ -27,7 +27,7 @@ function loadExpanded() {
 
 export default function Focus({
   user, data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, aiEnabled, onAiTriage, aiBusy,
-  groupMode, setGroupMode, onFollowUp, onMenu, checked, setChecked, salesDensity = false, notify,
+  groupMode, setGroupMode, onFollowUp, onMenu, checked, setChecked, salesDensity = false, notify, onAiAction, aiActionBusy,
 }) {
   const body = useRef();
   const reply = messages.filter((m) => m._section === 'reply');
@@ -171,6 +171,8 @@ export default function Focus({
     onFollowUp,
     onClaim: variant === 'reply' ? claimOne : undefined,
     claimBusy,
+    onAiAction: variant === 'reply' ? onAiAction : undefined,
+    aiActionBusy,
   });
 
   const today = new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' });

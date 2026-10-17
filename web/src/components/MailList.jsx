@@ -95,7 +95,7 @@ function Chips({ m, variant }) {
   return shown.length ? <div className="row-tags" title={all.length > 4 ? '更多状态已收起' : undefined}>{shown}</div> : null;
 }
 
-export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp, onClaim, claimBusy }) {
+export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp, onClaim, claimBusy, onAiAction, aiActionBusy }) {
   const [snooze, setSnooze] = useState(false);
   const follow = variant === 'follow';
   const focus = variant !== 'mail';
@@ -154,7 +154,27 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
           </div>
         )}
         {focus && m.aiNote && (
-          <div className="ai-note"><Sparkles size={11} /> {m.aiNote.note}</div>
+          <div className="ai-note-block" onClick={(e) => e.stopPropagation()}>
+            <div className={'ai-note' + (m.aiNote.urgency === 'high' ? ' urg-high' : '')}>
+              <Sparkles size={11} /> {m.aiNote.note}
+            </div>
+            {Array.isArray(m.aiNote.actions) && m.aiNote.actions.length > 0 && onAiAction && (
+              <div className="ai-act-row">
+                {m.aiNote.actions.map((a, i) => (
+                  <button
+                    key={a.type + (a.stage || a.hours || '') + i}
+                    type="button"
+                    className={'ai-act' + (a.type === 'claim' || a.type === 'reply' ? ' primary' : '')}
+                    disabled={!!aiActionBusy}
+                    title={a.instruction || a.label}
+                    onClick={() => onAiAction(m, a)}
+                  >
+                    {a.label || a.type}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         {(!compact || focus) && !(focus && why) && <Chips m={m} variant={variant} />}
         {why && (

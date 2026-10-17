@@ -13,6 +13,7 @@ import { conversationKey } from '../server/repo.js';
 import { threadIdOf } from '../server/imap.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
+import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
 import { generateSecret, generateSync, verifySync } from 'otplib';
 
 let fail = 0;
@@ -214,6 +215,52 @@ assert('threadIdOf falls to self', threadIdOf('<m3>', '', '') === 'm3');
 assert('queueScore vip+overdue high', queueScore({ vip: true, overdue: true, waitingHours: 30, signals: ['inquiry'] }) >= 150);
 assert('queueScore plain lower', queueScore({ vip: false, overdue: false, waitingHours: 2, signals: [] }) < 50);
 assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.isArray(oauthStatus().missing));
+
+// ---------- AI biz context / triage actions ----------
+{
+  const biz = {
+    stageLabel: '报价中',
+    stage: 'quote',
+    dealMine: true,
+    dealOwner: '我',
+    unclaimed: false,
+    tierLabel: '老客户',
+    waitingHours: 10,
+    slaHours: 8,
+    overdue: true,
+    signalLabels: ['询盘', '紧急'],
+    stageHint: '围绕报价审阅回复',
+  };
+  const block = formatBizContext(biz);
+  assert('formatBizContext has stage', block.includes('业务阶段：报价中'));
+  assert('formatBizContext overdue', block.includes('已超时'));
+  assert('formatBizContext guard', block.includes('勿编造'));
+  assert('triageContextLine compact', triageContextLine(biz).includes('阶段=报价中') && triageContextLine(biz).includes('已超时'));
+
+  const acts = normalizeTriageActions(
+    [
+      { type: 'claim', label: '认领' },
+      { type: 'stage', stage: 'quote', label: '再报价' },
+      { type: 'stage', stage: 'sample', label: '推进样品' },
+      { type: 'reply', label: '写回复', instruction: '确认交期' },
+      { type: 'snooze', hours: 100, label: '太久' },
+      { type: 'hack', label: '坏' },
+    ],
+    biz
+  );
+  assert('normalize drops claim when mine', !acts.some((a) => a.type === 'claim'));
+  assert('normalize drops same stage', !acts.some((a) => a.type === 'stage' && a.stage === 'quote'));
+  assert('normalize keeps sample stage', acts.some((a) => a.type === 'stage' && a.stage === 'sample'));
+  assert('normalize caps snooze hours', acts.find((a) => a.type === 'snooze')?.hours === 72);
+  assert('normalize max 3', acts.length <= 3);
+
+  const unclaimed = normalizeTriageActions([{ type: 'reply', label: '回' }], {
+    unclaimed: true,
+    dealMine: false,
+    dealOwner: null,
+  });
+  assert('normalize injects claim when unclaimed', unclaimed[0]?.type === 'claim');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

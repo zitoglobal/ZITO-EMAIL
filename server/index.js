@@ -36,6 +36,7 @@ import * as teamQueue from './team_queue.js';
 import { registerCollabRoutes } from './routes_collab.js';
 import { registerDealsRoutes } from './routes_deals.js';
 import { registerFocusRoutes } from './routes_focus.js';
+import * as aiContext from './ai_context.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
@@ -1563,7 +1564,15 @@ app.post(
   wrap(async (req, res) => {
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
-    res.json(await ai.draftReply(await mailForAi(req, req.body.id), { ...req.body, glossary: settings.glossary }));
+    const row = messageOf(req, req.body.id);
+    const biz = aiContext.bizContextForRow(req.user.id, row, settings);
+    res.json(
+      await ai.draftReply(await mailForAi(req, req.body.id), {
+        ...req.body,
+        glossary: settings.glossary,
+        bizContext: aiContext.formatBizContext(biz),
+      })
+    );
   })
 );
 app.post(
@@ -1641,17 +1650,47 @@ app.post(
   auth,
   wrap(async (req, res) => {
     aiLimit(req);
+    const settings = users.settingsOf(req.user.id);
     const rows = repo.getMessagesForUser(req.user.id, (req.body.ids || []).slice(0, 25).map(Number));
     const todo = rows.filter((r) => !r.ai_note || req.body.force);
     if (todo.length) {
-      const result = await ai.triage(todo.map((r) => ({ uid: r.id, from: { name: r.from_name, address: r.from_addr }, subject: r.subject, snippet: r.snippet })));
+      const payload = todo.map((r) => {
+        const biz = aiContext.bizContextForRow(req.user.id, r, settings);
+        return {
+          uid: r.id,
+          from: { name: r.from_name, address: r.from_addr },
+          subject: r.subject,
+          snippet: r.snippet,
+          context: aiContext.triageContextLine(biz),
+          _biz: biz,
+        };
+      });
+      const result = await ai.triage(payload.map(({ _biz, ...m }) => m));
       const st = db.prepare('UPDATE messages SET ai_note = ? WHERE id = ?');
       for (const it of result.items || []) {
         const row = todo.find((r) => r.id === Number(it.uid));
-        if (row && it.note) st.run(JSON.stringify({ note: String(it.note).slice(0, 120), urgency: it.urgency || 'medium', at: Date.now() }), row.id);
+        const packed = payload.find((p) => p.uid === Number(it.uid));
+        if (row && it.note) {
+          const actions = aiContext.normalizeTriageActions(it.actions, packed?._biz || {});
+          st.run(
+            JSON.stringify({
+              note: String(it.note).slice(0, 120),
+              urgency: ['high', 'medium', 'low'].includes(it.urgency) ? it.urgency : 'medium',
+              actions,
+              at: Date.now(),
+              source: 'triage',
+            }),
+            row.id
+          );
+        }
       }
     }
-    const notes = repo.getMessagesForUser(req.user.id, rows.map((r) => r.id)).map((r) => [r.id, r.ai_note ? JSON.parse(r.ai_note) : null]);
+    const notes = repo
+      .getMessagesForUser(
+        req.user.id,
+        rows.map((r) => r.id)
+      )
+      .map((r) => [r.id, r.ai_note ? JSON.parse(r.ai_note) : null]);
     res.json({ notes: Object.fromEntries(notes) });
   })
 );

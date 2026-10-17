@@ -377,11 +377,69 @@ export default function App() {
     try {
       const { notes } = await api('/ai/triage', { method: 'POST', body: { ids, force: true } });
       setList((l) => ({ ...l, messages: l.messages.map((m) => (notes[m.id] ? { ...m, aiNote: notes[m.id] } : m)) }));
-      notify('AI 已为每封邮件给出行动建议', 'success');
+      notify('AI 已给出建议与可执行动作', 'success');
     } catch (e) {
       notify(e.message, 'error');
     } finally {
       setAiBusy(false);
+    }
+  }
+
+  const [aiActionBusy, setAiActionBusy] = useState(false);
+  async function runAiAction(m, action) {
+    if (!m?.id || !action?.type || aiActionBusy) return;
+    setAiActionBusy(true);
+    try {
+      const addr = m.from?.address;
+      if (action.type === 'claim') {
+        await api('/deals/claim', { method: 'POST', body: { address: addr, threadId: m.threadId, messageId: m.id } });
+        notify('已认领，将抬升今日待办排序', 'success');
+      } else if (action.type === 'stage') {
+        let deal = m.deal;
+        if (!deal?.id) {
+          const r = await api('/deals/claim', { method: 'POST', body: { address: addr, threadId: m.threadId, messageId: m.id } });
+          deal = r.deal;
+        }
+        if (!deal?.id) throw new Error('无法推进阶段：缺少客户认领');
+        if (!deal.mine && user.role !== 'admin') throw new Error('同事已认领，无法改阶段');
+        await api(`/deals/${deal.id}`, { method: 'PATCH', body: { stage: action.stage, messageId: m.id } });
+        notify(`已推进到「${action.label || action.stage}」`, 'success');
+      } else if (action.type === 'snooze') {
+        const hours = Number(action.hours) || 4;
+        await doAction([m.id], 'snooze', { until: Date.now() + hours * 3600_000 });
+        notify(`已稍后 ${hours} 小时`, 'success');
+        setAiActionBusy(false);
+        return;
+      } else if (action.type === 'done') {
+        await doAction([m.id], 'done');
+        setAiActionBusy(false);
+        return;
+      } else if (action.type === 'reply') {
+        const d = await api(`/messages/${m.id}?markSeen=0`);
+        openCompose('reply', d, {
+          aiInstruction: action.instruction || m.aiNote?.note || '根据邮件内容给出合适回复',
+        });
+        setAiActionBusy(false);
+        return;
+      } else if (action.type === 'followup') {
+        const d = await api(`/messages/${m.id}?markSeen=0`);
+        const stage = m.deal?.stage || d.deal?.stage;
+        openCompose(
+          'reply',
+          d,
+          ai
+            ? { aiInstruction: action.instruction || followUpAiForStage(stage) }
+            : { body: followUpBodyForStage(m.follow?.to || m.from, signatureHtml(mailboxMap[d.mailboxId]?.signature), stage) }
+        );
+        setAiActionBusy(false);
+        return;
+      }
+      loadList({ silent: true });
+      loadState();
+    } catch (e) {
+      notify(e.message || '操作失败', 'error');
+    } finally {
+      setAiActionBusy(false);
     }
   }
 
@@ -1263,6 +1321,8 @@ export default function App() {
           setChecked={setChecked}
           salesDensity={layoutMode === 'sales'}
           notify={notify}
+          onAiAction={runAiAction}
+          aiActionBusy={aiActionBusy}
         />
       ) : view.box === 'waiting' ? (
         <Waiting

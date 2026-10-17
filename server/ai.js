@@ -186,7 +186,10 @@ const TONES = {
   persuasive: '有说服力的销售口吻',
 };
 
-export async function draftReply(mail, { instruction = '', tone = 'professional', language = '', signature = '', glossary = [] } = {}) {
+export async function draftReply(
+  mail,
+  { instruction = '', tone = 'professional', language = '', signature = '', glossary = [], bizContext = '' } = {}
+) {
   const lang = language || '与原邮件相同的语言';
   const text = await chat(
     [
@@ -197,9 +200,10 @@ export async function draftReply(mail, { instruction = '', tone = 'professional'
 要求：
 - 语气：${TONES[tone] || tone}
 - 语言：${lang}
-- 回复意图：${instruction || '根据邮件内容给出合适回复'}
+- 回复意图：${instruction || '根据邮件内容与业务上下文给出合适回复'}
 - 只输出正文（含称呼和结尾敬语），不要输出主题行，不要用 Markdown，不要编造价格、日期等未知信息，需要时用 [ ] 占位
-${signature ? `- 结尾署名使用：${signature}` : ''}${glossaryHint(glossary)}
+- 若业务上下文标明阶段/SLA/认领状态，回复策略必须与之匹配（例如报价中勿重新询价开场；已超时可礼貌催推进度）
+${signature ? `- 结尾署名使用：${signature}` : ''}${glossaryHint(glossary)}${bizContext || ''}
 
 ${mailContext(mail)}`,
       },
@@ -269,23 +273,35 @@ export async function translate(mail, target = '简体中文', glossary = []) {
   return { subject: out.subject || '', body: out.body || '', sourceLang };
 }
 
-/** 待回复邮件逐封给出「一句话要做什么」 */
+/**
+ * 待回复邮件逐封：一句话建议 + 可执行动作。
+ * items[].context 为业务状态摘要（可选）。
+ */
 export async function triage(items) {
   const list = items
-    .map((m) => `[uid:${m.uid}] 来自 ${m.from?.name || ''} <${m.from?.address || ''}>｜主题：${m.subject}｜预览：${(m.snippet || '').slice(0, 200)}`)
+    .map((m) => {
+      const ctx = m.context ? `｜状态：${m.context}` : '';
+      return `[uid:${m.uid}] 来自 ${m.from?.name || ''} <${m.from?.address || ''}>｜主题：${m.subject}｜预览：${(m.snippet || '').slice(0, 160)}${ctx}`;
+    })
     .join('\n');
   return chat(
     [
       { role: 'system', content: SYSTEM },
       {
         role: 'user',
-        content: `下面是等待我回复的客户邮件。请逐封用简体中文给出「我需要做什么」的一句话行动建议（不超过 30 字，以动词开头，如「确认 3000 件订单并发送 PI」），并判断紧急程度。输出 JSON：
-{"items": [{"uid": 数字, "note": "行动建议", "urgency": "high|medium|low"}]}
+        content: `下面是等待我回复的客户邮件。请逐封用简体中文给出行动建议，并给出 1～3 个可在产品内一键执行的动作。
+规则：
+- note：不超过 30 字，以动词开头
+- urgency：high|medium|low
+- actions 仅允许 type：claim（认领，仅未认领时）、stage（推进阶段，stage 取 inquiry|quote|sample|bulk|payment|won）、snooze（hours 为数字）、reply（写回复，instruction 为简短意图）、followup（催单）、done（标记已处理）
+- 不要建议与「状态」矛盾的动作（如已认领勿再 claim；已在 quote 勿再 stage=quote）
+输出 JSON：
+{"items":[{"uid":数字,"note":"行动建议","urgency":"high|medium|low","actions":[{"type":"claim|stage|snooze|reply|followup|done","label":"按钮文案","stage":"仅 stage 时","hours":4,"instruction":"仅 reply/followup 时"}]}]}
 
 ${list}`,
       },
     ],
-    { json: true, temperature: 0.2, maxTokens: 1800 }
+    { json: true, temperature: 0.2, maxTokens: 2400 }
   );
 }
 
