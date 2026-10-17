@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Component, useEffect, useRef, useState } from 'react';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Star, Mail, Sparkles, Languages, Paperclip, Download, ArrowLeft, Loader2,
   AlertTriangle, CheckCircle2, ListChecks, FolderInput, Eye, Clock, Pin, ShieldAlert, ShieldCheck, MoreHorizontal, ImageOff,
@@ -19,6 +19,33 @@ import DealBar from './DealBar.jsx';
 
 const URGENCY = { high: ['紧急', 'high'], medium: ['一般', 'medium'], low: ['不急', 'low'] };
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
+
+/** 读信正文崩溃时不拖垮整栏 */
+class BodyGuard extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  componentDidCatch(err) {
+    console.error('[reader-body]', err);
+  }
+  render() {
+    if (this.state.err) {
+      return (
+        <div className="list-error" role="alert">
+          正文渲染出错：{this.state.err.message || '未知错误'}
+          <button type="button" className="link-btn" style={{ marginLeft: 8 }} onClick={() => this.setState({ err: null })}>
+            重试
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function ConflictBanner({ conflict }) {
   if (!conflict?.colleagues?.length) return null;
@@ -158,7 +185,7 @@ function Attachments({ msg }) {
   );
 }
 
-function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer, onNotify, onDealChange }) {
+function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer, onNotify, onDealChange, viewers }) {
   const [allowImages, setAllowImages] = useState(false);
   const loading = expanded && !detail;
   const isDraft = item.specialUse === '\\Drafts';
@@ -237,14 +264,16 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
               <button className="link-btn" onClick={() => setAllowImages(true)}>显示图片</button>
             </div>
           )}
-          {isDraft ? (
-            <div className="draft-box">
-              <MailFrame html={m.html} text={m.text} dark={dark} allowImages={showImages} />
-              <button className="btn-ghost sm" onClick={() => onCompose('draft', m)}><FileText size={14} /> 继续编辑草稿</button>
-            </div>
-          ) : (
-            <MailFrame html={m.html} text={m.text} dark={dark} allowImages={showImages} collapseQuotes />
-          )}
+          <BodyGuard>
+            {isDraft ? (
+              <div className="draft-box">
+                <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} />
+                <button className="btn-ghost sm" onClick={() => onCompose('draft', m)}><FileText size={14} /> 继续编辑草稿</button>
+              </div>
+            ) : (
+              <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} collapseQuotes />
+            )}
+          </BodyGuard>
           <Attachments msg={m} />
           {!isLast && !isDraft && (
             <div className="card-actions">
@@ -961,6 +990,7 @@ export default function Reader({
                     onDealChange={(mid, deal) => {
                       setDetails((s) => (s[mid] ? { ...s, [mid]: { ...s[mid], deal } } : s));
                     }}
+                    viewers={it.id === id ? viewers : undefined}
                   />
                 </div>
               ))}
