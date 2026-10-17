@@ -398,7 +398,11 @@ CREATE INDEX IF NOT EXISTS idx_deal_events_deal ON deal_events(deal_id, created_
 
 // FTS5 全文（主题/摘要/发件人/正文）
 // 注意：不可用 content=''（contentless 不支持 DELETE，会导致删信/丢草稿失败）
+// 旧库若残留 messages_ai/ad/au 触发器（写 from_name/to_json），会在 INSERT 邮件时炸同步
 db.exec(`
+DROP TRIGGER IF EXISTS messages_ai;
+DROP TRIGGER IF EXISTS messages_ad;
+DROP TRIGGER IF EXISTS messages_au;
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   subject,
   snippet,

@@ -284,7 +284,7 @@ function ftsEscape(term) {
 /** SQLite / FTS 损坏或 contentless 误建（删信、丢弃草稿常踩中） */
 export function isSqliteCorrupt(e) {
   const m = String(e?.message || e || '');
-  return /malformed|corrupt|SQLITE_CORRUPT|disk image|contentless/i.test(m);
+  return /malformed|corrupt|SQLITE_CORRUPT|disk image|contentless|no column named from_name|no column named to_json/i.test(m);
 }
 
 const FTS_DDL = `CREATE VIRTUAL TABLE messages_fts USING fts5(
@@ -297,12 +297,22 @@ const FTS_DDL = `CREATE VIRTUAL TABLE messages_fts USING fts5(
 
 let ftsRebuildBusy = false;
 
+/** 旧版 external-content 触发器（列 from_name/to_json）与现行 FTS 冲突，必须卸掉 */
+export function dropLegacyFtsTriggers() {
+  db.exec(`
+    DROP TRIGGER IF EXISTS messages_ai;
+    DROP TRIGGER IF EXISTS messages_ad;
+    DROP TRIGGER IF EXISTS messages_au;
+  `);
+}
+
 /** 丢弃损坏/contentless 的 FTS 索引并全量重建（邮件主表不动） */
 export function rebuildFtsIndex() {
   if (ftsRebuildBusy) return;
   ftsRebuildBusy = true;
   try {
     console.warn('[fts] rebuilding messages_fts…');
+    dropLegacyFtsTriggers();
     db.exec('DROP TABLE IF EXISTS messages_fts');
     db.exec(FTS_DDL);
     backfillFts(100000);
@@ -347,12 +357,12 @@ export function removeFts(messagePks = []) {
   }
 }
 
-/** 启动探针：contentless 或损坏则重建，避免删信/丢草稿整链失败 */
+/** 启动探针：卸旧触发器 + contentless/损坏自愈，避免删信与同步失败 */
 export function ensureFtsHealthy() {
+  dropLegacyFtsTriggers();
   try {
     const row = db.prepare('SELECT id FROM messages ORDER BY id DESC LIMIT 1').get();
     if (!row) {
-      // 空库也要能 DELETE（暴露 contentless）
       db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(-1);
       return;
     }
@@ -364,7 +374,7 @@ export function ensureFtsHealthy() {
       ).run(row.id, snap.subject || '', snap.snippet || '', snap.from_text || '', snap.body || '');
     }
   } catch (e) {
-    if (!isSqliteCorrupt(e)) {
+    if (!isSqliteCorrupt(e) && !/no column named from_name|no column named to_json/i.test(e.message || '')) {
       console.warn('[fts] probe:', e.message);
       return;
     }
