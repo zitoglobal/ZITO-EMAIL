@@ -38,17 +38,17 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
   const timer = useRef();
 
   useEffect(() => {
-    if (editing) return;
     api('/oauth/status')
       .then(setOauth)
       .catch(() => {});
-  }, [editing]);
+  }, []);
 
   async function startOauth(provider) {
     setError('');
     setOauthBusy(provider);
     try {
-      const { url } = await api(`/oauth/${provider}/start`);
+      const q = editing && mailbox?.id ? qs({ mailboxId: mailbox.id }) : '';
+      const { url } = await api(`/oauth/${provider}/start${q}`);
       if (!url) throw new Error('未返回授权地址');
       window.location.href = url;
     } catch (err) {
@@ -56,6 +56,13 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
       setOauthBusy('');
     }
   }
+
+  const oauthProvider =
+    mailbox?.oauthProvider === 'microsoft' || mailbox?.provider === 'outlook' ? 'microsoft' : 'gmail';
+  const canReauth =
+    editing &&
+    mailbox?.authType === 'oauth' &&
+    ((oauthProvider === 'gmail' && oauth.gmail) || (oauthProvider === 'microsoft' && oauth.microsoft));
 
   useEffect(() => {
     if (editing) return;
@@ -142,6 +149,21 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
           </div>
           <div className="oauth-bind-or">或使用授权码绑定</div>
         </div>
+      )}
+
+      {canReauth && (
+        <div className="oauth-bind">
+          <div className="oauth-bind-label">OAuth 授权</div>
+          <button type="button" className="btn-ghost oauth-btn" disabled={!!oauthBusy} onClick={() => startOauth(oauthProvider)}>
+            {oauthBusy ? <Loader2 size={15} className="spin" /> : null}
+            重新授权 {oauthProvider === 'microsoft' ? 'Microsoft 365' : 'Google'}
+          </button>
+          <div className="oauth-bind-or">令牌失效或改密后点此刷新，无需解绑</div>
+        </div>
+      )}
+
+      {editing && mailbox?.authType === 'oauth' && !oauth.gmail && !oauth.microsoft && (
+        <div className="provider-hint">此邮箱为 OAuth 绑定。当前环境未配置 Google/Microsoft 应用凭证，请改用授权码或联系管理员配置。</div>
       )}
 
       {!editing && (

@@ -1,5 +1,5 @@
 import { db, now } from './db.js';
-import { MY_LAST_SQL, THEIR_LAST_SQL, rowToMessage } from './repo.js';
+import { MY_LAST_SQL, THEIR_LAST_SQL, rowToMessage, conversationKey } from './repo.js';
 import { expectsReply, signalsOf } from './classify.js';
 import { attachDeals, dueFollowDeals } from './deals.js';
 
@@ -270,7 +270,7 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     const person = ['vip', 'customer', 'new', 'colleague'].includes(tier);
     if (r.date >= today && person && tier !== 'colleague') todayIn++;
     if (r.done_at && r.done_at >= today) doneToday++;
-    const tk = r.thread_id || r.in_reply_to || mk;
+    const tk = conversationKey(r) || mk;
     if (seenThread.has(tk)) return;
     seenThread.add(tk);
     if (!person || handled(r)) return;
@@ -290,7 +290,7 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
   for (const r of sentCandidates(userId, mailboxId, at - FOLLOW_WINDOW)) {
     const mk = r.message_id || `#${r.id}`;
     if (r.date >= today && r.thread_id && r.thread_id !== r.message_id) repliedToday++;
-    const tk = r.thread_id || r.in_reply_to || mk;
+    const tk = conversationKey(r) || mk;
     if (seenFollow.has(tk)) continue;
     seenFollow.add(tk);
     if (r.nudge_off || r.snooze_until) continue;

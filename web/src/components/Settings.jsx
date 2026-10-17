@@ -137,10 +137,15 @@ function MailboxCard({ mb, index, total, onMove, onChanged, notify, focus }) {
         <button className="btn-ghost sm" onClick={syncNow} disabled={busy === 'sync'}>
           <RefreshCw size={13} className={busy === 'sync' ? 'spin' : ''} /> 立即同步
         </button>
-        <button className="btn-ghost sm" onClick={() => setEditConn((v) => !v)}><Server size={13} /> 密码与服务器</button>
+        <button className="btn-ghost sm" onClick={() => setEditConn((v) => !v)}>
+          <Server size={13} /> {mb.authType === 'oauth' ? '重新授权 / 服务器' : '密码与服务器'}
+        </button>
         <span className="spacer" />
         <button className="btn-ghost sm danger" onClick={remove}><Trash2 size={13} /> 解绑</button>
       </div>
+      {mb.authType === 'oauth' && (
+        <small className="muted oauth-hint">OAuth 连接 · {mb.oauthProvider === 'microsoft' ? 'Microsoft 365' : 'Google'}{mb.status === 'error' ? ' · 若报授权失效请点上方重新授权' : ''}</small>
+      )}
       {editConn && (
         <div className="conn-edit">
           <MailboxForm

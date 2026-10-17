@@ -119,7 +119,19 @@ export const upsertMessages = tx((mailboxId, folder, items) => {
       } catch {
         /* fts optional */
       }
-    } else upd.run(m.seen ? 1 : 0, m.flagged ? 1 : 0, m.answered ? 1 : 0, mailboxId, folder, m.uid);
+    } else {
+      upd.run(m.seen ? 1 : 0, m.flagged ? 1 : 0, m.answered ? 1 : 0, mailboxId, folder, m.uid);
+      // 父信晚到时回填会话键（原 ON CONFLICT DO NOTHING 会永久断链）
+      if (threadId) {
+        const row = db
+          .prepare('SELECT id, thread_id, message_id FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?')
+          .get(mailboxId, folder, m.uid);
+        if (row && row.thread_id !== threadId) {
+          const weak = !row.thread_id || row.thread_id === row.message_id;
+          if (weak) db.prepare('UPDATE messages SET thread_id = ? WHERE id = ?').run(threadId, row.id);
+        }
+      }
+    }
   }
   return inserted;
 });
@@ -386,6 +398,12 @@ function idVariants(...ids) {
   return [...out];
 }
 
+/** Focus / 会话去重共用键 */
+export function conversationKey(row) {
+  if (!row) return '';
+  return row.thread_id || row.in_reply_to || row.message_id || (row.id != null ? `#${row.id}` : '');
+}
+
 /** 解析会话键：优先继承父信 thread_id，避免断链 */
 export function resolveThreadId(userId, { messageId, inReplyTo, threadId } = {}) {
   const variants = idVariants(inReplyTo);
@@ -558,27 +576,29 @@ export function queryMessages(userId, { mailboxId, box = 'inbox', folder, catego
 }
 
 export function threadMessages(userId, row) {
-  if (!row.thread_id) return [row];
+  const variants = idVariants(row.thread_id, row.message_id, row.in_reply_to);
+  if (!variants.length) return [row];
+  const ph = variants.map(() => '?').join(',');
   const rows = db
     .prepare(
       `SELECT m.*, f.special_use FROM messages m
        JOIN mailboxes b ON b.id = m.mailbox_id
        LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
-       WHERE b.user_id = ? AND m.mailbox_id = ? AND (m.thread_id = ? OR m.message_id = ?)
+       WHERE b.user_id = ?
+         AND (m.thread_id IN (${ph}) OR m.message_id IN (${ph}) OR m.in_reply_to IN (${ph}))
          AND (IFNULL(f.special_use, '') NOT IN ('\\Trash', '\\Junk') OR m.id = ?)
-       ORDER BY m.date ASC LIMIT 100`
+       ORDER BY m.date ASC LIMIT 120`
     )
-    .all(userId, row.mailbox_id, row.thread_id, row.thread_id, row.id);
-  // 同一封邮件可能同时存在于「已发送」和「收件箱」（发给自己 / 抄送自己），按 Message-ID 只保留一份
-  const rank = (r) => (r.id === row.id ? 0 : r.special_use === '\\Sent' ? 2 : 1);
+    .all(userId, ...variants, ...variants, ...variants, row.id);
+  // 跨邮箱合并：同 Message-ID 只留一份（优先当前打开、其次收件箱、再次已发送）
+  const rank = (r) => (r.id === row.id ? 0 : r.special_use === '\\Inbox' ? 1 : r.special_use === '\\Sent' ? 2 : 3);
   const best = new Map();
   for (const r of rows) {
-    const key = r.message_id || `#${r.id}`;
-    const cur = best.get(key);
-    if (!cur || rank(r) < rank(cur)) best.set(key, r);
+    const mk = r.message_id || `#${r.id}`;
+    const cur = best.get(mk);
+    if (!cur || rank(r) < rank(cur)) best.set(mk, r);
   }
-  const keep = new Set([...best.values()].map((r) => r.id));
-  return rows.filter((r) => keep.has(r.id));
+  return [...best.values()].sort((a, b) => a.date - b.date || a.id - b.id);
 }
 
 export function counts(userId) {

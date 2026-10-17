@@ -9,6 +9,7 @@ import { isBlockedHostname } from '../server/net_guard.js';
 import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
+import { conversationKey } from '../server/repo.js';
 import { generateSecret, generateSync, verifySync } from 'otplib';
 
 let fail = 0;
@@ -196,6 +197,12 @@ assert('stage map won', STAGE_TO_LABEL.won === '成交');
 assert('suggest stage quote', suggestStageAfterSend('inquiry', 'Quotation for cotton tees', '')?.stage === 'quote');
 assert('suggest stage sample', suggestStageAfterSend('quote', 'Sample shipment', '')?.stage === 'sample');
 assert('suggest no regress', suggestStageAfterSend('payment', 'Re: inquiry', '') == null);
+
+// ---------- conversationKey ----------
+assert('conv key prefers thread', conversationKey({ thread_id: 't1', in_reply_to: 'p1', message_id: 'm1', id: 9 }) === 't1');
+assert('conv key falls to in_reply_to', conversationKey({ thread_id: null, in_reply_to: 'p1', message_id: 'm1' }) === 'p1');
+assert('conv key falls to message_id', conversationKey({ message_id: 'm1', id: 3 }) === 'm1');
+assert('conv key id fallback', conversationKey({ id: 42 }) === '#42');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

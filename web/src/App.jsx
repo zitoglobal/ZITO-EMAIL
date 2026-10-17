@@ -16,6 +16,7 @@ import Waiting from './components/Waiting.jsx';
 import AdminEmpty from './components/AdminEmpty.jsx';
 import Deals from './components/Deals.jsx';
 import Insights from './components/Insights.jsx';
+import TeamQueue from './components/TeamQueue.jsx';
 import CustomerPanel from './components/CustomerPanel.jsx';
 import ColumnSplitter from './components/ColumnSplitter.jsx';
 import Palette from './components/Palette.jsx';
@@ -32,6 +33,7 @@ import {
 } from './layout.js';
 import { ACTION_TEXT, DEFAULT_VIEW, followUpAiForStage, followUpBodyForStage, PAGE, REMOVING, SHORTCUTS, UNDO_OF } from './appConstants.js';
 import { useRealtimeMail } from './hooks/useRealtimeMail.js';
+import { useAppBoot } from './hooks/useAppBoot.js';
 
 function mergeLocalLabels(current = [], add = [], remove = [], allLabels = []) {
   const byId = new Map((current || []).map((l) => [l.id, l]));
@@ -227,37 +229,17 @@ export default function App() {
     }
   }, [applyState]);
 
-  useEffect(() => {
-    api('/me' + qs({ dayStart: dayStart() }))
-      .then((d) => {
-        setUser(d.user);
-        setAi(d.ai);
-        applyState(d);
-        // 恢复智能文件夹视图时同步查询串
-        try {
-          const v = JSON.parse(localStorage.getItem('zm_view') || 'null');
-          if (v?.box === 'smart' && v.smartId && d.savedSearches?.length) {
-            const ss = d.savedSearches.find((x) => Number(x.id) === Number(v.smartId));
-            if (ss) setQ(ss.query);
-            else setViewState(DEFAULT_VIEW);
-          }
-        } catch { /* ignore */ }
-        setBoot('ready');
-        // OAuth 回调落地提示
-        try {
-          const sp = new URLSearchParams(window.location.search);
-          if (sp.get('oauth') === 'ok') {
-            const email = sp.get('email') || '';
-            notify(email ? `已绑定 ${email}，正在同步…` : '邮箱已通过 OAuth 绑定，正在同步…', 'success');
-            window.history.replaceState({}, '', window.location.pathname);
-          } else if (sp.get('oauth_error')) {
-            notify(`OAuth 绑定失败：${sp.get('oauth_error')}`, 'error', null, 12_000);
-            window.history.replaceState({}, '', window.location.pathname);
-          }
-        } catch { /* ignore */ }
-      })
-      .catch(() => setBoot('auth'));
-  }, [applyState]);
+  function setView(v) {
+    setViewState(v);
+    localStorage.setItem('zm_view', JSON.stringify(v));
+    setSelectedId(null);
+    setChecked(new Set());
+    setCategory('all');
+    setQ('');
+    setDeep(false);
+  }
+
+  useAppBoot({ applyState, setUser, setAi, setBoot, setQ, setViewState: setView, notify });
 
   // 视图引用的邮箱/文件夹不存在时回到默认视图
   useEffect(() => {
@@ -275,16 +257,6 @@ export default function App() {
       })
       .catch(() => {});
   }, [boot]);
-
-  function setView(v) {
-    setViewState(v);
-    localStorage.setItem('zm_view', JSON.stringify(v));
-    setSelectedId(null);
-    setChecked(new Set());
-    setCategory('all');
-    setQ('');
-    setDeep(false);
-  }
 
   /** 通知点达：切换视图时保留目标邮件选中 */
   const openMessage = useCallback((id, { box = 'today', mailboxId = 'all' } = {}) => {
@@ -307,7 +279,7 @@ export default function App() {
   // ---------- 列表 ----------
   const loadList = useCallback(
     async ({ append = false, silent = false } = {}) => {
-      if (view.box === 'scheduled' || view.box === 'deals' || view.box === 'insights') return;
+        if (view.box === 'scheduled' || view.box === 'deals' || view.box === 'team' || view.box === 'insights') return;
       if (view.box === 'today' || view.box === 'waiting') {
         if (append) return;
         const id = ++reqId.current;
@@ -1250,7 +1222,7 @@ export default function App() {
         </div>
       ) : null}
 
-      {user.role === 'admin' && !mailboxes.length && ['today', 'waiting', 'inbox', 'unread', 'flagged', 'sent', 'deals', 'insights'].includes(view.box) ? (
+      {user.role === 'admin' && !mailboxes.length && ['today', 'waiting', 'inbox', 'unread', 'flagged', 'sent', 'deals', 'team', 'insights'].includes(view.box) ? (
         <AdminEmpty
           user={user}
           onAddMailbox={() => setModal({ type: 'add' })}
@@ -1307,6 +1279,12 @@ export default function App() {
           onMenu={() => setSidebarOpen(true)}
           tab={waitingTab}
           setTab={setWaitingTab}
+        />
+      ) : view.box === 'team' ? (
+        <TeamQueue
+          onMenu={() => setSidebarOpen(true)}
+          notify={notify}
+          onOpenMessage={(id) => openMessage(id, { box: 'inbox' })}
         />
       ) : view.box === 'deals' ? (
         <Deals

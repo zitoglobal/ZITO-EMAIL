@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Inbox, Send, FileText, Trash2, Archive, ShieldAlert, Star, Folder, PenSquare, Settings, Sparkles, ChevronRight, Plus, LogOut,
   MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, Hourglass, LayoutPanelLeft,
-  Columns3, Briefcase, BookOpen, Tag, Bookmark, MoreHorizontal, Pencil, Trash, ChevronDown, BarChart3,
+  Columns3,   Briefcase, BookOpen, Tag, Bookmark, MoreHorizontal, Pencil, Trash, ChevronDown, BarChart3, Users,
 } from 'lucide-react';
 import { avatarColor, folderDepth, folderLabel, initials, sortFolders } from '../utils.js';
 import { BrandIcon } from './Brand.jsx';
@@ -16,6 +16,7 @@ const ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Trash
 const WORK = [
   { box: 'today', label: '今日待办', icon: ListTodo },
   { box: 'waiting', label: '等待', icon: Hourglass },
+  { box: 'team', label: '团队公海', icon: Users },
   { box: 'deals', label: '我的客户', icon: Briefcase },
   { box: 'insights', label: '销售洞察', icon: BarChart3 },
   { box: 'unread', label: '未读', icon: MailOpen },
@@ -39,10 +40,10 @@ const MAILBOX_MORE = [
 const RAIL_ITEMS = [
   { box: 'today', label: '今日待办', icon: ListTodo },
   { box: 'waiting', label: '等待', icon: Hourglass },
+  { box: 'team', label: '团队公海', icon: Users },
   { box: 'deals', label: '我的客户', icon: Briefcase },
   { box: 'inbox', label: '所有收件箱', icon: Inbox },
   { box: 'unread', label: '未读', icon: MailOpen },
-  { box: 'flagged', label: '星标', icon: Star },
 ];
 
 function loadExpanded() {

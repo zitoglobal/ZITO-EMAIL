@@ -14,8 +14,11 @@
 - 读信后按正文重算意图 signals；搜索走 FTS5（正文）；侧栏「销售洞察」轻报表；PWA + Web Push（设置 → 偏好）
 - 今日待办/等待附「为何」验真；`GET /api/focus/explain?id=`；管理员可免绑邮箱进主界面（空态可开通成员）
 - Sent IDLE + 45s 轮询 + 发信后强制拉 Sent，缩短「已回仍待办」窗口
-- Gmail / M365 OAuth：配置 `GOOGLE_OAUTH_*` / `MS_OAUTH_*` + `PUBLIC_BASE_URL` 后绑定页出现一键授权；IMAP/SMTP 走 XOAUTH2
-- 读信「同事正在看」：`/api/presence/*` + SSE `presence`；管理员「销售洞察」含 `/api/admin/ops` 同步失败与 Focus 抽样
+- Gmail / M365 OAuth：配置见 `docs/oauth-setup.md`；绑定/设置可一键授权与重新授权；IMAP/SMTP 走 XOAUTH2
+- 团队公海：`GET /api/team/queue` + 侧栏「团队公海」；跨成员未认领客户来信，认领后进「我的客户」（不跨账号读正文）
+- 读信「同事正在看」：`/api/presence/*` + SSE `presence`；管理员「销售洞察」含 `/api/admin/ops`
+- 会话：入库回填 `thread_id`；会话视图跨本账号多邮箱合并；Focus 去重用 `conversationKey`
+- 路由拆分：`server/routes_collab.js`；前端 boot：`hooks/useAppBoot.js`
 - 勿对接已下线的 crm.zitoglobal.com
 - CI：`.github/workflows/test.yml` 跑 `npm test` + `npm run build`
 - 本地演示账号：`admin@zito.test` / `Passw0rd!`（仅本地数据库）

@@ -34,12 +34,17 @@ setInterval(() => {
   for (const [k, v] of states) if (t - v.at > 15 * 60_000) states.delete(k);
 }, 60_000).unref();
 
-export function beginAuth(provider, userId) {
+export function beginAuth(provider, userId, opts = {}) {
   const st = status();
   if (provider === 'gmail' && !st.gmail) throw Object.assign(new Error('未配置 Google OAuth（GOOGLE_OAUTH_CLIENT_ID/SECRET）'), { status: 503 });
   if (provider === 'microsoft' && !st.microsoft) throw Object.assign(new Error('未配置 Microsoft OAuth（MS_OAUTH_CLIENT_ID/SECRET）'), { status: 503 });
   const state = crypto.randomBytes(24).toString('hex');
-  states.set(state, { userId, provider, at: Date.now() });
+  states.set(state, {
+    userId,
+    provider,
+    at: Date.now(),
+    mailboxId: opts.mailboxId ? String(opts.mailboxId) : null,
+  });
 
   if (provider === 'gmail') {
     const u = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -157,7 +162,7 @@ export async function finishAuth(provider, { code, state }) {
   if (!meta || meta.provider !== provider) throw Object.assign(new Error('OAuth state 无效或已过期，请重试'), { status: 400 });
   if (!code) throw Object.assign(new Error('缺少授权码'), { status: 400 });
   const profile = provider === 'gmail' ? await exchangeGmail(code) : await exchangeMicrosoft(code);
-  return { userId: meta.userId, profile };
+  return { userId: meta.userId, profile, mailboxId: meta.mailboxId || null };
 }
 
 async function refreshGmail(refreshToken) {

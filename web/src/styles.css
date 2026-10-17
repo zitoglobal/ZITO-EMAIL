@@ -2025,6 +2025,28 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .oauth-bind-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .oauth-btn { flex: 1; min-width: 140px; justify-content: center; }
 .oauth-bind-or { font-size: 11.5px; color: var(--muted); text-align: center; margin: 2px 0 4px; }
+.oauth-hint { display: block; margin: -4px 0 8px; font-size: 12px; }
+
+.team-queue-list { list-style: none; margin: 0; padding: 8px 12px 24px; display: flex; flex-direction: column; gap: 8px; }
+.team-queue-row {
+  display: flex; gap: 12px; align-items: flex-start; justify-content: space-between;
+  padding: 12px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel);
+}
+.team-queue-row.mine { border-color: color-mix(in srgb, var(--accent, #0a66ff) 35%, var(--border)); }
+.tq-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.tq-from { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }
+.tq-from b { font-weight: 700; }
+.tq-scope { font-size: 11px; color: var(--muted); padding: 1px 6px; border-radius: 999px; background: var(--panel-2); }
+.tq-wait { font-size: 11px; color: #8a5a00; }
+.tq-wait.overdue { color: var(--danger, #c0392b); font-weight: 600; }
+.tq-subj { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tq-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11.5px; color: var(--muted); }
+.tq-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
+@media (max-width: 720px) {
+  .team-queue-row { flex-direction: column; }
+  .tq-actions { flex-direction: row; width: 100%; }
+  .tq-actions .btn-primary, .tq-actions .btn-ghost { flex: 1; justify-content: center; }
+}
 
 .presence-banner {
   display: flex; align-items: center; gap: 8px;
