@@ -304,7 +304,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
 }
 
 export default function Reader({
-  id, listItem, settings, aiEnabled, aiMeta, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp, onAiNote,
+  id, listItem, settings, aiEnabled, aiMeta, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp, onMuteFollow, onAiNote,
   onOpenCustomer, onOpenSettings, labels = [], onToggleLabels, onCreateLabel,
 }) {
   const [thread, setThread] = useState(null);
@@ -854,13 +854,20 @@ export default function Reader({
               <div className="await-strip follow">
                 <Send size={15} />
                 <div>
-                  <b>{listItem.follow.days} 天前发出，对方未回</b>
+                  <b>
+                    {listItem.follow.waitingHours != null
+                      ? `已发出 ${waitText(listItem.follow.waitingHours)}，对方未回`
+                      : `${listItem.follow.days} 天前发出，对方未回`}
+                    {listItem.follow.urgency === 'due' || listItem.follow.due ? ' · 建议跟进' : ''}
+                    {listItem.follow.suggestedAction?.label ? ` · ${listItem.follow.suggestedAction.label}` : ''}
+                  </b>
                   <small>
-                    {listItem.follow.why || displayName(listItem.follow.to)}
-                    {listItem.follow.why && listItem.follow.to ? ` · ${displayName(listItem.follow.to)}` : ''}
+                    {listItem.follow.evidence?.note || listItem.follow.why || displayName(listItem.follow.to)}
+                    {listItem.follow.siblingCount > 1 ? ` · 同客户另有 ${listItem.follow.siblingCount - 1} 封未回` : ''}
+                    {listItem.follow.to ? ` · ${displayName(listItem.follow.to)}` : ''}
                     {(listItem.follow.hits || []).length > 0 && (
                       <button type="button" className="why-hit-toggle" onClick={() => setWhyHitsOpen((o) => !o)}>
-                        {whyHitsOpen ? '收起明细' : '规则明细'}
+                        {whyHitsOpen ? '收起明细' : '判定依据'}
                       </button>
                     )}
                   </small>
@@ -869,11 +876,19 @@ export default function Reader({
                       {(listItem.follow.hits || []).map((h) => (
                         <li key={h.code + h.label}>{h.label}</li>
                       ))}
+                      {listItem.follow.evidence?.lastSentAt != null && (
+                        <li key="ev-sent">发出：{new Date(listItem.follow.evidence.lastSentAt).toLocaleString()}</li>
+                      )}
                     </ul>
                   )}
                 </div>
                 <div className="strip-actions">
-                  <button type="button" className="btn-ghost sm" onClick={() => act('nofollow')}><BellOff size={13} /> 无需跟进</button>
+                  <button type="button" className="btn-ghost sm" onClick={() => act('nofollow')}><BellOff size={13} /> 本封不跟</button>
+                  {onMuteFollow && (
+                    <button type="button" className="btn-ghost sm" onClick={() => onMuteFollow(listItem, 'address')}>
+                      不再跟此人
+                    </button>
+                  )}
                   <button type="button" className="btn-primary sm" onClick={() => onFollowUp?.(listItem)}><Reply size={13} /> 写跟进</button>
                 </div>
               </div>
@@ -905,7 +920,14 @@ export default function Reader({
               <div className="await-strip follow">
                 <Hourglass size={15} />
                 <div>
-                  <b>等对方回复{listItem.waitingDays != null && listItem.waitingDays >= 1 ? ` · 约 ${listItem.waitingDays} 天` : ''}</b>
+                  <b>
+                    等对方回复
+                    {listItem.waitingHours != null
+                      ? ` · ${waitText(listItem.waitingHours)}`
+                      : listItem.waitingDays != null && listItem.waitingDays >= 1
+                        ? ` · 约 ${listItem.waitingDays} 天`
+                        : ''}
+                  </b>
                   <small>你已回复，对方尚未回信</small>
                 </div>
                 <div className="strip-actions">

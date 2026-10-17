@@ -1,6 +1,8 @@
 /**
- * 今日待办 / 发件人规则 / VIP 建议（从 index 拆出）。
+ * 今日待办 / 发件人规则 / VIP 建议 / 客户时间线（从 index 拆出）。
  */
+import { buildCustomerTimeline } from './customer_timeline.js';
+
 export function registerFocusRoutes(app, ctx) {
   const { auth, wrap, httpError, mailboxOf, priority, labels, users, emit } = ctx;
 
@@ -38,6 +40,27 @@ export function registerFocusRoutes(app, ctx) {
       const key = priority.saveRule(req.user.id, req.body || {});
       emit(req.user.id, 'sync', { local: true });
       res.json({ ok: true, key });
+    })
+  );
+  /** 等对方：不再跟进此联系人 / 整域 */
+  app.post(
+    '/api/focus/mute-follow',
+    auth,
+    wrap(async (req, res) => {
+      const r = priority.muteFollow(req.user.id, req.body || {});
+      emit(req.user.id, 'sync', { local: true });
+      res.json({ ok: true, ...r });
+    })
+  );
+
+  /** 客户时间线：往来 + 阶段事件 + 下一步决策 */
+  app.get(
+    '/api/customer/timeline',
+    auth,
+    wrap(async (req, res) => {
+      const address = String(req.query.address || '').trim();
+      if (!address) throw httpError(400, '请提供客户邮箱');
+      res.json(buildCustomerTimeline(req.user.id, address, { limit: Number(req.query.limit) || 16 }));
     })
   );
   app.delete(

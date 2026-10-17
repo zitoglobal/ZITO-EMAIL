@@ -12,7 +12,7 @@ const TABS = [
 
 /** 统一 Waiting：复用 Focus 数据 + Row；支持单封/批量认领与 AI 分诊 */
 export default function Waiting({
-  data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, onFollowUp, onMenu, tab, setTab, notify, checked, setChecked,
+  data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, onFollowUp, onMuteFollow, onMenu, tab, setTab, notify, checked, setChecked,
   aiEnabled, onAiTriage, aiBusy, onAiAction, aiActionBusy, onGoToday,
 }) {
   const lastChecked = useRef(null);
@@ -162,7 +162,11 @@ export default function Waiting({
           ))}
         </div>
         <ClaimFilter value={claimFilter} onChange={setClaim} unclaimedN={unclaimedN} mineN={mineN} />
-        <p className="waiting-hint">默认「跟进中」= 未认领+我跟 · 可单封/批量认领 · 等对方勿催同事客户</p>
+        <p className="waiting-hint">
+          {tab === 'them'
+            ? `已发未回按客户聚合（${data?.stats?.followCustomers ?? follow.length} 家 · 共 ${data?.stats?.followThreads ?? follow.length} 封线程）。显示未回时长与建议动作；依据收件箱回复判断，无法获知对方是否已读。点「不再跟」可屏蔽联系人。`
+            : '默认「跟进中」= 未认领+我跟 · 可单封/批量认领 · 等对方勿催同事客户'}
+        </p>
         {checked && checked.size > 0 && (
           <div className="bulk" style={{ padding: '0 0 2px' }}>
             <span>已选 {checked.size}</span>
@@ -240,6 +244,7 @@ export default function Waiting({
             onAction={onAction}
             variant={m._section === 'follow' ? 'follow' : m._section === 'reply' ? 'reply' : 'mail'}
             onFollowUp={onFollowUp}
+            onMuteFollow={m._section === 'follow' ? onMuteFollow : undefined}
             onClaim={m._section === 'reply' ? claimOne : undefined}
             claimBusy={claimBusy}
             onAiAction={onAiAction}

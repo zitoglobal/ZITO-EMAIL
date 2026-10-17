@@ -577,6 +577,7 @@ function Triage({ settings, onSave, notify, mailboxes = [], isAdmin = false }) {
 
   const vip = (rules || []).filter((r) => r.kind === 'vip');
   const muted = (rules || []).filter((r) => r.kind === 'muted');
+  const nofollow = (rules || []).filter((r) => r.kind === 'nofollow');
 
   return (
     <>
@@ -609,7 +610,10 @@ function Triage({ settings, onSave, notify, mailboxes = [], isAdmin = false }) {
           </p>
         </>
       )}
-      <Choice icon={Send} label="对方未回复多久提醒跟进" value={settings.followupDays} onChange={set('followupDays')} options={[[2, '2 天'], [3, '3 天'], [5, '5 天'], [7, '7 天']]} />
+      <Choice icon={Send} label="对方未回复多久标为「建议跟进」" value={settings.followupDays} onChange={set('followupDays')} options={[[2, '2 天'], [3, '3 天'], [5, '5 天'], [7, '7 天']]} />
+      <p className="set-desc muted-note">
+        已发未回在「等待 → 等对方」发出后即列出并显示未回时长；本项只影响高亮/排序（满期标「建议跟进」），不会隐藏未回邮件。无法从邮箱服务器获知客户是否已读。
+      </p>
       <Choice
         icon={Hand}
         label="发信后自动认领客户"
@@ -634,23 +638,33 @@ function Triage({ settings, onSave, notify, mailboxes = [], isAdmin = false }) {
         </div>
       ))}
 
-      <h4 className="set-h"><Crown size={15} /> VIP 客户与静音名单</h4>
+      <h4 className="set-h"><Crown size={15} /> VIP / 静音 / 不再跟进</h4>
       <form className="rule-form" onSubmit={add}>
         <div className="segmented">
           <button type="button" className={form.kind === 'vip' ? 'on' : ''} onClick={() => setForm({ ...form, kind: 'vip' })}>VIP</button>
           <button type="button" className={form.kind === 'muted' ? 'on' : ''} onClick={() => setForm({ ...form, kind: 'muted' })}>静音</button>
+          <button type="button" className={form.kind === 'nofollow' ? 'on' : ''} onClick={() => setForm({ ...form, kind: 'nofollow' })}>不再跟进</button>
         </div>
         <input value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} placeholder="buyer@acme.com 或 @acme.com（整个公司）" required />
         {form.kind === 'vip' && <input className="short" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="客户名称（可选）" />}
         <button className="btn-primary sm"><Plus size={13} /> 添加</button>
       </form>
+      <p className="set-desc muted-note">「不再跟进」只影响等待→等对方，不静音收件箱；可在等对方列表点「不再跟」快速添加。</p>
       {rules && !rules.length && <p className="set-desc muted-note">还没有规则。在阅读邮件时，也可以直接点发件人下方的「设为 VIP」。</p>}
-      {[...vip, ...muted].map((r) => (
-        <div key={r.key} className="tpl-row">
+      {[...vip, ...muted, ...nofollow].map((r) => (
+        <div key={r.key + r.kind} className="tpl-row">
           <span className={'rule-ico ' + r.kind}>{r.kind === 'vip' ? <Crown size={13} /> : <BellOff size={13} />}</span>
           <div>
             <b>{r.name || r.key}</b>
-            <small>{r.kind === 'vip' ? 'VIP 客户 · 始终置于最前' : '静音 · 不进入今日待办'} · {r.key.startsWith('@') ? `整个 ${r.key} 域名` : r.key}</small>
+            <small>
+              {r.kind === 'vip'
+                ? 'VIP 客户 · 始终置于最前'
+                : r.kind === 'nofollow'
+                  ? '不再跟进 · 不进入「等对方」'
+                  : '静音 · 不进入今日待办'}
+              {' · '}
+              {r.key.startsWith('@') ? `整个 ${r.key} 域名` : r.key}
+            </small>
           </div>
           <button className="icon-btn danger" onClick={() => del(r.key)} title="移除"><Trash2 size={14} /></button>
         </div>

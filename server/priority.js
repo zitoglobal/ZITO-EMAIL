@@ -177,23 +177,265 @@ export function scoreRow(idx, row, { slaHours = 24, at = now() } = {}) {
   };
 }
 
+/** 格式化未回时长文案（供 hits / 单测） */
+export function formatWaitingLabel(waitingHours, days) {
+  const h = Number(waitingHours) || 0;
+  if (h < 1) return `已等 ${Math.max(1, Math.round(h * 60))} 分钟`;
+  if (h < 24) return `已等 ${Math.round(h)} 小时`;
+  const d = days != null ? days : Math.floor(h / 24);
+  const remH = Math.round(h - d * 24);
+  if (remH > 0 && d < 14) return `${d} 天 ${remH} 小时未回`;
+  return `${d} 天未回`;
+}
+
+/** 主题归一：去掉 Re/Fw 前缀，供弱匹配与单测 */
+export function normalizeSubjectKey(subject) {
+  let s = String(subject || '').toLowerCase().trim();
+  for (let i = 0; i < 4; i++) {
+    const next = s.replace(/^(re|fw|fwd|回复|答复|转发)\s*[:：]\s*/i, '').trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s.replace(/\s+/g, ' ').slice(0, 120);
+}
+
+/** 是否被「不再跟进」规则屏蔽（地址或域名） */
+export function isFollowMuted(idx, address) {
+  const rule = ruleFor(idx, address);
+  return rule?.kind === 'nofollow';
+}
+
+export function followGroupKey(company, to) {
+  if (company?.key) return String(company.key).toLowerCase();
+  return 'addr:' + String(to?.address || '').toLowerCase();
+}
+
+/** 专家动作建议：等待 / 催一次 / 升级跟进 / 可关闭 */
+export function suggestFollowAction({ urgency, due, waitingHours = 0, tier, signals = [] }) {
+  const h = Number(waitingHours) || 0;
+  if (urgency === 'soft' && !due && h < 24) {
+    return { code: 'wait', label: '再等一等', detail: '发出未满 1 天，可先观察' };
+  }
+  if (tier === 'vip' && (due || h >= 24)) {
+    return { code: 'escalate', label: '优先催单', detail: 'VIP 未回，建议电话或即时消息同步' };
+  }
+  if (signals.includes('quote') || signals.includes('sample') || signals.includes('inquiry')) {
+    if (due || h >= 48) return { code: 'nudge', label: '写跟进', detail: '业务线索未回，建议礼貌催一次' };
+  }
+  if (due || h >= 72) return { code: 'nudge', label: '写跟进', detail: '已超过建议跟进天数' };
+  if (h >= 24) return { code: 'nudge', label: '可跟进', detail: '已超过一天未回' };
+  return { code: 'wait', label: '等待中', detail: '尚未到建议跟进点' };
+}
+
+/**
+ * 弱匹配：线程断链时，用 In-Reply-To / 同发件人+归一主题 找对方是否已回
+ * @returns {{ theirLast: number|null, matchBasis: 'thread'|'in_reply_to'|'subject_from'|'none' }}
+ */
+export function resolveTheirReply(userId, sentRow, externalAddr, threadTheirLast) {
+  if (threadTheirLast && threadTheirLast > sentRow.date) {
+    return { theirLast: threadTheirLast, matchBasis: 'thread' };
+  }
+  const addr = String(externalAddr || '').toLowerCase();
+  const mid = String(sentRow.message_id || '').trim();
+  const midBare = mid.replace(/^<|>$/g, '');
+  if (midBare) {
+    const byRef = db
+      .prepare(
+        `SELECT MAX(m.date) AS their_last
+         FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
+         LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
+         WHERE b.user_id = ? AND IFNULL(f.special_use,'') = '\\Inbox'
+           AND lower(m.from_addr) = ?
+           AND m.date > ?
+           AND (
+             m.in_reply_to = ? OR m.in_reply_to = ? OR m.in_reply_to = ?
+             OR m.thread_id = ? OR m.thread_id = ?
+           )`
+      )
+      .get(userId, addr, sentRow.date, mid, `<${midBare}>`, midBare, mid, midBare);
+    if (byRef?.their_last && byRef.their_last > sentRow.date) {
+      return { theirLast: byRef.their_last, matchBasis: 'in_reply_to' };
+    }
+  }
+  const subj = normalizeSubjectKey(sentRow.subject);
+  if (addr && subj.length >= 8) {
+    const bySubj = db
+      .prepare(
+        `SELECT MAX(m.date) AS their_last
+         FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
+         LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
+         WHERE b.user_id = ? AND IFNULL(f.special_use,'') = '\\Inbox'
+           AND lower(m.from_addr) = ?
+           AND m.date > ? AND m.date <= ?
+           AND lower(trim(m.subject)) LIKE ?`
+      )
+      .get(userId, addr, sentRow.date, sentRow.date + FOLLOW_WINDOW, `%${subj.slice(0, 80)}%`);
+    if (bySubj?.their_last && bySubj.their_last > sentRow.date) {
+      return { theirLast: bySubj.their_last, matchBasis: 'subject_from' };
+    }
+  }
+  return { theirLast: threadTheirLast || null, matchBasis: 'none' };
+}
+
+/**
+ * 构建「等对方」元数据：发出即可见；followDays 只决定 soft/due 提醒档
+ */
+export function buildFollowMeta({
+  date,
+  at = Date.now(),
+  followDays = 3,
+  tier,
+  to,
+  signals = [],
+  company = null,
+  nextFollowAt = null,
+  forceDue = false,
+  matchBasis = 'none',
+  theirLastAt = null,
+  weakMatch = false,
+}) {
+  const waitingMs = Math.max(0, at - Number(date || 0));
+  const waitingHours = Math.round((waitingMs / HOUR) * 10) / 10;
+  const days = Math.floor(waitingMs / DAY);
+  const dueByDays = waitingMs >= (Number(followDays) || 3) * DAY;
+  const dueByDeal = forceDue || !!(nextFollowAt && nextFollowAt <= at);
+  const due = dueByDays || dueByDeal;
+  const urgency = due ? 'due' : 'soft';
+  let score =
+    (TIER_SCORE[tier] || 0) +
+    Math.min(30, days * 4) +
+    (signals.includes('inquiry') || signals.includes('sample') ? 10 : 0) +
+    Math.min(15, waitingHours / 2);
+  if (due) score += 45;
+  const groupKey = followGroupKey(company, to);
+  const suggestedAction = suggestFollowAction({ urgency, due, waitingHours, tier, signals });
+  const follow = {
+    days,
+    waitingHours,
+    lastSentAt: Number(date) || at,
+    theirLastAt: theirLastAt || null,
+    matchBasis,
+    weakMatch: !!weakMatch || matchBasis === 'subject_from',
+    urgency,
+    due,
+    tier,
+    to,
+    score,
+    company,
+    signals,
+    groupKey,
+    groupLabel: company?.name || to?.name || to?.address || '',
+    evidence: {
+      lastSentAt: Number(date) || at,
+      theirLastAt: theirLastAt || null,
+      matchBasis,
+      note:
+        matchBasis === 'none'
+          ? '收件箱未见对方回复（线程/主题）'
+          : matchBasis === 'subject_from'
+            ? '弱匹配：同发件人+相似主题（可能已回）'
+            : matchBasis === 'in_reply_to'
+              ? '依据 In-Reply-To 判定对方已回'
+              : '依据会话线程判定',
+    },
+    suggestedAction,
+  };
+  if (nextFollowAt) follow.nextFollowAt = nextFollowAt;
+  follow.hits = followHits(follow);
+  follow.why = followWhy(follow);
+  return follow;
+}
+
 function followHits(f) {
   const hits = [];
-  if (f.due) hits.push({ code: 'follow_due', label: '跟进日到期' });
-  else if (f.nextFollowAt) hits.push({ code: 'follow_planned', label: '已设跟进日' });
+  if (f.urgency === 'due' || f.due) {
+    hits.push({
+      code: 'follow_due',
+      label: f.nextFollowAt && f.nextFollowAt <= Date.now() ? '跟进日到期' : '建议跟进',
+    });
+  } else {
+    hits.push({ code: 'follow_soft', label: '等待中' });
+  }
+  if (f.nextFollowAt && !(f.nextFollowAt <= Date.now())) {
+    hits.push({ code: 'follow_planned', label: '已设跟进日' });
+  }
   if (f.tier === 'vip') hits.push({ code: 'tier_vip', label: 'VIP' });
   else if (f.tier === 'customer') hits.push({ code: 'tier_customer', label: '老客户' });
   else if (f.tier === 'new') hits.push({ code: 'tier_new', label: '新联系人' });
   for (const s of f.signals || []) {
     if (SIGNAL_LABEL[s] && s !== 'question') hits.push({ code: 'signal_' + s, label: SIGNAL_LABEL[s] });
   }
-  if (f.days != null) hits.push({ code: 'days_waiting', label: `${f.days} 天未回` });
+  hits.push({
+    code: f.waitingHours < 24 ? 'hours_waiting' : 'days_waiting',
+    label: formatWaitingLabel(f.waitingHours, f.days),
+  });
   hits.push({ code: 'awaiting_them', label: '对方尚未回复' });
+  if (f.suggestedAction?.label) {
+    hits.push({ code: 'action_' + f.suggestedAction.code, label: '建议：' + f.suggestedAction.label });
+  }
+  if (f.weakMatch) hits.push({ code: 'weak_match', label: '弱匹配（请核实）' });
+  if (f.siblingCount > 1) hits.push({ code: 'siblings', label: `同客户另有 ${f.siblingCount - 1} 封` });
   return hits.slice(0, 12);
+}
+
+/** 同一客户只保留最新一封，附带 sibling 信息 */
+export function aggregateFollowupsByCustomer(items) {
+  const map = new Map();
+  for (const m of items) {
+    const key = m.follow?.groupKey || `id:${m.id}`;
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, {
+        ...m,
+        follow: {
+          ...m.follow,
+          siblingCount: 1,
+          siblingIds: [m.id],
+        },
+      });
+      continue;
+    }
+    const newer = m.date >= prev.date ? m : prev;
+    const older = m.date >= prev.date ? prev : m;
+    const siblingIds = [...new Set([...(prev.follow.siblingIds || [prev.id]), m.id])];
+    const waitingHours = Math.max(newer.follow?.waitingHours || 0, older.follow?.waitingHours || 0);
+    const due = !!(newer.follow?.due || older.follow?.due);
+    const urgency = due ? 'due' : 'soft';
+    const follow = {
+      ...newer.follow,
+      siblingCount: siblingIds.length,
+      siblingIds,
+      waitingHours,
+      days: Math.floor(waitingHours / 24),
+      due,
+      urgency,
+      score: Math.max(newer.follow?.score || 0, older.follow?.score || 0) + Math.min(12, (siblingIds.length - 1) * 4),
+      suggestedAction: suggestFollowAction({
+        urgency,
+        due,
+        waitingHours,
+        tier: newer.follow?.tier,
+        signals: newer.follow?.signals || [],
+      }),
+    };
+    follow.hits = followHits(follow);
+    follow.why = followWhy(follow);
+    map.set(key, { ...newer, follow });
+  }
+  return [...map.values()].sort(sortFollowups);
 }
 
 function followWhy(f) {
   return [...new Set(followHits(f).map((h) => h.label).filter(Boolean))].slice(0, 6).join(' · ');
+}
+
+function sortFollowups(a, b) {
+  const da = a.follow?.urgency === 'due' || a.follow?.due ? 1 : 0;
+  const db = b.follow?.urgency === 'due' || b.follow?.due ? 1 : 0;
+  if (db !== da) return db - da;
+  const wh = (b.follow?.waitingHours || 0) - (a.follow?.waitingHours || 0);
+  if (wh) return wh;
+  return (b.follow?.score || 0) - (a.follow?.score || 0);
 }
 
 // ---------- 今日待办 ----------
@@ -304,7 +546,7 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
   for (const r of replyBoostCandidates(userId, mailboxId, at - REPLY_WINDOW, seenIds)) pushReplyRow(r);
   reply.sort((a, b) => b.priority.score - a.priority.score || b.date - a.date);
 
-  // 等待对方回复：我最后发出、对方还没回、已超过跟进天数
+  // 等待对方回复：我最后发出、对方还没回（发出即可见；followDays 只影响 soft/due）
   const followups = [];
   const seenFollow = new Set();
   let repliedToday = 0;
@@ -316,27 +558,35 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     seenFollow.add(tk);
     if (r.nudge_off || r.snooze_until) continue;
     if (r.my_last && r.my_last > r.date) continue;
-    if (r.their_last && r.their_last > r.date) continue;
-    if (at - r.date < followDays * DAY) continue;
     const to = JSON.parse(r.to_json || '[]');
     const external = to.find((a) => {
       const addr = String(a.address || '').toLowerCase();
       return addr && !idx.own.has(addr) && !idx.ownDomains.has(domainOf(addr)) && !ROBOT.test(addr);
     });
     if (!external || !expectsReply(r.subject, r.snippet)) continue;
+    if (isFollowMuted(idx, external.address)) continue;
+    const replyHit = resolveTheirReply(userId, r, external.address, r.their_last);
+    if (replyHit.theirLast && replyHit.theirLast > r.date) continue;
     const tier = tierOf(idx, external.address);
-    const days = Math.floor((at - r.date) / DAY);
     const signals = signalsFrom(r);
-    const score = (TIER_SCORE[tier] || 0) + Math.min(30, days * 4) + (signals.includes('inquiry') || signals.includes('sample') ? 10 : 0);
-    const follow = { days, tier, to: external, score, company: companyOf(idx, external), signals };
-    follow.hits = followHits(follow);
-    follow.why = followWhy(follow);
+    const company = companyOf(idx, external);
+    const follow = buildFollowMeta({
+      date: r.date,
+      at,
+      followDays,
+      tier,
+      to: external,
+      signals,
+      company,
+      matchBasis: replyHit.matchBasis,
+      theirLastAt: replyHit.theirLast,
+    });
     followups.push({
       ...rowToMessage(r),
       follow,
     });
   }
-  followups.sort((a, b) => b.follow.score - a.follow.score);
+  followups.sort(sortFollowups);
 
   const overdueList = reply.filter((m) => m.priority.overdue);
   const overdue = overdueList.length;
@@ -387,21 +637,26 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     const sent = latestSentForDeal(userId, d);
     if (!sent) continue;
     if (sent.nudge_off || sent.snooze_until) continue;
-    // 对方已回 / 我又发了更新信 → 不注入，避免「已回仍等待」
-    if (sent.their_last && sent.their_last > sent.date) continue;
+    if (isFollowMuted(idx, d.lastAddress)) continue;
     if (sent.my_last && sent.my_last > sent.date) continue;
+    const replyHit = resolveTheirReply(userId, sent, d.lastAddress, sent.their_last);
+    if (replyHit.theirLast && replyHit.theirLast > sent.date) continue;
     followScope.add(d.scopeKey);
     const to = { name: '', address: d.lastAddress || '' };
-    const follow = {
-      days: Math.floor((atNow - sent.date) / DAY),
+    const follow = buildFollowMeta({
+      date: sent.date,
+      at: atNow,
+      followDays,
       tier: tierOf(idx, d.lastAddress),
       to,
-      score: 120,
-      company: companyOf(idx, d.lastAddress),
       signals: signalsFrom(sent),
+      company: companyOf(idx, { address: d.lastAddress }),
       nextFollowAt: d.nextFollowAt,
-      due: true,
-    };
+      forceDue: true,
+      matchBasis: replyHit.matchBasis,
+      theirLastAt: replyHit.theirLast,
+    });
+    follow.score = Math.max(follow.score, 120);
     follow.hits = followHits(follow);
     follow.why = followWhy(follow);
     followWithDeals.push({
@@ -416,44 +671,82 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     .map((m) => {
       const nf = m.deal?.nextFollowAt || m.follow?.nextFollowAt;
       if (!nf) return m;
-      const due = nf <= atNow;
-      // 未到期：仍可在列表但降权；到期强提升
-      const dueBoost = due ? 80 : nf <= atNow + DAY ? 40 : nf <= atNow + 3 * DAY ? 15 : 0;
-      const follow = {
-        ...m.follow,
+      const follow = buildFollowMeta({
+        date: m.follow?.lastSentAt || m.date,
+        at: atNow,
+        followDays,
+        tier: m.follow?.tier,
+        to: m.follow?.to,
+        signals: m.follow?.signals || [],
+        company: m.follow?.company,
         nextFollowAt: nf,
-        score: (m.follow?.score || 0) + dueBoost,
-        due,
-      };
+        forceDue: nf <= atNow,
+        matchBasis: m.follow?.matchBasis || 'none',
+        theirLastAt: m.follow?.theirLastAt,
+        weakMatch: m.follow?.weakMatch,
+      });
+      // 未到期跟进日：保留列表，略降权；到期强提升
+      if (nf > atNow) {
+        const soon =
+          nf <= atNow + DAY ? 40 : nf <= atNow + 3 * DAY ? 15 : 0;
+        follow.score = (follow.score || 0) + soon;
+      } else {
+        follow.score = (follow.score || 0) + 80;
+      }
       follow.hits = followHits(follow);
       follow.why = followWhy(follow);
       return { ...m, follow };
     })
-    .filter((m) => {
-      const nf = m.follow?.nextFollowAt;
-      if (!nf) return true;
-      // 未到期且未满全局跟进天数 → 先不进「等待对方」（避免噪音）；到期必出现
-      if (nf > atNow && (m.follow?.days || 0) < followDays && !m.follow?.due) return false;
-      return true;
-    })
-    .sort((a, b) => (b.follow?.score || 0) - (a.follow?.score || 0));
+    .sort(sortFollowups);
 
-  // 标注「今日收到仍未回」，供前端拆段与明细
-  const replyMarked = replyWithDeals.map((m) => ({
-    ...m,
-    receivedToday: m.date >= today,
-  }));
+  // 按客户聚合：同一公司/联系人只展示最新一封，附 siblingCount
+  const followRawCount = followWithDeals.length;
+  followWithDeals = aggregateFollowupsByCustomer(followWithDeals);
+
+  // 标注分段：今日未回 / 更早未回 / 是否超时（供前端筛选与验真）
+  const briefOf = (m) => ({
+    id: m.id,
+    subject: m.subject,
+    from: m.from,
+    date: m.date,
+    waitingHours: m.priority?.waitingHours ?? m.follow?.waitingHours,
+    overdue: !!(m.priority?.overdue || m.follow?.due),
+    tier: m.priority?.tier || m.follow?.tier,
+    level: m.priority?.level,
+    why: m.priority?.why || m.follow?.why || '',
+    slaHours: m.priority?.slaHours,
+    receivedToday: !!m.receivedToday,
+    focusBucket: m.focusBucket,
+    deal: m.deal
+      ? { stage: m.deal.stage, stageLabel: m.deal.stageLabel, mine: m.deal.mine, scopeLabel: m.deal.scopeLabel }
+      : null,
+  });
+
+  const replyMarked = replyWithDeals.map((m) => {
+    const receivedToday = m.date >= today;
+    const isOverdue = !!m.priority?.overdue;
+    return {
+      ...m,
+      receivedToday,
+      isOverdue,
+      /** today | older — 是否今天收到；超时见 isOverdue */
+      focusBucket: receivedToday ? 'today' : 'older',
+    };
+  });
   const todayUnreplied = replyMarked.filter((m) => m.receivedToday);
   const olderUnreplied = replyMarked.filter((m) => !m.receivedToday);
+  const overdueMarked = replyMarked.filter((m) => m.isOverdue);
 
   return {
     reply: replyMarked,
-    followups: followWithDeals,
+    followups: followWithDeals.map((m) => ({ ...m, focusBucket: 'follow', receivedToday: false, isOverdue: !!m.follow?.due })),
     stats: {
       needReply: replyMarked.length,
       overdue,
       high: replyMarked.filter((m) => m.priority.level === 'high').length,
       followups: followWithDeals.length,
+      followThreads: followRawCount,
+      followCustomers: followWithDeals.length,
       /** 侧栏「等待」角标：等我 / 等对方 */
       waitingMine: replyMarked.length,
       waitingThem: followWithDeals.length,
@@ -461,40 +754,40 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       /** 今日收到且仍待你回复（明细见 todayUnreplied） */
       todayUnreplied: todayUnreplied.length,
       olderUnreplied: olderUnreplied.length,
+      overdueToday: todayUnreplied.filter((m) => m.isOverdue).length,
+      overdueOlder: olderUnreplied.filter((m) => m.isOverdue).length,
       handledToday: repliedToday + doneToday,
     },
-    /** 今日未回清单（按最新来信），方便一眼看清「今天谁还没回」 */
+    /** 今日未回清单（按最新来信） */
     todayUnreplied: todayUnreplied
       .slice()
       .sort((a, b) => b.date - a.date)
-      .map((m) => ({
-        id: m.id,
-        subject: m.subject,
-        from: m.from,
-        date: m.date,
-        waitingHours: m.priority?.waitingHours,
-        overdue: !!m.priority?.overdue,
-        tier: m.priority?.tier,
-        level: m.priority?.level,
-        why: m.priority?.why || '',
-        deal: m.deal
-          ? { stage: m.deal.stage, stageLabel: m.deal.stageLabel, mine: m.deal.mine, scopeLabel: m.deal.scopeLabel }
-          : null,
-      })),
+      .map(briefOf),
+    /** 更早未回清单 */
+    olderUnreplied: olderUnreplied
+      .slice()
+      .sort((a, b) => b.date - a.date)
+      .map(briefOf),
+    /** 已超时清单（今日+更早） */
+    overdueList: overdueMarked
+      .slice()
+      .sort((a, b) => (b.priority?.waitingHours || 0) - (a.priority?.waitingHours || 0))
+      .map(briefOf),
     overdueSummary: {
       count: overdue,
       byTier,
       oldestHours: Math.round(oldestHours * 10) / 10,
-      top: overdueList.slice(0, 3).map((m) => ({
+      top: overdueList.slice(0, 5).map((m) => ({
         id: m.id,
         subject: m.subject,
         from: m.from,
         tier: m.priority.tier,
         waitingHours: m.priority.waitingHours,
         slaHours: m.priority.slaHours,
+        receivedToday: m.date >= today,
       })),
     },
-    settings: { slaHours, followDays, slaByTier: tiers },
+    settings: { slaHours, followDays, slaByTier: tiers, dayStart: today },
   };
 }
 
@@ -586,12 +879,29 @@ export function explainMessage(userId, messageId, settings = {}) {
     }
   } else if (row.special_use === '\\Sent') {
     if (row.nudge_off) outHits.push({ code: 'nofollow', label: '已标记无需跟进' });
-    if (row.their_last && row.their_last > row.date) outHits.push({ code: 'they_replied', label: '对方已回复' });
-    if (row.my_last && row.my_last > row.date) outHits.push({ code: 'newer_sent', label: '你有更新的发信' });
-    const followDays = Number(settings.followupDays) || 3;
-    if (at - row.date < followDays * DAY) {
-      outHits.push({ code: 'follow_days', label: `未满跟进天数（${followDays} 天）` });
+    const to = JSON.parse(row.to_json || '[]');
+    const external = to.find((a) => {
+      const addr = String(a.address || '').toLowerCase();
+      return addr && !idx.own.has(addr) && !idx.ownDomains.has(domainOf(addr)) && !ROBOT.test(addr);
+    });
+    if (external && isFollowMuted(idx, external.address)) {
+      outHits.push({ code: 'mute_follow', label: '已设「不再跟进」此联系人/域名' });
     }
+    if (external) {
+      const hit = resolveTheirReply(userId, row, external.address, row.their_last);
+      if (hit.theirLast && hit.theirLast > row.date) {
+        outHits.push({
+          code: 'they_replied',
+          label:
+            hit.matchBasis === 'subject_from'
+              ? '对方可能已回复（弱匹配：同人+相似主题）'
+              : '对方已回复',
+        });
+      }
+    } else if (row.their_last && row.their_last > row.date) {
+      outHits.push({ code: 'they_replied', label: '对方已回复' });
+    }
+    if (row.my_last && row.my_last > row.date) outHits.push({ code: 'newer_sent', label: '你有更新的发信' });
     if (!expectsReply(row.subject, row.snippet)) {
       outHits.push({ code: 'expects_reply_false', label: '主题/摘要判断为无需跟进' });
     }
@@ -707,11 +1017,16 @@ export function decorate(userId, rows, settings = {}) {
       if (!expectsReply(r.subject, r.snippet)) return m;
       const external = externalRecipient(idx, r.to_json);
       if (!external) return m;
+      const waitingHours = Math.round(((at - r.date) / HOUR) * 10) / 10;
       const days = Math.floor((at - r.date) / DAY);
+      const followDays = Number(settings?.followupDays) || 3;
+      const due = at - r.date >= followDays * DAY;
       return {
         ...m,
         waitingOnThem: true,
         waitingDays: days,
+        waitingHours,
+        followUrgency: due ? 'due' : 'soft',
         tier: tierOf(idx, external.address),
       };
     }
@@ -988,13 +1303,47 @@ export const listRules = (userId) => db.prepare('SELECT key, kind, name, created
 export function saveRule(userId, { key, kind, name }) {
   const k = normalizeKey(key);
   if (!k) throw new Error('请输入邮箱地址或域名，例如 buyer@acme.com 或 @acme.com');
-  if (!['vip', 'muted'].includes(kind)) throw new Error('规则类型不正确');
+  if (!['vip', 'muted', 'nofollow'].includes(kind)) throw new Error('规则类型不正确');
+  const label =
+    String(name || '').trim().slice(0, 60) ||
+    (kind === 'nofollow' ? '不再跟进' : kind === 'muted' ? '静音' : '');
   db.prepare(
     `INSERT INTO sender_rules (user_id, key, kind, name, created_at) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(user_id, key) DO UPDATE SET kind = excluded.kind, name = CASE WHEN excluded.name != '' THEN excluded.name ELSE name END`
-  ).run(userId, k, kind, String(name || '').trim().slice(0, 60), now());
+  ).run(userId, k, kind, label, now());
   invalidate(userId);
   return k;
+}
+
+/** 从等对方一键「不再跟进此类」：地址或整域 */
+export function muteFollow(userId, { address, scope = 'address', messageId } = {}) {
+  const addr = String(address || '').trim().toLowerCase();
+  if (!addr && !messageId) throw Object.assign(new Error('请提供收件人'), { status: 400 });
+  let target = addr;
+  if (!target && messageId) {
+    const row = db
+      .prepare(
+        `SELECT m.to_json, b.email AS mb_email FROM messages m
+         JOIN mailboxes b ON b.id = m.mailbox_id WHERE b.user_id = ? AND m.id = ?`
+      )
+      .get(userId, Number(messageId));
+    const to = JSON.parse(row?.to_json || '[]');
+    const own = new Set(
+      db.prepare('SELECT lower(email) e FROM mailboxes WHERE user_id = ?').all(userId).map((r) => r.e)
+    );
+    target = to.map((a) => String(a.address || '').toLowerCase()).find((a) => a && !own.has(a)) || '';
+  }
+  if (!target) throw Object.assign(new Error('找不到外部收件人'), { status: 400 });
+  const key =
+    scope === 'domain' && !isFreeDomain(domainOf(target))
+      ? '@' + domainOf(target)
+      : target;
+  saveRule(userId, { key, kind: 'nofollow', name: scope === 'domain' ? '域名不再跟进' : '不再跟进' });
+  if (messageId) {
+    db.prepare('UPDATE messages SET nudge_off = 1 WHERE id = ?').run(Number(messageId));
+  }
+  invalidate(userId);
+  return { key, kind: 'nofollow' };
 }
 export function deleteRule(userId, key) {
   db.prepare('DELETE FROM sender_rules WHERE user_id = ? AND key = ?').run(userId, String(key || '').toLowerCase());

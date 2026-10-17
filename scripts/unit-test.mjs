@@ -2,7 +2,21 @@
  * 无依赖真实邮箱的纯逻辑单测。运行：npm test
  */
 import { classify, expectsReply, signalsOf } from '../server/classify.js';
-import { slaFor, slaByTier, domainOf, isFreeDomain, normalizeKey, scoreRow, tierOf } from '../server/priority.js';
+import {
+  slaFor,
+  slaByTier,
+  domainOf,
+  isFreeDomain,
+  normalizeKey,
+  scoreRow,
+  tierOf,
+  buildFollowMeta,
+  formatWaitingLabel,
+  normalizeSubjectKey,
+  suggestFollowAction,
+  aggregateFollowupsByCustomer,
+  followGroupKey,
+} from '../server/priority.js';
 import { matchCondition, matchRule } from '../server/mail_rules.js';
 import { scopeFromAddress, resolveScopes, isValidStage, stageMeta, STAGES, suggestStageAfterSend } from '../server/deals.js';
 import { isBlockedHostname } from '../server/net_guard.js';
@@ -67,6 +81,85 @@ assert('sla new inquiry', slaFor({ replySlaHours: 24, slaNewInquiryHours: 8 }, '
 assert('sla customer default', slaFor({ replySlaHours: 24 }, 'customer') === 24);
 const tiers = slaByTier({ replySlaHours: 24, slaVipHours: 2 });
 assert('slaByTier vip', tiers.vip === 2);
+
+// ---------- 已发未回 follow meta（发出即可见 + soft/due）----------
+const HOUR = 3600_000;
+const DAY = 24 * HOUR;
+const atF = Date.now();
+const soft = buildFollowMeta({
+  date: atF - 2 * HOUR,
+  at: atF,
+  followDays: 3,
+  tier: 'customer',
+  to: { address: 'buyer@acme.com', name: 'Buyer' },
+  signals: ['inquiry'],
+});
+assert('follow soft soon after send', soft.urgency === 'soft' && soft.due === false);
+assert('follow waitingHours ~2h', soft.waitingHours >= 1.9 && soft.waitingHours <= 2.1);
+assert('follow visible without followDays gate', soft.days === 0);
+
+const due = buildFollowMeta({
+  date: atF - 4 * DAY,
+  at: atF,
+  followDays: 3,
+  tier: 'vip',
+  to: { address: 'vip@acme.com' },
+  signals: [],
+});
+assert('follow due after followDays', due.urgency === 'due' && due.due === true);
+assert('follow due sorts above soft', due.score > soft.score);
+assert('formatWaitingLabel hours', formatWaitingLabel(5, 0).includes('小时'));
+assert('formatWaitingLabel days', /天/.test(formatWaitingLabel(50, 2)));
+assert('normalizeSubjectKey strips Re', normalizeSubjectKey('Re: Quote for PO') === 'quote for po');
+assert('suggest wait when soft fresh', suggestFollowAction({ urgency: 'soft', due: false, waitingHours: 2 }).code === 'wait');
+assert('suggest escalate vip due', suggestFollowAction({ urgency: 'due', due: true, waitingHours: 30, tier: 'vip' }).code === 'escalate');
+const agg = aggregateFollowupsByCustomer([
+  {
+    id: 1,
+    date: atF - DAY,
+    follow: buildFollowMeta({
+      date: atF - DAY,
+      at: atF,
+      followDays: 3,
+      tier: 'customer',
+      to: { address: 'a@acme.com' },
+      company: { key: '@acme.com', name: 'Acme' },
+      signals: [],
+    }),
+  },
+  {
+    id: 2,
+    date: atF - HOUR,
+    follow: buildFollowMeta({
+      date: atF - HOUR,
+      at: atF,
+      followDays: 3,
+      tier: 'customer',
+      to: { address: 'b@acme.com' },
+      company: { key: '@acme.com', name: 'Acme' },
+      signals: ['inquiry'],
+    }),
+  },
+]);
+assert('aggregate same company', agg.length === 1 && agg[0].follow.siblingCount === 2);
+assert('aggregate keeps newer', agg[0].id === 2);
+assert('followGroupKey company', followGroupKey({ key: '@Acme.com' }, { address: 'x@y.com' }) === '@acme.com');
+
+// ---------- 客户时间线决策 ----------
+import { computeDecision } from '../server/customer_timeline.js';
+const mailsWait = [
+  { id: 1, direction: 'out', date: atF - 5 * HOUR, fromAddr: 'me@zito.com' },
+  { id: 2, direction: 'in', date: atF - 2 * DAY, fromAddr: 'buyer@acme.com' },
+];
+const decWait = computeDecision(1, 'buyer@acme.com', mailsWait, null);
+assert('timeline waiting_them', decWait.status === 'waiting_them');
+assert('timeline waiting hours', decWait.waitingHours >= 4);
+const mailsReply = [
+  { id: 3, direction: 'in', date: atF - 3 * HOUR, fromAddr: 'buyer@acme.com' },
+  { id: 4, direction: 'out', date: atF - DAY, fromAddr: 'me@zito.com' },
+];
+const decReply = computeDecision(1, 'buyer@acme.com', mailsReply, null);
+assert('timeline need_reply', decReply.status === 'need_reply');
 
 // ---------- domain helpers ----------
 assert('domainOf', domainOf('A@Acme.com') === 'acme.com');

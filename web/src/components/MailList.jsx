@@ -61,10 +61,13 @@ function Chips({ m, variant }) {
   const p = m.priority;
   const chips = [];
   if (variant === 'reply' && p) {
-    if (p.overdue) chips.push(<span key="aw" className="tag lv-high">超时未回</span>);
+    if (m.receivedToday || m.focusBucket === 'today') {
+      chips.push(<span key="today" className="tag tag-today" title="今天收到、仍待你回复">今日</span>);
+    }
+    if (p.overdue || m.isOverdue) chips.push(<span key="aw" className="tag lv-high">超时未回</span>);
     else chips.push(<span key="aw" className="tag await">待回复</span>);
     const rm = remindChip(m.remindStage);
-    if (rm && p.overdue) chips.push(rm);
+    if (rm && (p.overdue || m.isOverdue)) chips.push(rm);
     if (p.tier === 'vip') chips.push(<span key="t" className="tag tier-vip"><Crown size={10} /> VIP</span>);
     else if (p.tier === 'customer') chips.push(<span key="t" className="tag tier-customer">客户</span>);
     else if (p.tier === 'new') chips.push(<span key="t" className="tag tier-new">{p.signals.includes('inquiry') ? '新询盘' : '新联系人'}</span>);
@@ -72,11 +75,40 @@ function Chips({ m, variant }) {
     else if (p.level === 'medium') chips.push(<span key="lv" className="tag lv-medium">重要</span>);
     p.signals.filter((s) => SIGNALS[s] && !(p.tier === 'new' && s === 'inquiry')).slice(0, 1).forEach((s) => chips.push(<span key={s} className={'tag sig sig-' + s}>{SIGNALS[s]}</span>));
   } else if (variant === 'follow' && m.follow) {
-    chips.push(<span key="wot" className="tag waiting-them">等对方{m.follow.days ? ` · ${m.follow.days}天` : ''}</span>);
-    if (m.follow.due || (m.follow.nextFollowAt && m.follow.nextFollowAt <= Date.now())) {
-      chips.push(<span key="due" className="tag follow-due">跟进到期</span>);
+    const waitLabel =
+      m.follow.waitingHours != null
+        ? waitText(m.follow.waitingHours)
+        : m.follow.days != null
+          ? `${m.follow.days}天`
+          : '';
+    chips.push(
+      <span key="wot" className={'tag waiting-them' + (m.follow.urgency === 'due' || m.follow.due ? ' due' : ' soft')}>
+        等对方{waitLabel ? ` · ${waitLabel}` : ''}
+      </span>
+    );
+    if (m.follow.siblingCount > 1) {
+      chips.push(
+        <span key="sib" className="tag follow-siblings" title="同一客户另有未回发信">
+          同客户 {m.follow.siblingCount} 封
+        </span>
+      );
+    }
+    if (m.follow.suggestedAction?.label) {
+      chips.push(
+        <span key="act" className={'tag follow-action act-' + (m.follow.suggestedAction.code || '')}>
+          {m.follow.suggestedAction.label}
+        </span>
+      );
+    }
+    if (m.follow.urgency === 'due' || m.follow.due || (m.follow.nextFollowAt && m.follow.nextFollowAt <= Date.now())) {
+      chips.push(<span key="due" className="tag follow-due">建议跟进</span>);
     } else if (m.follow.nextFollowAt || m.deal?.nextFollowAt) {
       chips.push(<span key="nf" className="tag follow-plan">有跟进日</span>);
+    } else if (m.follow.urgency === 'soft') {
+      chips.push(<span key="soft" className="tag follow-soft">等待中</span>);
+    }
+    if (m.follow.weakMatch) {
+      chips.push(<span key="weak" className="tag follow-weak" title={m.follow.evidence?.note || ''}>弱匹配</span>);
     }
     if (m.follow.tier === 'vip') chips.push(<span key="t" className="tag tier-vip"><Crown size={10} /> VIP</span>);
     else if (m.follow.tier === 'customer') chips.push(<span key="t" className="tag tier-customer">客户</span>);
@@ -84,8 +116,17 @@ function Chips({ m, variant }) {
   } else {
     if (m.awaiting) chips.push(<span key="aw" className={'tag ' + (m.overdue ? 'lv-high' : 'await')}>{m.overdue ? '超时未回' : '待回复'}</span>);
     else if (m.waitingOnThem) {
-      const label = m.waitingDays != null && m.waitingDays >= 1 ? `等对方 · ${m.waitingDays}天` : '等对方';
-      chips.push(<span key="wot" className="tag waiting-them">{label}</span>);
+      const label =
+        m.waitingHours != null
+          ? `等对方 · ${waitText(m.waitingHours)}`
+          : m.waitingDays != null && m.waitingDays >= 1
+            ? `等对方 · ${m.waitingDays}天`
+            : '等对方';
+      chips.push(
+        <span key="wot" className={'tag waiting-them' + (m.followUrgency === 'due' ? ' due' : '')}>
+          {label}
+        </span>
+      );
     }
     const rm = remindChip(m.remindStage);
     if (rm && m.overdue) chips.push(rm);
@@ -128,7 +169,7 @@ function Chips({ m, variant }) {
   return shown.length ? <div className="row-tags" title={all.length > 4 ? '更多状态已收起' : undefined}>{shown}</div> : null;
 }
 
-export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp, onClaim, claimBusy, onAiAction, aiActionBusy }) {
+export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp, onMuteFollow, onClaim, claimBusy, onAiAction, aiActionBusy }) {
   const [snooze, setSnooze] = useState(false);
   const follow = variant === 'follow';
   const focus = variant !== 'mail';
@@ -174,7 +215,15 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
               <Hourglass size={11} /> {waitText(p.waitingHours)}{p.slaHours != null ? <span className="sla-inline">/{p.slaHours}h</span> : null}
             </span>
           ) : follow ? (
-            <span className="date wait follow" title={`发出于 ${formatShortDateTime(m.date)}`}><Hourglass size={11} /> {m.follow.days} 天未回</span>
+            <span
+              className={'date wait follow' + (m.follow.urgency === 'due' || m.follow.due ? ' due' : '')}
+              title={`发出于 ${formatShortDateTime(m.date)} · 按收件箱是否出现对方回复判断未回`}
+            >
+              <Hourglass size={11} />{' '}
+              {m.follow.waitingHours != null
+                ? `${waitText(m.follow.waitingHours)}未回`
+                : `${m.follow.days ?? 0} 天未回`}
+            </span>
           ) : (
             <span className="date">{m.snoozeUntil ? <><Clock size={11} /> {formatShortDateTime(m.snoozeUntil)}</> : formatListDate(m.date)}</span>
           )}
@@ -237,12 +286,22 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
           )}
           {follow && (
             <>
-              <button type="button" className="focus-cta focus-cta-nudge" title="写跟进催单" onClick={() => onFollowUp?.(m)}>
-                <Send size={14} /> 催单
+              <button type="button" className="focus-cta focus-cta-nudge" title={m.follow?.suggestedAction?.detail || '写跟进催单'} onClick={() => onFollowUp?.(m)}>
+                <Send size={14} /> {m.follow?.suggestedAction?.code === 'escalate' ? '优先催' : '催单'}
               </button>
-              <button type="button" className="focus-cta focus-cta-quiet" title="无需跟进" onClick={() => onAction([m.id], 'nofollow')}>
+              <button type="button" className="focus-cta focus-cta-quiet" title="仅本封无需跟进" onClick={() => onAction([m.id], 'nofollow')}>
                 <BellOff size={14} />
               </button>
+              {onMuteFollow && (
+                <button
+                  type="button"
+                  className="focus-cta focus-cta-quiet"
+                  title="此类联系人不再出现在等对方"
+                  onClick={() => onMuteFollow(m, 'address')}
+                >
+                  不再跟
+                </button>
+              )}
             </>
           )}
         </div>
@@ -255,7 +314,7 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
         {!focus && follow && (
           <>
             <button title="写跟进邮件" onClick={() => onFollowUp?.(m)}><Reply size={15} /></button>
-            <button title="无需跟进" onClick={() => onAction([m.id], 'nofollow')}><BellOff size={15} /></button>
+            <button title="无需跟进（仅本封）" onClick={() => onAction([m.id], 'nofollow')}><BellOff size={15} /></button>
           </>
         )}
         <button type="button" title="归档 (E)" aria-label="归档" onClick={() => onAction([m.id], 'archive')}><Archive size={15} /></button>

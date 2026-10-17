@@ -1,11 +1,35 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { X, Crown, Bell, BellOff, Hourglass, Users, Reply, Clock, Plus, Loader2, UserPlus, CalendarClock } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { X, Crown, Bell, BellOff, Hourglass, Users, Reply, Clock, Plus, Loader2, UserPlus, CalendarClock, Send, ArrowDownLeft, ArrowUpRight, Sparkles } from 'lucide-react';
 import { api } from '../api.js';
 import { avatarColor, displayName, formatListDate, formatShortDateTime, initials, relativeTime, waitText } from '../utils.js';
 
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
 
-/** 客户栏 / 抽屉：Person 主数据 + sender_rules + 最近线程 */
+const EVENT_LABEL = {
+  claim: '认领',
+  takeover: '接管',
+  release: '释放',
+  stage: '阶段',
+  follow: '跟进日',
+  assign: '指派',
+  split: '拆分',
+};
+
+const STATUS_LABEL = {
+  waiting_them: '等对方回复',
+  need_reply: '待你回复',
+  follow_due: '跟进日到期',
+  idle: '暂无紧急',
+};
+
+/** 读信/已发场景下解析「对方」地址 */
+function peerAddressOf(address, sender, listItem) {
+  if (listItem?._section === 'follow' && listItem.follow?.to?.address) return listItem.follow.to.address;
+  if (listItem?.waitingOnThem && listItem.to?.[0]?.address) return listItem.to[0].address;
+  return address || sender?.address || listItem?.from?.address || null;
+}
+
+/** 客户栏 / 抽屉：决策面 + 时间线 + Person 主数据 */
 export default function CustomerPanel({
   address,
   sender,
@@ -15,9 +39,12 @@ export default function CustomerPanel({
   onOpenThread,
   onClose,
   onOpenContacts,
+  onFollowUp,
+  onReplyPeer,
   mode = 'rail', // rail | drawer
 }) {
   const [recent, setRecent] = useState(sender?.recentSubjects || []);
+  const [timeline, setTimeline] = useState(null);
   const [loading, setLoading] = useState(false);
   const [person, setPerson] = useState(null);
   const [auto, setAuto] = useState(null);
@@ -28,7 +55,8 @@ export default function CustomerPanel({
   const [busy, setBusy] = useState('');
   const noteTimer = useRef(null);
 
-  const info = sender && { ...sender, address: address || sender.address };
+  const peerAddr = useMemo(() => peerAddressOf(address, sender, listItem), [address, sender, listItem]);
+  const info = sender && { ...sender, address: peerAddr || address || sender.address };
   const vip = info?.rule?.kind === 'vip' || person?.rule?.kind === 'vip';
   const muted = info?.rule?.kind === 'muted' || person?.rule?.kind === 'muted';
   const target = info?.company?.domain ? '@' + info.company.domain : null;
@@ -40,15 +68,16 @@ export default function CustomerPanel({
     info?.address ||
     '客户';
   const suggest = info?.vipSuggest;
-  const empty = !info?.address;
+  const empty = !peerAddr;
 
   useEffect(() => {
     setRecent(sender?.recentSubjects || []);
   }, [sender]);
 
   useEffect(() => {
-    if (!info?.address) {
+    if (!peerAddr) {
       setRecent([]);
+      setTimeline(null);
       setPerson(null);
       setAuto(null);
       setNote('');
@@ -57,46 +86,47 @@ export default function CustomerPanel({
     }
     let alive = true;
     setLoading(true);
-    api('/contact-persons/resolve?address=' + encodeURIComponent(info.address))
+    api('/contact-persons/resolve?address=' + encodeURIComponent(peerAddr))
       .then((d) => {
         if (!alive) return;
         setPerson(d.person || null);
         setAuto(d.auto || null);
         setNote(d.person?.note || '');
-        if (d.recent?.length) {
-          setRecent(d.recent);
-        }
+        if (d.recent?.length) setRecent(d.recent);
       })
       .catch(() => {
         if (!alive) return;
         setPerson(null);
+      });
+
+    api('/customer/timeline?address=' + encodeURIComponent(peerAddr) + '&limit=18')
+      .then((d) => {
+        if (!alive) return;
+        setTimeline(d);
+        const mails = (d.items || []).filter((x) => x.type === 'mail');
+        if (mails.length) {
+          setRecent(
+            mails.slice(0, 8).map((m) => ({
+              id: m.id,
+              subject: m.subject,
+              date: m.date,
+              direction: m.direction,
+            }))
+          );
+        }
       })
+      .catch(() => alive && setTimeline(null))
       .finally(() => alive && setLoading(false));
 
     api('/contact-tags')
       .then((d) => alive && setTagCatalog(d.tags || []))
       .catch(() => {});
 
-    // 若 resolve 无 recent，回退单地址搜索
-    api('/messages' + `?q=${encodeURIComponent('from:' + info.address)}&limit=5`)
-      .then((d) => {
-        if (!alive) return;
-        setRecent((prev) => {
-          if (prev?.length) return prev;
-          return (d.messages || []).slice(0, 5).map((m) => ({
-            id: m.id,
-            subject: m.subject || '(无主题)',
-            date: m.date,
-          }));
-        });
-      })
-      .catch(() => {});
-
     return () => {
       alive = false;
       if (noteTimer.current) clearTimeout(noteTimer.current);
     };
-  }, [info?.address]);
+  }, [peerAddr]);
 
   function scheduleNoteSave(value) {
     setNote(value);
@@ -178,11 +208,12 @@ export default function CustomerPanel({
   }
 
   const priority = listItem?.priority;
-  const waitingOnThem = !!listItem?.waitingOnThem;
-  const needReply = listItem?._section === 'reply';
+  const waitingOnThem = !!listItem?.waitingOnThem || listItem?._section === 'follow' || timeline?.decision?.status === 'waiting_them';
+  const needReply = listItem?._section === 'reply' || timeline?.decision?.status === 'need_reply';
   const followUp = listItem?._section === 'follow';
   const effectiveSla = slaHours ?? priority?.slaHours;
-  const showStatus = !empty && listItem && (waitingOnThem || needReply || followUp || priority?.overdue || effectiveSla != null || listItem?.remindStage >= 1);
+  const decision = timeline?.decision;
+  const deal = timeline?.deal || listItem?.deal;
   const tagIds = new Set((person?.tags || []).map((t) => t.id));
 
   if (empty) {
@@ -206,7 +237,7 @@ export default function CustomerPanel({
               <Users size={28} strokeWidth={1.5} />
             </div>
             <b>销售台已就绪</b>
-            <small>从左侧点开一封邮件，这里会显示公司、跟进状态、VIP 与最近往来——选信只换内容，栏位保持不动。</small>
+            <small>点开一封邮件，这里显示客户时间线：该不该动、怎么动、往来与阶段记录。</small>
             {onOpenContacts && (
               <button type="button" className="btn-ghost sm" style={{ marginTop: 12 }} onClick={onOpenContacts}>
                 打开联系人
@@ -254,39 +285,80 @@ export default function CustomerPanel({
           )}
         </div>
 
-        {showStatus && (
-          <div className="customer-sec customer-status-strip" aria-label="跟进状态">
-            <div className="customer-section-title">当前状态</div>
+        {/* 决策面：该不该动、怎么动 */}
+        <div className="customer-sec customer-decision" aria-label="下一步决策">
+          <div className="customer-section-title">
+            <Sparkles size={12} /> 下一步
+          </div>
+          {loading && !decision && (
+            <div className="customer-skel" aria-busy="true">
+              <div className="skel-line" />
+              <div className="skel-line short" />
+            </div>
+          )}
+          {decision && (
+            <div className={'customer-decision-card' + (decision.due ? ' due' : '')}>
+              <div className="cd-row">
+                <b>{STATUS_LABEL[decision.status] || decision.status}</b>
+                {decision.waitingHours >= 1 && (
+                  <span className="cd-wait">
+                    <Hourglass size={11} /> {waitText(decision.waitingHours)}
+                  </span>
+                )}
+              </div>
+              <small className="cd-why">{decision.why}</small>
+              {deal && (
+                <div className="cd-deal">
+                  <span className="pill">{deal.stageLabel || deal.stage}</span>
+                  {deal.mine ? <span className="muted">我跟</span> : deal.owner?.name ? <span className="muted">{deal.owner.name} 跟</span> : null}
+                  {deal.nextFollowAt ? <span className="muted">下次 {formatShortDateTime(deal.nextFollowAt)}</span> : null}
+                </div>
+              )}
+              <div className="cd-actions">
+                {(decision.status === 'waiting_them' || followUp || waitingOnThem) && onFollowUp && listItem && (
+                  <button type="button" className="btn-primary sm" onClick={() => onFollowUp(listItem)}>
+                    <Send size={12} /> {decision.suggestedAction?.label || '写跟进'}
+                  </button>
+                )}
+                {(decision.status === 'need_reply' || needReply) && onReplyPeer && (
+                  <button type="button" className="btn-primary sm" onClick={() => onReplyPeer(listItem || { id: decision.lastInId })}>
+                    <Reply size={12} /> {decision.suggestedAction?.label || '回复'}
+                  </button>
+                )}
+                {decision.lastOutId && (
+                  <button type="button" className="btn-ghost sm" onClick={() => onOpenThread?.(decision.lastOutId)}>
+                    看发出
+                  </button>
+                )}
+                {decision.lastInId && (
+                  <button type="button" className="btn-ghost sm" onClick={() => onOpenThread?.(decision.lastInId)}>
+                    看来信
+                  </button>
+                )}
+              </div>
+              {decision.suggestedAction?.detail && <small className="muted cd-hint">{decision.suggestedAction.detail}</small>}
+            </div>
+          )}
+          {!loading && !decision && (
             <div className="customer-status-chips">
               {waitingOnThem && (
-                <span className="cstatus waiting-them" title="已回复，等待对方回信">
+                <span className="cstatus waiting-them">
                   <Hourglass size={12} /> 等对方
                 </span>
               )}
               {(needReply || priority?.overdue) && !waitingOnThem && (
-                <span className={'cstatus need-reply' + (priority?.overdue ? ' over' : '')} title={priority?.overdue ? '已超过回复时限' : '等待你回复'}>
+                <span className={'cstatus need-reply' + (priority?.overdue ? ' over' : '')}>
                   <Reply size={12} /> {priority?.overdue ? '已超时' : '待回复'}
-                  {priority?.waitingHours >= 1 ? ` · ${waitText(priority.waitingHours)}` : ''}
-                </span>
-              )}
-              {followUp && !waitingOnThem && (
-                <span className="cstatus follow" title="待跟进">
-                  <Clock size={12} /> 待跟进
                 </span>
               )}
               {effectiveSla != null && (
-                <span className="cstatus sla" title="回复时限">
+                <span className="cstatus sla">
                   <Hourglass size={12} /> SLA {effectiveSla}h
                 </span>
               )}
-              {listItem?.remindStage >= 1 && (
-                <span className={'cstatus remind r' + Math.min(3, listItem.remindStage)}>
-                  {listItem.remindStage >= 3 ? '终提醒' : listItem.remindStage === 2 ? '提醒 2' : '提醒'}
-                </span>
-              )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {person && (
           <div className="customer-sec">
@@ -433,30 +505,64 @@ export default function CustomerPanel({
           )}
         </div>
 
-        <div className="customer-sec">
-          <div className="customer-section-title">最近往来</div>
-          {loading && !recent.length && (
+        <div className="customer-sec customer-timeline-sec">
+          <div className="customer-section-title">客户时间线</div>
+          {loading && !(timeline?.items?.length || recent.length) && (
             <div className="customer-skel" aria-busy="true" aria-label="加载中">
               <div className="skel-line" />
               <div className="skel-line short" />
               <div className="skel-line" />
             </div>
           )}
-          {!loading && !recent.length && <small className="muted">暂无足够的往来记录</small>}
-          <div className="customer-thread-list">
-            {recent.map((r, i) => (
-              <button
-                key={r.id || i}
-                type="button"
-                className="customer-thread"
-                onClick={() => r.id && onOpenThread?.(r.id)}
-                disabled={!r.id}
-              >
-                <b>{r.subject}</b>
-                <small>{r.date ? formatListDate(r.date) : ''}</small>
-              </button>
-            ))}
-          </div>
+          {!loading && !(timeline?.items?.length || recent.length) && (
+            <small className="muted">暂无足够的往来记录</small>
+          )}
+          <ul className="customer-timeline">
+            {(timeline?.items || []).map((it) =>
+              it.type === 'deal_event' ? (
+                <li key={it.id} className="ctl-item event">
+                  <span className="ctl-dot event" />
+                  <div className="ctl-body">
+                    <b>
+                      {EVENT_LABEL[it.action] || it.action}
+                      {it.detail ? ` · ${it.detail}` : ''}
+                    </b>
+                    <small>
+                      {it.actor?.name || ''} · {it.date ? formatListDate(it.date) : ''}
+                    </small>
+                  </div>
+                </li>
+              ) : (
+                <li key={'m' + it.id} className={'ctl-item mail ' + (it.direction || '')}>
+                  <span className={'ctl-dot ' + (it.direction || 'in')} />
+                  <button
+                    type="button"
+                    className="ctl-body as-btn"
+                    onClick={() => onOpenThread?.(it.id)}
+                  >
+                    <b>
+                      {it.direction === 'out' ? <ArrowUpRight size={11} /> : <ArrowDownLeft size={11} />}
+                      {it.direction === 'out' ? '你发出' : '对方来信'} · {it.subject}
+                    </b>
+                    <small>
+                      {it.date ? formatListDate(it.date) : ''}
+                      {it.snippet ? ` · ${it.snippet}` : ''}
+                    </small>
+                  </button>
+                </li>
+              )
+            )}
+            {!timeline?.items?.length &&
+              recent.map((r, i) => (
+                <li key={r.id || i} className="ctl-item mail">
+                  <span className="ctl-dot in" />
+                  <button type="button" className="ctl-body as-btn" onClick={() => r.id && onOpenThread?.(r.id)} disabled={!r.id}>
+                    <b>{r.subject}</b>
+                    <small>{r.date ? formatListDate(r.date) : ''}</small>
+                  </button>
+                </li>
+              ))}
+          </ul>
         </div>
       </div>
     </div>

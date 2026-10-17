@@ -85,9 +85,15 @@ export async function deliver(mb, payload, files) {
   await Promise.allSettled(jobs);
   repo.addContacts(mb.user_id, [...mail.to, ...mail.cc, ...mail.bcc], 3);
   priority.invalidate(mb.user_id);
-  // 近实时：发信后立刻拉 Sent（并短延迟再补一次，覆盖服务器稍后落库）
+  // 近实时：发信后立刻拉 Sent，尽量让「等对方」马上可见
   if (sent) {
-    sync.forceSync(mb.id, sent.path).catch(() => {});
+    try {
+      await sync.forceSync(mb.id, sent.path);
+    } catch {
+      /* 异步兜底 */
+      sync.forceSync(mb.id, sent.path).catch(() => {});
+    }
+    priority.invalidate(mb.user_id);
     sync.touch(mb.id, sent.path, 2500);
   }
   const drafts = repo.specialFolder(mb.id, '\\Drafts');

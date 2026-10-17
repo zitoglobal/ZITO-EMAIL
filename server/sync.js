@@ -212,7 +212,9 @@ class Engine {
         repo.replaceFolders(mb.id, await imap.listServerFolders(mb));
         const folders = repo.listFolders(mb.id);
         const targets = folders.filter((f) => SYNC_SPECIALS.includes(f.special_use) || f.last_sync);
-        targets.sort((a, b) => (a.special_use === '\\Inbox' ? -1 : b.special_use === '\\Inbox' ? 1 : 0));
+        // Inbox + Sent 优先：今日待办 / 已发未回都依赖两边线程对齐
+        const syncRank = (u) => (u === '\\Inbox' ? 0 : u === '\\Sent' ? 1 : 2);
+        targets.sort((a, b) => syncRank(a.special_use) - syncRank(b.special_use));
         for (const f of targets) await this.syncFolderNow(mb, f.path);
         repo.setMailboxStatus(mb.id, 'ok');
         emit(mb.user_id, 'mailbox', { id: mb.id, status: 'ok' });

@@ -862,6 +862,27 @@ export default function App() {
     }
   }
 
+  /** 等对方：不再跟进此联系人（或整域） */
+  async function muteFollow(m, scope = 'address') {
+    const addr = m?.follow?.to?.address || m?.to?.[0]?.address || '';
+    const isDomain = scope === 'domain';
+    const label = isDomain
+      ? `整个域名将不再出现在「等对方」`
+      : `${addr || '该联系人'} 将不再出现在「等对方」`;
+    if (!window.confirm(`确认「不再跟进」？\n${label}\n（可在 设置 → 智能分拣 中撤销）`)) return;
+    try {
+      const r = await api('/focus/mute-follow', {
+        method: 'POST',
+        body: { address: addr, scope: isDomain ? 'domain' : 'address', messageId: m.id },
+      });
+      notify(`已设置不再跟进：${r.key}`, 'success');
+      if (view.box === 'today' || view.box === 'waiting') loadList({ silent: true });
+      else loadState();
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
   function handleDealMeta(meta) {
     if (!meta) return;
     if (meta.conflict && meta.deal) {
@@ -1434,6 +1455,7 @@ export default function App() {
           groupMode={groupMode}
           setGroupMode={setGroupMode}
           onFollowUp={followUp}
+          onMuteFollow={muteFollow}
           onMenu={() => setSidebarOpen(true)}
           checked={checked}
           setChecked={setChecked}
@@ -1455,6 +1477,7 @@ export default function App() {
           onRefresh={refresh}
           refreshing={refreshing}
           onFollowUp={followUp}
+          onMuteFollow={muteFollow}
           onMenu={() => setSidebarOpen(true)}
           tab={waitingTab}
           setTab={setWaitingTab}
@@ -1577,6 +1600,7 @@ export default function App() {
           onSend={(payload, files, state) => sendMail(payload, files, state)}
           onBack={() => setSelectedId(null)}
           onFollowUp={followUp}
+          onMuteFollow={muteFollow}
           notify={notify}
           onOpenCustomer={(addr, detail) => {
             const sender = detail?.sender ? { ...detail.sender, address: addr || detail.sender.address || detail.from?.address } : null;
@@ -1625,6 +1649,16 @@ export default function App() {
               onRule={setCustomerRule}
               onOpenThread={(mid) => setSelectedId(mid)}
               onOpenContacts={() => setModal({ type: 'settings', tab: 'contacts' })}
+              onFollowUp={followUp}
+              onReplyPeer={async (m) => {
+                if (!m?.id) return;
+                try {
+                  const d = await api(`/messages/${m.id}?markSeen=0`);
+                  openCompose('reply', d);
+                } catch (e) {
+                  notify(e.message, 'error');
+                }
+              }}
             />
           </LazyPane>
         </aside>
@@ -1645,6 +1679,16 @@ export default function App() {
                 onOpenThread={(mid) => { setCustomerOpen(false); setSelectedId(mid); }}
                 onClose={() => setCustomerOpen(false)}
                 onOpenContacts={() => { setCustomerOpen(false); setModal({ type: 'settings', tab: 'contacts' }); }}
+                onFollowUp={followUp}
+                onReplyPeer={async (m) => {
+                  if (!m?.id) return;
+                  try {
+                    const d = await api(`/messages/${m.id}?markSeen=0`);
+                    openCompose('reply', d);
+                  } catch (e) {
+                    notify(e.message, 'error');
+                  }
+                }}
               />
             </LazyPane>
           </div>

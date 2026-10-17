@@ -15,6 +15,9 @@
 - 隐私：用户可关「云端 AI」（`aiCloudOk`，设置→偏好）；公海同事箱不回传 snippet；presence 仅同信观众；备份默认 `.db.enc`（`BACKUP_SECRET`/`MAIL_SECRET`）
 - Nginx：`deploy/nginx-zm-limit.conf` 登录/API 边缘限流；部署用 `python deploy/deploy.py nginx`
 - 业务阶段变更会同步外贸标签；今日待办 / 等待默认「跟进中」（未认领+我跟），可筛全部/未认领/我跟/同事跟；两边均支持单封/批量认领
+- 已发未回：等待「等对方」发出即列出并显示未回时长；`followupDays` 只标「建议跟进」不隐藏；靠 Inbox 对方回复判断，不做默认已读追踪
+- 等对方专家能力：按客户聚合、弱线程匹配（In-Reply-To/同人+主题）、判定依据、建议动作；`nofollow` 规则 / `POST /api/focus/mute-follow` 屏蔽联系人；发信后 await 拉 Sent
+- 客户时间线：`GET /api/customer/timeline?address=` 聚合双向往来 + deal_events + 下一步决策；客户栏「下一步」+ 时间线决策面
 - 公海认领同事箱：不打开原信（隐私），自动引导「写首封跟进」草稿；FTS 删信同步清理，启动差量 backfill
 - 可靠发信：outbox 条件删除 + claim sending 互斥；撤销窗口不预认领；调度 1.5s
 - IMAP 旗标：瞬时失败入 `flag_retry` 队列，认证失败才标邮箱 error；Drafts 45s 轮询；无 Sent 映射时提示

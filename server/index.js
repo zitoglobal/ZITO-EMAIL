@@ -692,6 +692,8 @@ app.post(
         results.push({ id: mb.id, email: mb.email, status: 'error', lastSync: null, error: e.message || String(e) });
       }
     }
+    // 全量同步后立刻刷新 Focus（等对方 / 今日未回依赖 their_last）
+    priority.invalidate(req.user.id);
     res.json({ ok: true, results, syncedAt: Date.now() });
   })
 );
