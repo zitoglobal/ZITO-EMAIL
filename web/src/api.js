@@ -10,6 +10,7 @@ export async function api(path, { method = 'GET', body, form } = {}) {
   if (!res.ok) {
     const err = new Error(data.error || `请求失败（${res.status}）`);
     err.status = res.status;
+    if (data.code) err.code = data.code;
     if (data.deal) err.deal = data.deal;
     throw err;
   }

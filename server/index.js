@@ -148,8 +148,31 @@ function auth(req, res, next) {
   next();
 }
 
+/** 管理员须开启 TOTP 才能用 /api/admin/*；紧急排障可设 ADMIN_TOTP_REQUIRED=0 */
+function adminTotpRequired() {
+  return process.env.ADMIN_TOTP_REQUIRED !== '0';
+}
+
+function adminNeedsTotpSetup(user) {
+  return !!(user && user.role === 'admin' && adminTotpRequired() && !totp.isTotpEnabled(user));
+}
+
 function admin(req, res, next) {
   if (req.user.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
+  try {
+    rateLimit('admin:' + req.user.id + ':' + req.ip, 90, 60_000);
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      rateLimit('admin-write:' + req.user.id, 30, 60_000);
+    }
+  } catch (e) {
+    return res.status(e.status || 429).json({ error: e.message });
+  }
+  if (adminNeedsTotpSetup(req.user)) {
+    return res.status(403).json({
+      error: '管理员须先开启二次验证才能使用管理功能',
+      code: 'TOTP_REQUIRED',
+    });
+  }
   next();
 }
 
@@ -272,7 +295,9 @@ app.post(
       return res.json({ needsTotp: true, ticket });
     }
     setCookie(res, users.createSession(u.id, req.headers['user-agent']), users.sessionPolicy().absDays * 24 * 3600);
-    res.json({ user: users.publicUser(u) });
+    const payload = { user: users.publicUser(u) };
+    if (adminNeedsTotpSetup(u)) payload.requiresTotpSetup = true;
+    res.json(payload);
   })
 );
 
@@ -326,6 +351,9 @@ app.post(
   auth,
   wrap(async (req, res) => {
     rateLimit('totp-disable:' + req.user.id, 10, 3600_000);
+    if (req.user.role === 'admin' && adminTotpRequired()) {
+      throw httpError(403, '管理员不能关闭二次验证');
+    }
     res.json(totp.disable(req.user.id, req.body?.code));
   })
 );
@@ -374,6 +402,7 @@ app.get(
     const cloudOk = users.settingsOf(req.user.id).aiCloudOk !== false;
     res.json({
       user: users.publicUser(req.user),
+      requiresTotpSetup: adminNeedsTotpSetup(req.user),
       ai: configured && cloudOk,
       aiMeta: {
         configured,

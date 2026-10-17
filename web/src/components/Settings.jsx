@@ -840,14 +840,16 @@ function Account({ user, onUserChange, onLogout, notify }) {
         <h4><ShieldCheck size={15} /> 二次验证（TOTP）</h4>
         {user.role === 'admin' && !totpOn && (
           <div className="ai-status-card off" style={{ marginBottom: 10 }}>
-            <b>管理员建议开启二次验证</b>
-            <small>管理员可重置他人密码与查看运维信息，开启 TOTP 可显著降低账号被盗风险。</small>
+            <b>管理员必须开启二次验证</b>
+            <small>未开启前无法使用团队管理与运维接口。用验证器扫码并确认后即可恢复管理功能。</small>
           </div>
         )}
         <p className="set-hint">
           {totpOn
-            ? '已开启：登录时除密码外还需验证器动态码（推荐管理员开启）。'
-            : '可选：用 Google Authenticator / 微软验证器等 App 增加一层登录保护。'}
+            ? '已开启：登录时除密码外还需验证器动态码。'
+            : user.role === 'admin'
+              ? '管理员强制：用 Google Authenticator / 微软验证器等 App 绑定后，才能使用团队管理。'
+              : '可选：用 Google Authenticator / 微软验证器等 App 增加一层登录保护。'}
         </p>
         {!totpOn && !totpSetup && (
           <div className="set-actions">
@@ -963,30 +965,32 @@ function Account({ user, onUserChange, onLogout, notify }) {
             >
               重新生成备用码
             </button>
-            <button
-              type="button"
-              className="btn-ghost sm danger"
-              disabled={totpBusy}
-              onClick={async () => {
-                const code = window.prompt('请输入验证器 6 位码或备用码以关闭二次验证');
-                if (!code) return;
-                setTotpBusy(true);
-                try {
-                  await api('/me/totp/disable', { method: 'POST', body: { code } });
-                  setTotpOn(false);
-                  setRecoveryCodes(null);
-                  setRecoveryLeft(0);
-                  onUserChange({ ...user, totpEnabled: false });
-                  notify('二次验证已关闭');
-                } catch (e) {
-                  notify(e.message, 'error');
-                } finally {
-                  setTotpBusy(false);
-                }
-              }}
-            >
-              关闭二次验证
-            </button>
+            {user.role !== 'admin' && (
+              <button
+                type="button"
+                className="btn-ghost sm danger"
+                disabled={totpBusy}
+                onClick={async () => {
+                  const code = window.prompt('请输入验证器 6 位码或备用码以关闭二次验证');
+                  if (!code) return;
+                  setTotpBusy(true);
+                  try {
+                    await api('/me/totp/disable', { method: 'POST', body: { code } });
+                    setTotpOn(false);
+                    setRecoveryCodes(null);
+                    setRecoveryLeft(0);
+                    onUserChange({ ...user, totpEnabled: false });
+                    notify('二次验证已关闭');
+                  } catch (e) {
+                    notify(e.message, 'error');
+                  } finally {
+                    setTotpBusy(false);
+                  }
+                }}
+              >
+                关闭二次验证
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1056,7 +1060,21 @@ function Team({ me, notify }) {
   const [list, setList] = useState(null);
   const [form, setForm] = useState(null);
 
-  const load = () => api('/admin/users').then((r) => setList(r.users)).catch((e) => notify(e.message, 'error'));
+  const [totpGate, setTotpGate] = useState(false);
+  const load = () =>
+    api('/admin/users')
+      .then((r) => {
+        setTotpGate(false);
+        setList(r.users);
+      })
+      .catch((e) => {
+        if (e.code === 'TOTP_REQUIRED') {
+          setTotpGate(true);
+          setList([]);
+          return;
+        }
+        notify(e.message, 'error');
+      });
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1113,6 +1131,12 @@ function Team({ me, notify }) {
     <>
       <OauthOps notify={notify} />
       <p className="set-desc">为同事开通平台账号。每位成员登录后各自绑定、管理自己的邮箱，彼此数据隔离。</p>
+      {totpGate && (
+        <div className="ai-status-card off" style={{ marginBottom: 12 }}>
+          <b>请先开启二次验证</b>
+          <small>管理员须在「账号」页绑定验证器后，才能创建成员、重置密码或查看运维信息。</small>
+        </div>
+      )}
       {form ? (
         <form className="set-account" onSubmit={create}>
           <div className="row-2">
