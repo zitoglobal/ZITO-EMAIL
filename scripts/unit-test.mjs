@@ -362,6 +362,7 @@ assert('auth not transient', !isTransientFailure({ authenticationFailed: true, m
 assert('isSqliteCorrupt malformed', isSqliteCorrupt(new Error('database disk image is malformed')));
 assert('isSqliteCorrupt SQLITE_CORRUPT', isSqliteCorrupt({ message: 'SQLITE_CORRUPT: database disk image is malformed' }));
 assert('isSqliteCorrupt contentless', isSqliteCorrupt(new Error('cannot DELETE from contentless fts5 table: messages_fts')));
+assert('isSqliteCorrupt legacy trigger cols', isSqliteCorrupt(new Error('table messages_fts has no column named from_name')));
 assert('isSqliteCorrupt ignores other', !isSqliteCorrupt(new Error('UNIQUE constraint failed')));
 
 console.log(`\n${pass} passed, ${fail} failed`);
