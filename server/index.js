@@ -83,10 +83,18 @@ function setCookie(res, value, maxAgeSec) {
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
+function apiErrorMessage(e) {
+  const raw = e?.message || String(e);
+  if (repo.isSqliteCorrupt?.(e) || /malformed|SQLITE_CORRUPT|disk image/i.test(raw)) {
+    return '本地邮件索引异常，已尝试自愈，请再删一次；若仍失败请刷新页面';
+  }
+  return raw;
+}
+
 const wrap = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch((e) => {
     if (!e.status) console.error('[api]', req.method, req.path, e.message);
-    const body = { error: e.message || String(e) };
+    const body = { error: apiErrorMessage(e) };
     if (e.deal) body.deal = e.deal;
     res.status(e.status || 400).json(body);
   });
@@ -884,6 +892,26 @@ async function ensureArchiveFolder(mb) {
   return repo.specialFolder(mb.id, '\\Archive')?.path || 'Archive';
 }
 
+/** 无 \\Trash 映射时创建/补建已删除文件夹，避免误走永久删除 */
+async function ensureTrashFolder(mb) {
+  const hit = repo.specialFolder(mb.id, '\\Trash');
+  if (hit) return hit.path;
+  repo.replaceFolders(mb.id, await imap.listServerFolders(mb));
+  const afterList = repo.specialFolder(mb.id, '\\Trash');
+  if (afterList) return afterList.path;
+  const client = await imap.getClient(mb);
+  for (const name of ['Trash', 'Deleted', '已删除邮件', '已删除']) {
+    try {
+      await client.mailboxCreate(name);
+      break;
+    } catch {
+      /* 已存在或服务商不允许 */
+    }
+  }
+  repo.replaceFolders(mb.id, await imap.listServerFolders(mb));
+  return repo.specialFolder(mb.id, '\\Trash')?.path || null;
+}
+
 async function moveRows(mb, folder, rows, dest) {
   const client = await imap.getClient(mb);
   const lock = await client.getMailboxLock(folder);
@@ -1009,14 +1037,21 @@ app.post(
         await each(async (g) => {
           let target;
           if (action === 'archive') target = await ensureArchiveFolder(g.mb);
-          if (action === 'trash') target = repo.specialFolder(g.mb.id, '\\Trash')?.path;
+          if (action === 'trash') target = await ensureTrashFolder(g.mb);
           if (action === 'spam') target = repo.specialFolder(g.mb.id, '\\Junk')?.path;
           if (action === 'notspam') target = repo.specialFolder(g.mb.id, '\\Inbox')?.path || 'INBOX';
           if (action === 'move') {
             if (!repo.getFolder(g.mb.id, dest)) throw httpError(400, '目标文件夹不存在（不能跨邮箱移动）');
             target = dest;
           }
-          if (action === 'trash' && (!target || target === g.folder)) {
+          // 已在废纸篓：彻底删除；无废纸篓且无法创建：才强制 expunge
+          if (action === 'trash' && target && target === g.folder) {
+            await imap.expungeMessages(g.mb, g.folder, g.rows.map((r) => r.uid));
+            repo.deleteMessageRows(g.rows.map((r) => r.id));
+            all = false;
+            return;
+          }
+          if (action === 'trash' && !target) {
             await imap.expungeMessages(g.mb, g.folder, g.rows.map((r) => r.uid));
             repo.deleteMessageRows(g.rows.map((r) => r.id));
             all = false;
@@ -1905,9 +1940,15 @@ if (fs.existsSync(DIST)) {
 
 repo.backfillSignals();
 try {
+  repo.ensureFtsHealthy();
   repo.backfillFts();
 } catch (e) {
   console.warn('[fts]', e.message);
+  try {
+    if (repo.isSqliteCorrupt(e)) repo.rebuildFtsIndex();
+  } catch (e2) {
+    console.error('[fts] recovery failed', e2.message);
+  }
 }
 mailer.startScheduler();
 flagRetry.startFlagRetryScheduler();
@@ -1957,6 +1998,9 @@ const server = app.listen(PORT, BIND_HOST, () => {
 function shutdown(signal) {
   console.log(`[zito-mail] 收到 ${signal}，正在关闭…`);
   server.close(() => {
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch (_) {}
     try {
       db.close();
     } catch (_) {}

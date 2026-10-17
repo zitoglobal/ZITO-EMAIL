@@ -142,7 +142,7 @@ export async function withBox(mb, folder, fn, client) {
 const NAME_GUESS = [
   [/^(sent|sent messages|sent items|sent mail|已发送|已发送邮件)$/i, '\\Sent'],
   [/^(drafts?|草稿箱?)$/i, '\\Drafts'],
-  [/^(trash|deleted|deleted messages|deleted items|已删除|垃圾桶|已删除邮件)$/i, '\\Trash'],
+  [/^(trash|bin|deleted|deleted messages|deleted items|已删除|垃圾桶|已删除邮件|废件箱|回收站)$/i, '\\Trash'],
   [/^(junk|spam|junk e-?mail|垃圾邮件|垃圾箱)$/i, '\\Junk'],
   [/^(archives?|归档)$/i, '\\Archive'],
 ];
@@ -150,7 +150,12 @@ const NAME_GUESS = [
 function guessSpecial(box) {
   if (box.path.toUpperCase() === 'INBOX') return '\\Inbox';
   if (box.specialUse) return box.specialUse;
-  for (const [re, use] of NAME_GUESS) if (re.test(box.name)) return use;
+  const leaf = String(box.name || box.path || '').split(/[/.[\\]/).pop();
+  for (const [re, use] of NAME_GUESS) {
+    if (re.test(box.name) || re.test(leaf)) return use;
+  }
+  // Gmail 等：路径含 Trash/Bin
+  if (/(\/|^)(\[Gmail\]\/)?(Trash|Bin)$/i.test(box.path)) return '\\Trash';
   return null;
 }
 

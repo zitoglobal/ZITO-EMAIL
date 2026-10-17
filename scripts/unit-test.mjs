@@ -9,7 +9,7 @@ import { isBlockedHostname } from '../server/net_guard.js';
 import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
-import { conversationKey } from '../server/repo.js';
+import { conversationKey, isSqliteCorrupt } from '../server/repo.js';
 import { threadIdOf, inlineCidImages, resolveCidPlaceholders, isAuthFailure, isTransientFailure } from '../server/imap.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
@@ -355,6 +355,10 @@ assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.i
 assert('isAuthFailure login', isAuthFailure({ authenticationFailed: true }));
 assert('isTransient timeout', isTransientFailure({ message: 'Connection timed out' }));
 assert('auth not transient', !isTransientFailure({ authenticationFailed: true, message: 'auth' }));
+
+assert('isSqliteCorrupt malformed', isSqliteCorrupt(new Error('database disk image is malformed')));
+assert('isSqliteCorrupt SQLITE_CORRUPT', isSqliteCorrupt({ message: 'SQLITE_CORRUPT: database disk image is malformed' }));
+assert('isSqliteCorrupt ignores other', !isSqliteCorrupt(new Error('UNIQUE constraint failed')));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

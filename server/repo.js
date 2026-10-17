@@ -44,21 +44,25 @@ export const getFolder = (mailboxId, path) => db.prepare('SELECT * FROM folders 
 export const specialFolder = (mailboxId, use) =>
   db.prepare('SELECT * FROM folders WHERE mailbox_id = ? AND special_use = ?').get(mailboxId, use);
 
-export const replaceFolders = tx((mailboxId, folders) => {
+export const replaceFolders = (mailboxId, folders) => {
   const keep = new Set(folders.map((f) => f.path));
-  const delFts = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
   const idsOf = db.prepare('SELECT id FROM messages WHERE mailbox_id = ? AND folder = ?');
-  for (const f of listFolders(mailboxId)) {
-    if (!keep.has(f.path)) {
-      for (const r of idsOf.all(mailboxId, f.path)) delFts.run(r.id);
-      db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, f.path);
-      db.prepare('DELETE FROM folders WHERE mailbox_id = ? AND path = ?').run(mailboxId, f.path);
+  const gone = [];
+  const run = tx(() => {
+    for (const f of listFolders(mailboxId)) {
+      if (!keep.has(f.path)) {
+        for (const r of idsOf.all(mailboxId, f.path)) gone.push(r.id);
+        db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, f.path);
+        db.prepare('DELETE FROM folders WHERE mailbox_id = ? AND path = ?').run(mailboxId, f.path);
+      }
     }
-  }
-  const up = db.prepare(`INSERT INTO folders (mailbox_id, path, name, delimiter, special_use) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(mailbox_id, path) DO UPDATE SET name = excluded.name, delimiter = excluded.delimiter, special_use = excluded.special_use`);
-  for (const f of folders) up.run(mailboxId, f.path, f.name, f.delimiter, f.specialUse);
-});
+    const up = db.prepare(`INSERT INTO folders (mailbox_id, path, name, delimiter, special_use) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(mailbox_id, path) DO UPDATE SET name = excluded.name, delimiter = excluded.delimiter, special_use = excluded.special_use`);
+    for (const f of folders) up.run(mailboxId, f.path, f.name, f.delimiter, f.specialUse);
+  });
+  run();
+  if (gone.length) removeFts(gone);
+};
 
 export function updateFolderState(mailboxId, path, patch) {
   const cols = Object.keys(patch);
@@ -159,21 +163,26 @@ export const applyFlagChanges = tx((mailboxId, folder, changes) => {
   for (const c of changes) st.run(c.seen ? 1 : 0, c.flagged ? 1 : 0, c.answered ? 1 : 0, mailboxId, folder, c.uid);
 });
 
-export const deleteUids = tx((mailboxId, folder, uids) => {
+export const deleteUids = (mailboxId, folder, uids) => {
   const getId = db.prepare('SELECT id FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?');
-  const delFts = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
   const delMsg = db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?');
-  for (const u of uids) {
-    const row = getId.get(mailboxId, folder, u);
-    if (row) delFts.run(row.id);
-    delMsg.run(mailboxId, folder, u);
-  }
-});
+  const ftsIds = [];
+  const run = tx(() => {
+    for (const u of uids) {
+      const row = getId.get(mailboxId, folder, u);
+      if (row) ftsIds.push(row.id);
+      delMsg.run(mailboxId, folder, u);
+    }
+  });
+  run();
+  if (ftsIds.length) removeFts(ftsIds);
+};
 
 export const clearFolderMessages = (mailboxId, folder) => {
   const ids = db.prepare('SELECT id FROM messages WHERE mailbox_id = ? AND folder = ?').all(mailboxId, folder).map((r) => r.id);
+  const result = db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, folder);
   removeFts(ids);
-  return db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, folder);
+  return result;
 };
 
 export function getMessagesForUser(userId, ids) {
@@ -193,8 +202,9 @@ export function patchMessages(ids, patch) {
 
 export function deleteMessageRows(ids) {
   if (!ids.length) return;
-  removeFts(ids);
+  // 先删主表，再清 FTS：索引损坏时也不能挡住「删除邮件」
   db.prepare(`DELETE FROM messages WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+  removeFts(ids);
 }
 
 export function rowToMessage(r) {
@@ -271,19 +281,88 @@ function ftsEscape(term) {
     .join(' ');
 }
 
-export function upsertFts(messagePk, { subject = '', snippet = '', fromName = '', fromAddr = '', body = '' } = {}) {
-  const fromText = `${fromName} ${fromAddr}`.trim();
-  db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(messagePk);
-  db.prepare(
-    `INSERT INTO messages_fts (rowid, subject, snippet, from_text, body) VALUES (?, ?, ?, ?, ?)`
-  ).run(messagePk, subject || '', snippet || '', fromText, String(body || '').slice(0, 50000));
+/** SQLite / FTS 损坏（删信、丢弃草稿常踩中） */
+export function isSqliteCorrupt(e) {
+  const m = String(e?.message || e || '');
+  return /malformed|corrupt|SQLITE_CORRUPT|disk image/i.test(m);
 }
 
+const FTS_DDL = `CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  subject,
+  snippet,
+  from_text,
+  body,
+  content='',
+  tokenize='unicode61 remove_diacritics 2'
+)`;
+
+let ftsRebuildBusy = false;
+
+/** 丢弃损坏的 FTS 索引并全量重建（邮件主表不动） */
+export function rebuildFtsIndex() {
+  if (ftsRebuildBusy) return;
+  ftsRebuildBusy = true;
+  try {
+    console.warn('[fts] rebuilding messages_fts…');
+    db.exec('DROP TABLE IF EXISTS messages_fts');
+    db.exec(FTS_DDL);
+    backfillFts(100000);
+    console.warn('[fts] rebuild done');
+  } finally {
+    ftsRebuildBusy = false;
+  }
+}
+
+function ftsWrite(fn) {
+  try {
+    return fn();
+  } catch (e) {
+    if (!isSqliteCorrupt(e)) throw e;
+    rebuildFtsIndex();
+    return fn();
+  }
+}
+
+export function upsertFts(messagePk, { subject = '', snippet = '', fromName = '', fromAddr = '', body = '' } = {}) {
+  const fromText = `${fromName} ${fromAddr}`.trim();
+  const row = [messagePk, subject || '', snippet || '', fromText, String(body || '').slice(0, 50000)];
+  ftsWrite(() => {
+    db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(messagePk);
+    db.prepare(
+      `INSERT INTO messages_fts (rowid, subject, snippet, from_text, body) VALUES (?, ?, ?, ?, ?)`
+    ).run(...row);
+  });
+}
+
+/** 尽力清 FTS；损坏时自愈，绝不阻断删信主路径 */
 export function removeFts(messagePks = []) {
   const ids = messagePks.map(Number).filter((n) => Number.isInteger(n));
   if (!ids.length) return;
-  const st = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
-  tx(() => ids.forEach((id) => st.run(id)))();
+  try {
+    ftsWrite(() => {
+      const st = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
+      tx(() => ids.forEach((id) => st.run(id)))();
+    });
+  } catch (e) {
+    console.warn('[fts] removeFts skipped after rebuild:', e.message);
+  }
+}
+
+/** 启动探针：DELETE 探针失败则重建，避免删信/丢草稿整链失败 */
+export function ensureFtsHealthy() {
+  try {
+    db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(-999999);
+  } catch (e) {
+    if (!isSqliteCorrupt(e)) {
+      console.warn('[fts] probe:', e.message);
+      return;
+    }
+    try {
+      rebuildFtsIndex();
+    } catch (e2) {
+      console.error('[fts] rebuild failed:', e2.message);
+    }
+  }
 }
 
 /** 全文检索命中的 message id（最多 limit）；FTS 不可用时返回 null 以回退 LIKE */
@@ -306,8 +385,11 @@ export function searchFtsIds(terms = [], limit = 500) {
 export function backfillFts(limit = 15000) {
   try {
     db.prepare('DELETE FROM messages_fts WHERE rowid NOT IN (SELECT id FROM messages)').run();
-  } catch {
-    /* ignore */
+  } catch (e) {
+    if (isSqliteCorrupt(e)) {
+      // 由 ensureFtsHealthy / rebuild 处理，避免递归
+      throw e;
+    }
   }
   const rows = db
     .prepare(
@@ -319,15 +401,18 @@ export function backfillFts(limit = 15000) {
     )
     .all(limit);
   if (!rows.length) return;
+  const ins = db.prepare(
+    `INSERT INTO messages_fts (rowid, subject, snippet, from_text, body) VALUES (?, ?, ?, ?, ?)`
+  );
   const run = tx(() => {
     for (const r of rows) {
-      upsertFts(r.id, {
-        subject: r.subject,
-        snippet: r.snippet,
-        fromName: r.from_name,
-        fromAddr: r.from_addr,
-        body: r.body || '',
-      });
+      const fromText = `${r.from_name || ''} ${r.from_addr || ''}`.trim();
+      try {
+        db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(r.id);
+      } catch {
+        /* ignore */
+      }
+      ins.run(r.id, r.subject || '', r.snippet || '', fromText, String(r.body || '').slice(0, 50000));
     }
   });
   run();

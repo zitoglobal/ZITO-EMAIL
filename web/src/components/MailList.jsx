@@ -258,8 +258,8 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
             <button title="无需跟进" onClick={() => onAction([m.id], 'nofollow')}><BellOff size={15} /></button>
           </>
         )}
-        {!follow && <button type="button" title="归档 (E)" aria-label="归档" onClick={() => onAction([m.id], 'archive')}><Archive size={15} /></button>}
-        {!follow && <button type="button" title="删除 (#)" aria-label="删除" onClick={() => onAction([m.id], 'trash')}><Trash2 size={15} /></button>}
+        <button type="button" title="归档 (E)" aria-label="归档" onClick={() => onAction([m.id], 'archive')}><Archive size={15} /></button>
+        <button type="button" title="删除 (#)" aria-label="删除" onClick={() => onAction([m.id], 'trash')}><Trash2 size={15} /></button>
         {variant === 'mail' && (
           <button type="button" title={m.seen ? '标为未读 (U)' : '标为已读'} aria-label={m.seen ? '标为未读' : '标为已读'} onClick={() => onAction([m.id], m.seen ? 'unread' : 'read')}>
             {m.seen ? <Mail size={15} /> : <MailOpen size={15} />}

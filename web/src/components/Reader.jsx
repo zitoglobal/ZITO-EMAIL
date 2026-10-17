@@ -690,6 +690,18 @@ export default function Reader({
           {special !== '\\Archive' && special !== '\\All' && (
             <button type="button" className="tb icon" onClick={() => act('archive')} title="归档 (E)" aria-label="归档"><Archive size={16} /></button>
           )}
+          <button
+            type="button"
+            className="tb icon"
+            onClick={() => {
+              if (inTrash && !confirm('彻底删除后无法恢复，确定？')) return;
+              act(inTrash ? 'delete' : 'trash');
+            }}
+            title={inTrash ? '彻底删除' : '删除 (#)'}
+            aria-label={inTrash ? '彻底删除' : '删除'}
+          >
+            <Trash2 size={16} />
+          </button>
           <div className="move-wrap">
             <button type="button" className={'tb icon' + (base?.snoozeUntil ? ' active' : '')} onClick={() => setMenu(menu === 'snooze' ? null : 'snooze')} title="稍后提醒 (B)" aria-label="稍后提醒">
               <Clock size={16} />
