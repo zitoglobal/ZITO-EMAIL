@@ -14,7 +14,7 @@ import { threadIdOf, inlineCidImages, resolveCidPlaceholders, isAuthFailure, isT
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
-import { aiModels, modelFor } from '../server/ai.js';
+import { aiModels, modelFor, routeForTask, scoreComplexity } from '../server/ai.js';
 import { encrypt, decrypt, encryptBuffer, decryptBuffer } from '../server/security.js';
 import { generateSecret, generateSync, verifySync } from 'otplib';
 
@@ -295,6 +295,13 @@ assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.i
   const m = aiModels();
   assert('model fast tier', m.fast === 'qwen-plus' && modelFor('fast') === 'qwen-plus');
   assert('model strong tier', m.strong === 'qwen3.8-max' && modelFor('strong') === 'qwen3.8-max');
+  assert('complexity easy low', scoreComplexity({ subject: 'Hi', text: 'Thanks' }) < 30);
+  assert('complexity hard high', scoreComplexity({ subject: 'Complaint', text: 'quality claim and LC dispute' }) >= 35);
+  assert('route triage fast', routeForTask('triage', {}).tier === 'fast' && routeForTask('triage', {}).enableThinking === false);
+  const hardReply = routeForTask('reply', { subject: 'Payment overdue', text: 'Please settle deposit and PI urgently' });
+  assert('route hard reply thinks', hardReply.tier === 'strong' && hardReply.enableThinking === true);
+  const easyReply = routeForTask('reply', { subject: 'Thanks', text: 'Got it' });
+  assert('route easy reply no think', easyReply.tier === 'strong' && easyReply.enableThinking === false);
   for (const [k, v] of Object.entries(prev)) {
     if (v == null) delete process.env[k];
     else process.env[k] = v;

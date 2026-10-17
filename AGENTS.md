@@ -25,8 +25,8 @@
 - 团队公海：VIP/超时排序；指派；管理员超时催办（SSE `remind-queue` + Push，2h 冷却）；认领自己箱邮件自动打开今日待办并抬分
 - 读信「同事正在看」：`/api/presence/*` + SSE `presence`；管理员「销售洞察」含 `/api/admin/ops`
 - AI 深度：`server/ai_context.js` 向 `/api/ai/reply` 注入阶段/认领/SLA/信号；`/api/ai/triage` 返回可一键执行的 actions（认领/阶段/稍后/回复/催单/已处理），今日待办点按钮即执行
-- AI 多模型路由：`AI_MODEL`/`_MID`/`_FAST` 按任务自动选用（分诊/简报=fast，摘要翻译=mid，写信回复=strong）；分诊优先吃缓存正文前段；可选 `autoTriageFocus`
-- `qwen3.8-max` 默认深度思考：分诊/摘要/翻译关闭 `enable_thinking`，写信可选开（`AI_THINKING_STRONG=0` 可关）；避免分诊 90s 超时误以为「接了 API 不能用」
+- AI 自动路由：按任务档（快/中/强）+ 问题复杂度（投诉/付款/合同等升档）；复杂回复才开深度思考（`AI_AUTO_ROUTE`/`AI_THINKING_STRONG`）；分诊吃缓存正文；可选 `autoTriageFocus`
+- `qwen3.8-max` 默认深度思考：轻任务关 `enable_thinking`，避免分诊超时；当前 token-plan 若仅一模型则三档同模，逻辑仍按问题切换思考强度
 - 读信：`MessageCard` 须传入 `viewers`；`MailFrame` 折叠引用只改 body 片段；BodyGuard + 顶层 AppErrorBoundary；cid 图两侧 clean Content-ID，大图走附件 URL，旧缓存含 `cid:` 会自动重拉
 - 会话：References 链解析 + 入库回填；会话视图跨本账号多邮箱；Focus 去重用 `conversationKey`
 - 路由拆分：`routes_collab.js` / `routes_deals.js` / `routes_focus.js`；前端 boot：`hooks/useAppBoot.js`

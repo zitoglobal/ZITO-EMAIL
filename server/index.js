@@ -365,6 +365,7 @@ app.get(
         vendorHost: ai.aiVendorHost(),
         leavesServer: configured && cloudOk,
         models: ai.aiModels(),
+        autoRoute: ai.autoRouteEnabled(),
       },
       ...stateFor(req.user, req.query.dayStart),
     });
