@@ -364,6 +364,7 @@ app.get(
         cloudOk,
         vendorHost: ai.aiVendorHost(),
         leavesServer: configured && cloudOk,
+        models: ai.aiModels(),
       },
       ...stateFor(req.user, req.query.dayStart),
     });
@@ -1731,11 +1732,21 @@ app.post(
     if (todo.length) {
       const payload = todo.map((r) => {
         const biz = aiContext.bizContextForRow(req.user.id, r, settings);
+        // 优先用已缓存正文前段，避免分诊只看 snippet 导致建议偏浅
+        let bodyExcerpt = '';
+        try {
+          const cached = repo.getBody(r.id);
+          bodyExcerpt = String(cached?.text || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 500);
+        } catch (_) {}
         return {
           uid: r.id,
           from: { name: r.from_name, address: r.from_addr },
           subject: r.subject,
           snippet: r.snippet,
+          bodyExcerpt: bodyExcerpt || r.snippet || '',
           context: aiContext.triageContextLine(biz),
           _biz: biz,
         };

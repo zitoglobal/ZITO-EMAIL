@@ -14,6 +14,7 @@ import { threadIdOf, inlineCidImages, resolveCidPlaceholders, isAuthFailure, isT
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
+import { aiModels, modelFor } from '../server/ai.js';
 import { encrypt, decrypt, encryptBuffer, decryptBuffer } from '../server/security.js';
 import { generateSecret, generateSync, verifySync } from 'otplib';
 
@@ -275,6 +276,29 @@ assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.i
     dealOwner: null,
   });
   assert('normalize injects claim when unclaimed', unclaimed[0]?.type === 'claim');
+}
+{
+  const prev = {
+    AI_MODEL: process.env.AI_MODEL,
+    AI_MODEL_FAST: process.env.AI_MODEL_FAST,
+    AI_MODEL_MID: process.env.AI_MODEL_MID,
+    AI_MODEL_STRONG: process.env.AI_MODEL_STRONG,
+  };
+  process.env.AI_MODEL = 'qwen3.8-max';
+  delete process.env.AI_MODEL_FAST;
+  delete process.env.AI_MODEL_MID;
+  delete process.env.AI_MODEL_STRONG;
+  assert('model default cascade', modelFor('fast') === 'qwen3.8-max' && modelFor('strong') === 'qwen3.8-max');
+  process.env.AI_MODEL_FAST = 'qwen-plus';
+  process.env.AI_MODEL_MID = 'qwen-plus';
+  process.env.AI_MODEL_STRONG = 'qwen3.8-max';
+  const m = aiModels();
+  assert('model fast tier', m.fast === 'qwen-plus' && modelFor('fast') === 'qwen-plus');
+  assert('model strong tier', m.strong === 'qwen3.8-max' && modelFor('strong') === 'qwen3.8-max');
+  for (const [k, v] of Object.entries(prev)) {
+    if (v == null) delete process.env[k];
+    else process.env[k] = v;
+  }
 }
 
 // ---------- crypto / backup blob ----------

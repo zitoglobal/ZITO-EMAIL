@@ -11,7 +11,27 @@ dns.setDefaultResultOrder('ipv4first');
 const BASE_URL = () =>
   (process.env.AI_BASE_URL || 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, '');
 const API_KEY = () => process.env.AI_API_KEY || '';
-const MODEL = () => process.env.AI_MODEL || 'qwen3.8-max';
+
+/**
+ * 多模型自动路由（阿里百炼 OpenAI 兼容）：
+ * - strong：写信/回复（默认 AI_MODEL）
+ * - mid：摘要/翻译/润色（AI_MODEL_MID，未设则同 strong）
+ * - fast：分诊/简报（AI_MODEL_FAST，未设则同 mid）
+ * 专家策略是「按任务选模」，不是一次打遍所有模型。
+ */
+export function aiModels() {
+  const strong = String(process.env.AI_MODEL_STRONG || process.env.AI_MODEL || 'qwen3.8-max').trim() || 'qwen3.8-max';
+  const mid = String(process.env.AI_MODEL_MID || strong).trim() || strong;
+  const fast = String(process.env.AI_MODEL_FAST || mid).trim() || mid;
+  return { fast, mid, strong, default: strong };
+}
+
+export function modelFor(tier = 'strong') {
+  const m = aiModels();
+  if (tier === 'fast') return m.fast;
+  if (tier === 'mid') return m.mid;
+  return m.strong;
+}
 
 export function aiConfigured() {
   return !!API_KEY();
@@ -79,12 +99,13 @@ function friendlyAiError(e) {
   return e instanceof Error ? e : new Error(msg || 'AI 调用失败');
 }
 
-async function chatOnce(messages, { json = false, temperature = 0.4, maxTokens = 1500 } = {}) {
+async function chatOnce(messages, { json = false, temperature = 0.4, maxTokens = 1500, tier = 'strong', model } = {}) {
   if (!aiConfigured()) throw new Error('AI 未配置：请在服务器 .env 中设置 AI_API_KEY（以及 AI_BASE_URL / AI_MODEL）');
+  const useModel = String(model || modelFor(tier)).trim() || modelFor('strong');
   const { status, text } = await httpsPostJson(
     `${BASE_URL()}/chat/completions`,
     {
-      model: MODEL(),
+      model: useModel,
       messages,
       temperature,
       max_tokens: maxTokens,
@@ -183,7 +204,7 @@ export async function summarize(mail) {
 ${mailContext(mail)}`,
       },
     ],
-    { json: true, temperature: 0.2 }
+    { json: true, temperature: 0.2, tier: 'mid' }
   );
 }
 
@@ -217,7 +238,7 @@ ${signature ? `- 结尾署名使用：${signature}` : ''}${glossaryHint(glossary
 ${mailContext(mail)}`,
       },
     ],
-    { temperature: 0.6 }
+    { temperature: 0.6, tier: 'strong' }
   );
   return { body: text };
 }
@@ -237,7 +258,7 @@ ${signature ? `署名：${signature}` : ''}${glossaryHint(glossary)}
 不要编造具体价格、日期等信息，需要时用 [ ] 占位。`,
       },
     ],
-    { json: true, temperature: 0.7 }
+    { json: true, temperature: 0.7, tier: 'strong' }
   );
 }
 
@@ -261,7 +282,7 @@ export async function rewrite(text, mode, glossary = []) {
         content: `${task}。只输出结果文本，不要解释，不要 Markdown。${glossaryHint(glossary)}\n\n${String(text).slice(0, 8000)}`,
       },
     ],
-    { temperature: 0.4 }
+    { temperature: 0.4, tier: 'mid' }
   );
   return { text: out };
 }
@@ -276,7 +297,7 @@ export async function translate(mail, target = '简体中文', glossary = []) {
         content: `把下面邮件的主题和正文翻译成${target}，输出 JSON：{"subject":"...","body":"...","sourceLang":"原邮件主要语言，如 English / 中文"}。保留段落结构。${glossaryHint(glossary)}\n\n${mailContext(mail)}`,
       },
     ],
-    { json: true, temperature: 0.2, maxTokens: 3000 }
+    { json: true, temperature: 0.2, maxTokens: 3000, tier: 'mid' }
   );
   const sourceLang = out.sourceLang || guessed;
   return { subject: out.subject || '', body: out.body || '', sourceLang };
@@ -290,7 +311,11 @@ export async function triage(items) {
   const list = items
     .map((m) => {
       const ctx = m.context ? `｜状态：${m.context}` : '';
-      return `[uid:${m.uid}] 来自 ${m.from?.name || ''} <${m.from?.address || ''}>｜主题：${m.subject}｜预览：${(m.snippet || '').slice(0, 160)}${ctx}`;
+      const preview = String(m.bodyExcerpt || m.snippet || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 420);
+      return `[uid:${m.uid}] 来自 ${m.from?.name || ''} <${m.from?.address || ''}>｜主题：${m.subject}｜正文要点：${preview}${ctx}`;
     })
     .join('\n');
   return chat(
@@ -310,7 +335,7 @@ export async function triage(items) {
 ${list}`,
       },
     ],
-    { json: true, temperature: 0.2, maxTokens: 2400 }
+    { json: true, temperature: 0.2, maxTokens: 2400, tier: 'fast' }
   );
 }
 
@@ -335,6 +360,6 @@ priorities 最多 5 条，按重要程度排序。
 ${list}`,
       },
     ],
-    { json: true, temperature: 0.2, maxTokens: 2000 }
+    { json: true, temperature: 0.2, maxTokens: 2000, tier: 'fast' }
   );
 }

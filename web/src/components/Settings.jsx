@@ -384,6 +384,19 @@ function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudCha
       <Toggle icon={Sparkles} label="打开邮件时自动生成 AI 摘要" checked={!!settings.autoSummary && cloudOk} onChange={set('autoSummary')} />
       <Choice icon={Languages} label="默认翻译目标" value={translateTarget} onChange={set('translateTarget')} options={[['简体中文', '中文'], ['English', 'English']]} />
       <Toggle icon={Languages} label="打开邮件时自动翻译" desc="外文邮件自动译成默认目标语言（消耗 AI 额度，默认关闭）" checked={!!settings.autoTranslate && cloudOk} onChange={set('autoTranslate')} />
+      <Toggle
+        icon={ListTodo}
+        label="进入今日待办时自动 AI 分诊"
+        desc="对尚未分析的待回复邮件自动调用轻量模型（默认关闭，控制额度）"
+        checked={!!settings.autoTriageFocus && cloudOk}
+        onChange={set('autoTriageFocus')}
+      />
+      {aiMeta?.models && (
+        <p className="set-desc muted-note">
+          模型路由：快 {aiMeta.models.fast} · 中 {aiMeta.models.mid} · 强 {aiMeta.models.strong}
+          {aiMeta.vendorHost ? ` · ${aiMeta.vendorHost}` : ''}
+        </p>
+      )}
       <Toggle icon={Bell} label="新邮件桌面通知" desc="浏览器在后台时弹出系统通知" checked={settings.notify} onChange={set('notify')} />
       <PushRow notify={notify || (() => {})} />
       <GlossaryEditor glossary={settings.glossary} onSave={onSave} />

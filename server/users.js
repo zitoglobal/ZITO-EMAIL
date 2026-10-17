@@ -33,6 +33,8 @@ const DEFAULT_SETTINGS = {
   remindOverdue: true,
   translateTarget: '简体中文',
   autoTranslate: false,
+  /** 进入今日待办时自动对未分析邮件跑 AI 分诊（轻量模型，默认关） */
+  autoTriageFocus: false,
   /**
    * 是否允许把邮件正文发往云端 AI（摘要/翻译/润色/分诊等）。
    * 关闭后服务端拒绝云端 AI 接口；密钥仍可在服务器配置。
@@ -70,6 +72,7 @@ export function publicUser(u) {
       if (s.translateTarget !== 'English' && s.translateTarget !== '英文') s.translateTarget = '简体中文';
       else s.translateTarget = 'English';
       s.autoTranslate = !!s.autoTranslate;
+      s.autoTriageFocus = !!s.autoTriageFocus;
       s.aiCloudOk = s.aiCloudOk !== false && s.aiCloudOk !== 0;
       sanitizeLayout(s);
       return s;
@@ -132,11 +135,13 @@ export function updateSettings(userId, patch) {
     merged.translateTarget = t === 'English' || t === '英文' ? 'English' : '简体中文';
   }
   if ('autoTranslate' in merged) merged.autoTranslate = !!merged.autoTranslate;
+  if ('autoTriageFocus' in merged) merged.autoTriageFocus = !!merged.autoTriageFocus;
   if ('aiCloudOk' in merged) {
     merged.aiCloudOk = merged.aiCloudOk !== false && merged.aiCloudOk !== 0;
     if (!merged.aiCloudOk) {
       merged.autoSummary = false;
       merged.autoTranslate = false;
+      merged.autoTriageFocus = false;
     }
   }
   sanitizeLayout(merged);

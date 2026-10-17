@@ -376,20 +376,36 @@ export default function App() {
     setList((l) => ({ ...l, messages: orderFocus(l.messages, mode) }));
   }
 
-  async function aiTriage() {
-    const ids = listRef.current.messages.filter((m) => m._section === 'reply').slice(0, 20).map((m) => m.id);
+  const autoTriageDone = useRef('');
+  async function aiTriage(opts = {}) {
+    const silent = !!opts.silent;
+    const ids =
+      Array.isArray(opts.ids) && opts.ids.length
+        ? opts.ids.slice(0, 20)
+        : listRef.current.messages.filter((m) => m._section === 'reply').slice(0, 20).map((m) => m.id);
     if (!ids.length) return;
     setAiBusy(true);
     try {
-      const { notes } = await api('/ai/triage', { method: 'POST', body: { ids, force: true } });
+      const { notes } = await api('/ai/triage', { method: 'POST', body: { ids, force: !silent } });
       setList((l) => ({ ...l, messages: l.messages.map((m) => (notes[m.id] ? { ...m, aiNote: notes[m.id] } : m)) }));
-      notify('AI 已给出建议与可执行动作', 'success');
+      if (!silent) notify('AI 已给出建议与可执行动作', 'success');
     } catch (e) {
-      notify(e.message, 'error');
+      if (!silent) notify(e.message, 'error');
     } finally {
       setAiBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (view.box !== 'today' || !ai || !settings?.autoTriageFocus || aiBusy) return;
+    const need = list.messages.filter((m) => m._section === 'reply' && !m.aiNote).slice(0, 12);
+    if (!need.length) return;
+    const key = need.map((m) => m.id).join(',');
+    if (autoTriageDone.current === key) return;
+    autoTriageDone.current = key;
+    aiTriage({ silent: true, ids: need.map((m) => m.id) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.box, ai, settings?.autoTriageFocus, list.messages]);
 
   const [aiActionBusy, setAiActionBusy] = useState(false);
   async function runAiAction(m, action) {
