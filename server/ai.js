@@ -99,9 +99,15 @@ function friendlyAiError(e) {
   return e instanceof Error ? e : new Error(msg || 'AI 调用失败');
 }
 
-async function chatOnce(messages, { json = false, temperature = 0.4, maxTokens = 1500, tier = 'strong', model } = {}) {
+async function chatOnce(
+  messages,
+  { json = false, temperature = 0.4, maxTokens = 1500, tier = 'strong', model, enableThinking, timeoutMs } = {}
+) {
   if (!aiConfigured()) throw new Error('AI 未配置：请在服务器 .env 中设置 AI_API_KEY（以及 AI_BASE_URL / AI_MODEL）');
   const useModel = String(model || modelFor(tier)).trim() || modelFor('strong');
+  // qwen3.8-max 默认深度思考：分诊/摘要易拖到 30–90s 触发超时。轻/中任务默认关思考。
+  const thinking =
+    enableThinking != null ? !!enableThinking : tier === 'strong' && process.env.AI_THINKING_STRONG !== '0';
   const { status, text } = await httpsPostJson(
     `${BASE_URL()}/chat/completions`,
     {
@@ -109,9 +115,10 @@ async function chatOnce(messages, { json = false, temperature = 0.4, maxTokens =
       messages,
       temperature,
       max_tokens: maxTokens,
+      enable_thinking: thinking,
       ...(json ? { response_format: { type: 'json_object' } } : {}),
     },
-    { headers: { Authorization: `Bearer ${API_KEY()}` } }
+    { headers: { Authorization: `Bearer ${API_KEY()}` }, timeoutMs: timeoutMs || AI_TIMEOUT_MS }
   );
   if (status < 200 || status >= 300) {
     throw new Error(`AI 服务返回错误 ${status}：${text.slice(0, 200)}`);
@@ -335,7 +342,7 @@ export async function triage(items) {
 ${list}`,
       },
     ],
-    { json: true, temperature: 0.2, maxTokens: 2400, tier: 'fast' }
+    { json: true, temperature: 0.2, maxTokens: 1800, tier: 'fast', enableThinking: false, timeoutMs: 120_000 }
   );
 }
 
@@ -360,6 +367,6 @@ priorities 最多 5 条，按重要程度排序。
 ${list}`,
       },
     ],
-    { json: true, temperature: 0.2, maxTokens: 2000, tier: 'fast' }
+    { json: true, temperature: 0.2, maxTokens: 1600, tier: 'fast', enableThinking: false, timeoutMs: 120_000 }
   );
 }

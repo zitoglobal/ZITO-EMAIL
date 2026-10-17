@@ -1727,7 +1727,8 @@ app.post(
     requireAiCloud(req);
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
-    const rows = repo.getMessagesForUser(req.user.id, (req.body.ids || []).slice(0, 25).map(Number));
+    // 批量过大 + 思考模型易超时；默认最多 12 封
+    const rows = repo.getMessagesForUser(req.user.id, (req.body.ids || []).slice(0, 12).map(Number));
     const todo = rows.filter((r) => !r.ai_note || req.body.force);
     if (todo.length) {
       const payload = todo.map((r) => {
