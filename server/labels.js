@@ -21,10 +21,59 @@ export const TRADE_LABEL_PRESETS = [
   { name: '样品', color: '#0d9488' },
   { name: '大货', color: '#16a34a' },
   { name: '付款', color: '#ca8a04' },
+  { name: '成交', color: '#11653b' },
+  { name: '丢单', color: '#9f2a2a' },
   { name: '投诉', color: '#dc2626' },
   { name: '待开票', color: '#ea580c' },
   { name: '物流', color: '#0891b2' },
 ];
+
+/** 业务阶段 → 外贸标签名 */
+export const STAGE_TO_LABEL = {
+  inquiry: '询盘',
+  quote: '报价中',
+  sample: '样品',
+  bulk: '大货',
+  payment: '付款',
+  won: '成交',
+  lost: '丢单',
+};
+
+const STAGE_LABEL_NAMES = new Set(Object.values(STAGE_TO_LABEL));
+
+/** 确保阶段对应标签存在，返回 label 行 */
+export function ensureStageLabel(userId, stageId) {
+  const name = STAGE_TO_LABEL[stageId];
+  if (!name) return null;
+  const existing = db.prepare('SELECT id, name, color, position, created_at AS createdAt FROM labels WHERE user_id = ? AND name = ? COLLATE NOCASE').get(userId, name);
+  if (existing) return existing;
+  const preset = TRADE_LABEL_PRESETS.find((p) => p.name === name) || { name, color: '#0a66ff' };
+  try {
+    return createLabel(userId, preset);
+  } catch (e) {
+    if (e.status === 409) {
+      return db.prepare('SELECT id, name, color, position, created_at AS createdAt FROM labels WHERE user_id = ? AND name = ? COLLATE NOCASE').get(userId, name);
+    }
+    throw e;
+  }
+}
+
+/** 给邮件贴上阶段标签，并去掉其他阶段标签（避免互斥冲突） */
+export function applyStageLabel(userId, messageId, stageId) {
+  const label = ensureStageLabel(userId, stageId);
+  if (!label || !messageId) return { label: null, updated: 0 };
+  const stageIds = db
+    .prepare(
+      `SELECT id FROM labels WHERE user_id = ? AND name IN (${[...STAGE_LABEL_NAMES].map(() => '?').join(',')})`
+    )
+    .all(userId, ...STAGE_LABEL_NAMES)
+    .map((r) => r.id);
+  const remove = stageIds.filter((id) => id !== label.id);
+  return {
+    label,
+    ...setMessageLabels(userId, [messageId], { add: [label.id], remove }),
+  };
+}
 
 const MAX_LABELS = 100;
 const MAX_PER_MESSAGE = 20;

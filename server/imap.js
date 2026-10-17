@@ -4,14 +4,19 @@ import libqp from 'libqp';
 import iconv from 'iconv-lite';
 import { decrypt } from './security.js';
 import { classify } from './classify.js';
+import * as oauth from './oauth.js';
+import { assertSafeMailHost } from './net_guard.js';
 
 const IDLE_CLOSE_MS = 10 * 60 * 1000;
 
 export function friendlyImapError(e) {
   const raw = [e?.responseText, e?.message, e?.code].filter(Boolean).join(' ');
   const s = raw.toLowerCase();
-  if (e?.authenticationFailed || /authenticat|login fail|invalid credentials|password|auth fail/.test(s)) {
-    return '登录失败：账号或密码错误。多数邮箱需要开启 IMAP 并使用「授权码 / 应用专用密码」而不是网页登录密码。';
+  if (/oauth|token|invalid_grant|expired/.test(s) && /oauth|授权|令牌/.test(raw + s)) {
+    return 'OAuth 授权已失效，请重新用 Google / Microsoft 一键绑定。';
+  }
+  if (e?.authenticationFailed || /authenticat|login fail|invalid credentials|password|auth fail|oauth/.test(s)) {
+    return '登录失败：账号或密码错误。多数邮箱需要开启 IMAP 并使用「授权码 / 应用专用密码」；Gmail/Outlook 也可改用 OAuth 一键绑定。';
   }
   if (/enotfound|getaddrinfo/.test(s)) return '无法解析邮件服务器地址，请检查 IMAP 主机设置。';
   if (/timeout|timed out/.test(s)) return '连接邮件服务器超时，请稍后重试或检查端口设置。';
@@ -20,12 +25,37 @@ export function friendlyImapError(e) {
   return raw || '邮件服务器出现未知错误';
 }
 
-export function buildClient(mb, password) {
+export function isAuthFailure(e) {
+  if (e?.authenticationFailed || e?.auth) return true;
+  const msg = friendlyImapError(e);
+  return /登录失败|OAuth 授权已失效|authenticat|invalid credentials|invalid_grant/i.test(msg);
+}
+
+/** 瞬时网络类错误：可排队重试，勿立刻标邮箱 error */
+export function isTransientFailure(e) {
+  if (isAuthFailure(e)) return false;
+  const s = [e?.code, e?.message, e?.responseText].filter(Boolean).join(' ').toLowerCase();
+  return /timeout|timed out|etimedout|econnreset|econnrefused|enotfound|socket|network|temporar|unavailable|try again|eai_again|rate.?limit|too many/i.test(s);
+}
+
+export async function buildClient(mb, password) {
+  // 连接前复检 DNS，缩小绑定时校验与实际连接之间的重绑定窗口
+  await assertSafeMailHost(mb.imap_host, 'IMAP');
+  let auth;
+  if (mb.oauth_refresh_enc || mb.oauth_access_enc) {
+    const accessToken = await oauth.ensureAccessToken(mb);
+    auth = { user: mb.login_user || mb.email, accessToken };
+  } else {
+    auth = {
+      user: mb.login_user || mb.email,
+      pass: password ?? (mb.pass_enc === 'demo' ? '' : decrypt(mb.pass_enc)),
+    };
+  }
   const client = new ImapFlow({
     host: mb.imap_host,
     port: Number(mb.imap_port),
     secure: !!mb.imap_secure,
-    auth: { user: mb.login_user || mb.email, pass: password ?? (mb.pass_enc === 'demo' ? '' : decrypt(mb.pass_enc)) },
+    auth,
     logger: false,
     socketTimeout: 5 * 60_000,
     greetingTimeout: 20_000,
@@ -38,7 +68,7 @@ export function buildClient(mb, password) {
 }
 
 export async function verifyLogin(mb, password) {
-  const client = buildClient(mb, password);
+  const client = await buildClient(mb, password);
   try {
     await client.connect();
   } catch (e) {
@@ -68,25 +98,25 @@ export async function getClient(mb) {
   }
   if (existing?.connecting) return existing.connecting;
 
-  const client = buildClient(mb);
   const entry = { client: null, connecting: null, timer: null };
-  entry.connecting = client
-    .connect()
-    .then(() => {
+  entry.connecting = (async () => {
+    const client = await buildClient(mb);
+    try {
+      await client.connect();
       entry.client = client;
       entry.connecting = null;
       scheduleClose(mb.id, entry);
+      client.on('close', () => {
+        if (pool.get(mb.id) === entry) pool.delete(mb.id);
+      });
       return client;
-    })
-    .catch((e) => {
+    } catch (e) {
       if (pool.get(mb.id) === entry) pool.delete(mb.id);
       const err = new Error(friendlyImapError(e));
       err.auth = !!e?.authenticationFailed;
       throw err;
-    });
-  client.on('close', () => {
-    if (pool.get(mb.id) === entry) pool.delete(mb.id);
-  });
+    }
+  })();
   pool.set(mb.id, entry);
   return entry.connecting;
 }
@@ -176,7 +206,7 @@ function decodePart(buf, info) {
   }
 }
 
-function toSnippet(text, isHtml) {
+function toSnippet(text, isHtml, maxLen = 200) {
   let s = text;
   if (isHtml) {
     s = s
@@ -194,7 +224,22 @@ function toSnippet(text, isHtml) {
     .replace(/[\u200b-\u200f\u00ad\ufeff]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 200);
+    .slice(0, maxLen);
+}
+
+export function cleanMessageId(s) {
+  return String(s || '')
+    .trim()
+    .replace(/^<|>$/g, '');
+}
+
+/** 会话根：References 首个 → In-Reply-To → 自身 Message-ID */
+export function threadIdOf(messageId, inReplyTo, references) {
+  const refs = String(references || '').match(/<[^>]+>/g) || [];
+  const firstRef = cleanMessageId(refs[0]);
+  const irt = cleanMessageId(inReplyTo);
+  const mid = cleanMessageId(messageId);
+  return firstRef || irt || mid || null;
 }
 
 function headerMap(buf) {
@@ -208,12 +253,7 @@ function headerMap(buf) {
   return map;
 }
 
-const cleanId = (s) => String(s || '').trim().replace(/^<|>$/g, '');
-
-function threadIdOf(messageId, inReplyTo, references) {
-  const refs = String(references || '').match(/<[^>]+>/g) || [];
-  return cleanId(refs[0] || inReplyTo || messageId) || null;
-}
+const cleanId = cleanMessageId;
 
 const addr = (list) => (list || []).map((a) => ({ name: a.name || '', address: a.address || '' }));
 
@@ -231,7 +271,15 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
       internalDate: true,
       size: true,
       bodyStructure: true,
-      headers: ['list-unsubscribe', 'list-id', 'precedence', 'auto-submitted', 'references', 'x-auto-response-suppress'],
+      headers: [
+        'list-unsubscribe',
+        'list-id',
+        'precedence',
+        'auto-submitted',
+        'references',
+        'in-reply-to',
+        'x-auto-response-suppress',
+      ],
     },
     { uid }
   )) {
@@ -247,16 +295,20 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
     if (!groups.has(gk)) groups.set(gk, { part: info.part, isHtml, targets: new Map() });
     groups.get(gk).targets.set(msg.uid, info);
   }
-  const snippets = new Map();
+  /** uid → { snippet, preview }；preview 更长供入库算意图 */
+  const previews = new Map();
   for (const g of groups.values()) {
     const uids = [...g.targets.keys()];
     for (let i = 0; i < uids.length; i += 100) {
       try {
-        const query = { uid: true, bodyParts: [{ key: g.part, start: 0, maxLength: g.isHtml ? 8000 : 1500 }] };
+        const query = { uid: true, bodyParts: [{ key: g.part, start: 0, maxLength: g.isHtml ? 12000 : 5000 }] };
         for await (const res of client.fetch(uids.slice(i, i + 100).join(','), query, { uid: true })) {
           const info = g.targets.get(res.uid);
           const buf = res?.bodyParts ? [...res.bodyParts.values()][0] : null;
-          if (info) snippets.set(res.uid, toSnippet(decodePart(buf, info), g.isHtml));
+          if (!info) continue;
+          const raw = decodePart(buf, info);
+          const preview = toSnippet(raw, g.isHtml, 2500);
+          previews.set(res.uid, { snippet: preview.slice(0, 200), preview });
         }
       } catch {
         // 预览失败不影响同步
@@ -270,10 +322,17 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
     const from = addr(env.from)[0] || { name: '', address: '' };
     const date = env.date && !isNaN(new Date(env.date)) ? new Date(env.date) : msg.internalDate || new Date();
     const messageId = cleanId(env.messageId);
+    const inReplyTo = cleanId(env.inReplyTo || headers['in-reply-to']);
+    const pv = previews.get(msg.uid) || { snippet: '', preview: '' };
+    const references = (String(headers.references || '').match(/<[^>]+>/g) || [])
+      .map((x) => cleanId(x))
+      .filter(Boolean);
     return {
       uid: msg.uid,
       messageId,
-      threadId: threadIdOf(messageId, env.inReplyTo, headers.references),
+      inReplyTo: inReplyTo || null,
+      references,
+      threadId: threadIdOf(messageId, inReplyTo, headers.references),
       subject: env.subject || '',
       from,
       to: addr(env.to),
@@ -284,7 +343,8 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
       answered: msg.flags?.has('\\Answered') || false,
       hasAttachments: st.attachments > 0,
       size: msg.size || 0,
-      snippet: snippets.get(msg.uid) || '',
+      snippet: pv.snippet || '',
+      preview: pv.preview || pv.snippet || '',
       category: classify({ from, headers, subject: env.subject || '' }),
     };
   });
@@ -316,13 +376,50 @@ export function forgetParsed(mb, folder, uid) {
   parsedCache.delete(cacheKey(mb, folder, uid));
 }
 
-function inlineCidImages(html, attachments) {
+/** 规范化 cid（去 <>、urldecode、去空白） */
+function cleanCid(s) {
+  let t = cleanId(s);
+  try {
+    t = decodeURIComponent(t);
+  } catch {
+    /* keep */
+  }
+  return t.replace(/\s+/g, '');
+}
+
+/**
+ * 把 cid: 内联图换成 data: 或占位符 __ZM_CID_{index}__（由 API 再换成附件 URL）。
+ * 注意：Content-ID 常带 <>，而 html 里 cid: 没有，必须两侧都 clean。
+ */
+export function inlineCidImages(html, attachments) {
   if (!html) return html;
   return html.replace(/(["'(])cid:([^"')\s]+)/gi, (m, q, cid) => {
-    const a = attachments.find((x) => x.contentId && cleanId(x.contentId) === cid);
-    if (!a || a.size > 3 * 1024 * 1024) return m;
-    return `${q}data:${a.contentType};base64,${a.content.toString('base64')}`;
+    const want = cleanCid(cid);
+    const idx = attachments.findIndex((x) => x.contentId && cleanCid(x.contentId) === want);
+    if (idx < 0) return m;
+    const a = attachments[idx];
+    // 大图不塞 base64（否则 bodies 表 3MB 上限直接放弃缓存）
+    if (!a.content || a.size > 512 * 1024) return `${q}__ZM_CID_${idx}__`;
+    try {
+      return `${q}data:${a.contentType || 'image/png'};base64,${a.content.toString('base64')}`;
+    } catch {
+      return `${q}__ZM_CID_${idx}__`;
+    }
   });
+}
+
+/** 把占位符 / 残留 cid 换成可读的附件 inline URL */
+export function resolveCidPlaceholders(html, messageId, attachments = []) {
+  if (!html || !messageId) return html;
+  let out = String(html).replace(/__ZM_CID_(\d+)__/g, (_, i) => `/api/messages/${messageId}/attachments/${i}?inline=1`);
+  if (!/cid:/i.test(out) || !attachments.length) return out;
+  out = out.replace(/(["'(])cid:([^"')\s]+)/gi, (m, q, cid) => {
+    const want = cleanCid(cid);
+    const idx = attachments.findIndex((x) => x.contentId && cleanCid(x.contentId) === want);
+    if (idx < 0) return m;
+    return `${q}/api/messages/${messageId}/attachments/${idx}?inline=1`;
+  });
+  return out;
 }
 
 function unsubscribeOf(p) {

@@ -25,6 +25,15 @@ export function emit(userId, type, data = {}) {
   }
 }
 
+/** 广播给所有在线会话（读信在看、团队轻提示） */
+export function emitAll(type, data = {}) {
+  for (const userId of subs.keys()) emit(userId, type, data);
+}
+
+export function onlineUserCount() {
+  return [...subs.keys()].filter((id) => subs.get(id)?.size).length;
+}
+
 setInterval(() => {
   for (const set of subs.values()) for (const res of set) res.write(': ping\n\n');
 }, 25_000).unref();

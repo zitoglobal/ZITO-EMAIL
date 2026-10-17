@@ -135,13 +135,17 @@ export async function detectProvider(email) {
   }
 
   try {
-    const mx = await dns.resolveMx(domain);
-    const hosts = mx.map((m) => m.exchange).join(' ');
+    // MX 查询限时，避免绑邮箱时 DNS 卡住整页
+    const mx = await Promise.race([
+      dns.resolveMx(domain),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('mx-timeout')), 4000)),
+    ]);
+    const hosts = (mx || []).map((m) => m.exchange).join(' ');
     for (const [re, key] of MX_RULES) {
       if (re.test(hosts)) return { key, ...PRESETS[key] };
     }
   } catch {
-    // 无 MX 记录时继续走默认
+    // 无 MX / 超时：继续走默认或自定义推测
   }
 
   if (own) return own;

@@ -3,13 +3,20 @@ import * as repo from './repo.js';
 import { emit } from './events.js';
 import { now } from './db.js';
 import * as priority from './priority.js';
+import * as deals from './deals.js';
 import * as mailRules from './mail_rules.js';
+import * as push from './push.js';
+import * as users from './users.js';
 
 const SYNC_SPECIALS = ['\\Inbox', '\\Sent', '\\Drafts', '\\Archive', '\\Junk', '\\Trash'];
 const INITIAL_INBOX = 400;
 const INITIAL_OTHER = 150;
 const FULL_INTERVAL = 5 * 60_000;
 const INBOX_INTERVAL = 90_000;
+/** Sent 无 IDLE 时的近实时轮询；有 Sent IDLE 时作兜底 */
+const SENT_INTERVAL = 45_000;
+/** Drafts 无 IDLE，短轮询改善多端草稿 */
+const DRAFTS_INTERVAL = 45_000;
 
 /** @type {Map<string, Engine>} */
 const engines = new Map();
@@ -19,8 +26,10 @@ class Engine {
     this.id = id;
     this.chain = Promise.resolve();
     this.watcher = null;
+    this.sentWatcher = null;
     this.stopped = false;
     this.retry = 0;
+    this.sentRetry = 0;
     this.debounce = new Map();
     this.timers = [];
   }
@@ -33,20 +42,56 @@ class Engine {
     return repo.specialFolder(this.id, '\\Inbox')?.path || 'INBOX';
   }
 
+  sentPath() {
+    return repo.specialFolder(this.id, '\\Sent')?.path || null;
+  }
+
+  draftsPath() {
+    return repo.specialFolder(this.id, '\\Drafts')?.path || null;
+  }
+
   start() {
     this.full();
     this.timers.push(setInterval(() => this.full(), FULL_INTERVAL));
     this.timers.push(setInterval(() => this.syncFolder(this.inboxPath()).catch(() => {}), INBOX_INTERVAL));
+    this.timers.push(
+      setInterval(() => {
+        const p = this.sentPath();
+        if (p) this.syncFolder(p).catch(() => {});
+      }, SENT_INTERVAL)
+    );
+    this.timers.push(
+      setInterval(() => {
+        const p = this.draftsPath();
+        if (p) this.syncFolder(p).catch(() => {});
+      }, DRAFTS_INTERVAL)
+    );
     this.connectWatcher();
+    this.connectSentWatcher();
+    // 未识别 Sent 时「已回仍待办」会偏慢，打日志并给前端一次提示
+    if (!this.sentPath()) {
+      const mb = this.mb;
+      if (mb) {
+        console.warn(`[sync] ${mb.email} 未识别「已发送」文件夹，今日待办消待办可能延迟`);
+        emit(mb.user_id, 'mailbox', {
+          id: mb.id,
+          status: mb.status || 'ok',
+          hint: '未识别已发送文件夹：回信后「今日待办」更新可能变慢，请在邮箱设置里确认 Sent 文件夹映射',
+        });
+      }
+    }
   }
 
   stop() {
     this.stopped = true;
     this.timers.forEach(clearInterval);
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.sentReconnectTimer);
     for (const t of this.debounce.values()) clearTimeout(t);
     this.watcher?.logout().catch(() => {});
     this.watcher = null;
+    this.sentWatcher?.logout().catch(() => {});
+    this.sentWatcher = null;
     imap.dropClient(this.id);
   }
 
@@ -72,7 +117,14 @@ class Engine {
     if (this.stopped) return;
     const mb = this.mb;
     if (!mb) return this.stop();
-    const client = imap.buildClient(mb);
+    let client;
+    try {
+      client = await imap.buildClient(mb);
+    } catch (e) {
+      this.markError(imap.friendlyImapError(e));
+      this.reconnectTimer = setTimeout(() => this.connectWatcher(), 30_000);
+      return;
+    }
     client.on('exists', () => this.later(this.inboxPath()));
     client.on('expunge', () => this.later(this.inboxPath(), 1500));
     client.on('flags', (ev) => {
@@ -81,6 +133,7 @@ class Engine {
         { uid: ev.uid, seen: ev.flags.has('\\Seen'), flagged: ev.flags.has('\\Flagged'), answered: ev.flags.has('\\Answered') },
       ]);
       emit(mb.user_id, 'sync', { mailboxId: mb.id, folder: ev.path });
+      priority.invalidate(mb.user_id);
     });
     client.on('close', () => {
       if (this.watcher === client) this.watcher = null;
@@ -99,6 +152,44 @@ class Engine {
         this.markError(imap.friendlyImapError(e));
       }
       client.close();
+    }
+  }
+
+  /** Sent 独立 IDLE：发信后服务器自动存副本时尽快入库，消掉「已回仍待办」 */
+  async connectSentWatcher() {
+    if (this.stopped) return;
+    const mb = this.mb;
+    if (!mb || mb.provider === 'demo') return;
+    const path = this.sentPath();
+    if (!path) {
+      this.sentReconnectTimer = setTimeout(() => this.connectSentWatcher(), 30_000);
+      return;
+    }
+    let client;
+    try {
+      client = await imap.buildClient(mb);
+    } catch {
+      this.sentReconnectTimer = setTimeout(() => this.connectSentWatcher(), 30_000);
+      return;
+    }
+    client.on('exists', () => this.later(path, 400));
+    client.on('expunge', () => this.later(path, 1200));
+    client.on('close', () => {
+      if (this.sentWatcher === client) this.sentWatcher = null;
+      if (this.stopped) return;
+      const delay = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(this.sentRetry++, 6));
+      this.sentReconnectTimer = setTimeout(() => this.connectSentWatcher(), delay);
+    });
+    try {
+      await client.connect();
+      await client.mailboxOpen(path);
+      this.sentWatcher = client;
+      this.sentRetry = 0;
+    } catch {
+      client.close();
+      if (this.stopped) return;
+      const delay = Math.min(5 * 60_000, 8_000 * 2 ** Math.min(this.sentRetry++, 5));
+      this.sentReconnectTimer = setTimeout(() => this.connectSentWatcher(), delay);
     }
   }
 
@@ -125,6 +216,7 @@ class Engine {
         repo.setMailboxStatus(mb.id, 'ok');
         emit(mb.user_id, 'mailbox', { id: mb.id, status: 'ok' });
         if (!this.watcher && !this.reconnectTimer) this.connectWatcher();
+        if (!this.sentWatcher && !this.sentReconnectTimer) this.connectSentWatcher();
       } catch (e) {
         this.markError(e.message || String(e));
       }
@@ -145,7 +237,10 @@ class Engine {
     if (!folderRow) return;
     const firstSync = !folderRow.last_sync;
     const isInbox = folderRow.special_use === '\\Inbox';
-    const useWatcher = isInbox && this.watcher?.usable ? this.watcher : undefined;
+    const isSent = folderRow.special_use === '\\Sent';
+    const useWatcher =
+      (isInbox && this.watcher?.usable ? this.watcher : undefined) ||
+      (isSent && this.sentWatcher?.usable ? this.sentWatcher : undefined);
 
     const inserted = await imap.withBox(
       mb,
@@ -201,12 +296,31 @@ class Engine {
       useWatcher
     );
 
-    if (folderRow.special_use === '\\Sent' && inserted.length) {
-      repo.addContacts(mb.user_id, inserted.flatMap((m) => [...m.to, ...m.cc]), 2);
+    if (isSent && inserted.length) {
+      repo.addContacts(mb.user_id, inserted.flatMap((m) => [...(m.to || []), ...(m.cc || [])]), 2);
+      for (const m of inserted) {
+        try {
+          repo.markThreadAnswered(mb.user_id, {
+            threadId: m.threadId,
+            inReplyTo: m.inReplyTo,
+            messageId: m.messageId,
+          });
+        } catch {
+          /* best-effort */
+        }
+      }
       priority.invalidate(mb.user_id);
     }
     if (isInbox && inserted.length) {
       repo.addContacts(mb.user_id, inserted.filter((m) => m.category === 'people').map((m) => m.from), 1);
+      for (const m of inserted) {
+        try {
+          deals.clearDueFollowOnInbound(mb.user_id, m.from?.address || m.from_addr);
+        } catch {
+          /* optional */
+        }
+      }
+      priority.invalidate(mb.user_id);
     }
     // 邮件规则：仅增量新信；首次全量同步不对历史邮件生效
     if (inserted.length && !firstSync) {
@@ -238,6 +352,27 @@ class Engine {
           count: fresh.length,
           important: fresh.filter((m) => m.important).length,
         });
+        try {
+          const settings = users.settingsOf(mb.user_id);
+          if (settings.notify) {
+            const first = fresh[0];
+            const important = !!first.important;
+            push
+              .notifyUser(mb.user_id, {
+                title: important ? '重要来信' : '新邮件',
+                body:
+                  fresh.length > 1
+                    ? `${mb.email || ''} 收到 ${fresh.length} 封新邮件`
+                    : `${first.from?.name || first.from?.address || ''}：${first.subject || '(无主题)'}`,
+                url: '/',
+                tag: 'zm-' + mb.id,
+                urgency: important ? 'high' : 'normal',
+              })
+              .catch(() => {});
+          }
+        } catch {
+          /* push optional */
+        }
       }
     }
   }
@@ -332,7 +467,14 @@ export function startAll() {
 }
 
 /** 用户操作后的增量刷新 */
-export function touch(mailboxId, folder) {
+export function touch(mailboxId, folder, ms = 1200) {
   const e = engines.get(mailboxId);
-  if (e && folder) e.later(folder, 1200);
+  if (e && folder) e.later(folder, ms);
+}
+
+/** 发信后立刻拉 Sent，不等 45s 轮询 */
+export function forceSync(mailboxId, folder) {
+  const e = engines.get(mailboxId);
+  if (e && folder) return e.syncFolder(folder);
+  return Promise.resolve();
 }

@@ -6,8 +6,8 @@ import { MAILBOX_COLORS } from '../utils.js';
 const PROVIDER_TIPS = [
   ['网易企业邮 / 163', '设置 → 客户端设置 → 开启 IMAP/SMTP，使用授权码'],
   ['QQ / 腾讯企业邮', '设置 → 账户 → 开启 IMAP/SMTP 服务，生成授权码'],
-  ['Gmail', 'Google 账号 → 安全性 → 两步验证 → 应用专用密码'],
-  ['Outlook', '需允许 IMAP 与 SMTP AUTH，个人账户使用应用密码'],
+  ['Gmail', '优先用下方「Google 一键绑定」；或应用专用密码'],
+  ['Outlook / M365', '优先用下方「Microsoft 一键绑定」；或应用密码'],
 ];
 
 /**
@@ -31,9 +31,38 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
     smtpSecure: mailbox?.smtp.secure ?? true,
   });
   const [loading, setLoading] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState('');
+  const [oauth, setOauth] = useState({ gmail: false, microsoft: false });
   const [error, setError] = useState('');
   const advTouched = useRef(false);
   const timer = useRef();
+
+  useEffect(() => {
+    api('/oauth/status')
+      .then(setOauth)
+      .catch(() => {});
+  }, []);
+
+  async function startOauth(provider) {
+    setError('');
+    setOauthBusy(provider);
+    try {
+      const q = editing && mailbox?.id ? qs({ mailboxId: mailbox.id }) : '';
+      const { url } = await api(`/oauth/${provider}/start${q}`);
+      if (!url) throw new Error('未返回授权地址');
+      window.location.href = url;
+    } catch (err) {
+      setError(err.message || '无法启动 OAuth');
+      setOauthBusy('');
+    }
+  }
+
+  const oauthProvider =
+    mailbox?.oauthProvider === 'microsoft' || mailbox?.provider === 'outlook' ? 'microsoft' : 'gmail';
+  const canReauth =
+    editing &&
+    mailbox?.authType === 'oauth' &&
+    ((oauthProvider === 'gmail' && oauth.gmail) || (oauthProvider === 'microsoft' && oauth.microsoft));
 
   useEffect(() => {
     if (editing) return;
@@ -44,10 +73,21 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
         const p = await api('/providers/detect' + qs({ email }));
         setDetected(p);
         if (p?.imap && !advTouched.current) {
-          setAdv((a) => ({ ...a, imapHost: p.imap.host, imapPort: p.imap.port, imapSecure: p.imap.secure, smtpHost: p.smtp.host, smtpPort: p.smtp.port, smtpSecure: p.smtp.secure }));
+          setAdv((a) => ({
+            ...a,
+            imapHost: p.imap.host,
+            imapPort: p.imap.port,
+            imapSecure: p.imap.secure,
+            smtpHost: p.smtp.host,
+            smtpPort: p.smtp.port,
+            smtpSecure: p.smtp.secure,
+          }));
         }
+        // 未能识别服务商时自动展开服务器设置，减少「无法解析主机」误绑
+        if (p?.key === 'custom' || p?.hint?.includes('未能自动识别')) setShowAdv(true);
       } catch {
         setDetected(null);
+        setShowAdv(true);
       }
     }, 450);
   }, [email, editing]);
@@ -68,7 +108,9 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
         : await api('/mailboxes', { method: 'POST', body: { email, password, name, color, advanced } });
       onDone(res);
     } catch (err) {
-      setError(err.message);
+      const msg = err.message || '绑定失败';
+      setError(msg);
+      if (/无法解析|ENOTFOUND|主机|IMAP|SMTP|服务器/i.test(msg)) setShowAdv(true);
     } finally {
       setLoading(false);
     }
@@ -80,9 +122,49 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
         <div className="logo-mark"><Mail size={20} /></div>
         <div>
           <div className="login-title">{title || (editing ? '更新邮箱连接' : '绑定邮箱')}</div>
-          <div className="login-sub">{editing ? mailbox.email : '支持企业邮箱、Gmail、QQ、163、Outlook 等，可绑定多个'}</div>
+          <div className="login-sub">
+            {editing
+              ? `${mailbox.email}${mailbox.authType === 'oauth' ? ' · OAuth' : ''}`
+              : '支持企业邮箱、Gmail、QQ、163、Outlook 等，可绑定多个'}
+          </div>
         </div>
       </div>
+
+      {!editing && (oauth.gmail || oauth.microsoft) && (
+        <div className="oauth-bind">
+          <div className="oauth-bind-label">一键授权（推荐）</div>
+          <div className="oauth-bind-row">
+            {oauth.gmail && (
+              <button type="button" className="btn-ghost oauth-btn" disabled={!!oauthBusy} onClick={() => startOauth('gmail')}>
+                {oauthBusy === 'gmail' ? <Loader2 size={15} className="spin" /> : null}
+                Google / Gmail
+              </button>
+            )}
+            {oauth.microsoft && (
+              <button type="button" className="btn-ghost oauth-btn" disabled={!!oauthBusy} onClick={() => startOauth('microsoft')}>
+                {oauthBusy === 'microsoft' ? <Loader2 size={15} className="spin" /> : null}
+                Microsoft 365
+              </button>
+            )}
+          </div>
+          <div className="oauth-bind-or">或使用授权码绑定</div>
+        </div>
+      )}
+
+      {canReauth && (
+        <div className="oauth-bind">
+          <div className="oauth-bind-label">OAuth 授权</div>
+          <button type="button" className="btn-ghost oauth-btn" disabled={!!oauthBusy} onClick={() => startOauth(oauthProvider)}>
+            {oauthBusy ? <Loader2 size={15} className="spin" /> : null}
+            重新授权 {oauthProvider === 'microsoft' ? 'Microsoft 365' : 'Google'}
+          </button>
+          <div className="oauth-bind-or">令牌失效或改密后点此刷新，无需解绑</div>
+        </div>
+      )}
+
+      {editing && mailbox?.authType === 'oauth' && !oauth.gmail && !oauth.microsoft && (
+        <div className="provider-hint">此邮箱为 OAuth 绑定。当前环境未配置 Google/Microsoft 应用凭证，请改用授权码或联系管理员配置。</div>
+      )}
 
       {!editing && (
         <label className="field">
@@ -99,6 +181,12 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
           <Server size={14} />
           <div>
             <b>已识别：{detected.name}</b>
+            {detected.imap?.host && (
+              <div className="provider-hosts">
+                IMAP {detected.imap.host}:{detected.imap.port}
+                {detected.smtp?.host ? ` · SMTP ${detected.smtp.host}:${detected.smtp.port}` : ''}
+              </div>
+            )}
             {detected.hint && <div>{detected.hint}</div>}
           </div>
         </div>

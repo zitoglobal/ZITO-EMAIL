@@ -14,7 +14,7 @@ import * as imap from './imap.js';
 import * as sync from './sync.js';
 import * as mailer from './mailer.js';
 import { buildRaw, verifySmtp } from './smtp.js';
-import { subscribe, emit, isOnline } from './events.js';
+import { subscribe, emit, isOnline, onlineUserCount } from './events.js';
 import * as ai from './ai.js';
 import * as priority from './priority.js';
 import * as backup from './backup.js';
@@ -23,11 +23,31 @@ import * as labels from './labels.js';
 import * as savedSearches from './saved_searches.js';
 import * as mailRules from './mail_rules.js';
 import * as contacts from './contacts.js';
+import * as deals from './deals.js';
+import { assertSafeMailHosts } from './net_guard.js';
+import { sanitizeMailHtml } from './sanitize_mail.js';
+import * as totp from './totp.js';
+import * as analytics from './analytics.js';
+import * as push from './push.js';
+import * as oauth from './oauth.js';
+import * as presence from './presence.js';
+import * as flagRetry from './flag_retry.js';
+import * as adminOps from './admin_ops.js';
+import * as teamQueue from './team_queue.js';
+import { registerCollabRoutes } from './routes_collab.js';
+import { registerDealsRoutes } from './routes_deals.js';
+import { registerFocusRoutes } from './routes_focus.js';
+import * as aiContext from './ai_context.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
+const IS_PROD = process.env.NODE_ENV === 'production';
+/** 生产默认只绑本机，必须经 Nginx；开发可 BIND_HOST=0.0.0.0 */
+const BIND_HOST = process.env.BIND_HOST || (IS_PROD ? '127.0.0.1' : '0.0.0.0');
 const COOKIE = 'zm_token';
-const COOKIE_SECURE = process.env.COOKIE_SECURE === '1';
+/** 生产默认 Secure；可用 COOKIE_SECURE=0 显式关闭（仅排查用） */
+const COOKIE_SECURE =
+  process.env.COOKIE_SECURE === '1' || (IS_PROD && process.env.COOKIE_SECURE !== '0');
 const MAX_MAILBOXES = Number(process.env.MAX_MAILBOXES_PER_USER || 20);
 const COLORS = ['#0a66ff', '#00b4e6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#64748b'];
 
@@ -66,8 +86,37 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 const wrap = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch((e) => {
     if (!e.status) console.error('[api]', req.method, req.path, e.message);
-    res.status(e.status || 400).json({ error: e.message || String(e) });
+    const body = { error: e.message || String(e) };
+    if (e.deal) body.deal = e.deal;
+    res.status(e.status || 400).json(body);
   });
+
+/**
+ * IMAP 旗标写回失败：
+ * - 瞬时/可重试 → 入队，不标邮箱 error
+ * - 认证失败 → 标 error，需用户重绑
+ */
+function softImapFail(mb, e, { folder, uids, flags } = {}) {
+  const msg = imap.friendlyImapError(e);
+  console.warn('[imap-soft]', mb?.email || mb?.id, msg);
+  if (flagRetry.isAuthImapError(e)) {
+    if (mb?.id) {
+      try {
+        repo.setMailboxStatus(mb.id, 'error', msg);
+        emit(mb.user_id, 'mailbox', { id: mb.id, status: 'error', error: msg });
+        emit(mb.user_id, 'sync', { mailboxId: mb.id, local: true });
+      } catch {
+        /* ignore */
+      }
+    }
+    return msg;
+  }
+  if (folder && uids?.length && flags) {
+    flagRetry.enqueueFlagRetry(mb, folder, uids, flags);
+    return msg;
+  }
+  return msg;
+}
 
 const buckets = new Map();
 function rateLimit(key, max, windowMs) {
@@ -131,7 +180,7 @@ function stateFor(user, dayStart) {
 }
 
 
-// ---------- 健康检查（探针用，无需登录） ----------
+// ---------- 健康检查（探针用，无需登录；生产默认精简） ----------
 app.get('/api/health', (req, res) => {
   let dbOk = false;
   try {
@@ -140,19 +189,33 @@ app.get('/api/health', (req, res) => {
   } catch (e) {
     console.error('[health]', e.message);
   }
+  const detail =
+    process.env.HEALTH_DETAIL === '1' ||
+    req.query.detail === '1' ||
+    !IS_PROD ||
+    req.ip === '127.0.0.1' ||
+    req.ip === '::1' ||
+    req.ip === '::ffff:127.0.0.1';
+  if (!detail) {
+    return res.status(dbOk ? 200 : 503).json({ ok: dbOk });
+  }
   let errorMailboxes = 0;
   try {
     errorMailboxes = repo.errorMailboxCount();
   } catch (_) {}
-  const body = {
+  const mailSecret = String(process.env.MAIL_SECRET || '').trim();
+  const oauthSt = oauth.status();
+  res.status(dbOk ? 200 : 503).json({
     ok: dbOk,
     db: dbOk ? 'up' : 'down',
     uptime: Math.round(process.uptime()),
     aiConfigured: ai.aiConfigured(),
+    mailSecretConfigured: !!(mailSecret && mailSecret !== 'change-me-to-a-long-random-string'),
     lastBackupAt: backup.lastBackupAt(),
     errorMailboxes,
-  };
-  res.status(dbOk ? 200 : 503).json(body);
+    oauth: { gmail: oauthSt.gmail, microsoft: oauthSt.microsoft },
+    onlineUsers: onlineUserCount(),
+  });
 });
 
 // ---------- 账号 ----------
@@ -171,7 +234,7 @@ app.post(
       if (mode === 'code' && req.body.code !== process.env.SIGNUP_CODE) throw httpError(403, '邀请码不正确');
     }
     const u = users.createUser({ ...req.body, role: first ? 'admin' : 'member' });
-    setCookie(res, users.createSession(u.id, req.headers['user-agent']), 30 * 24 * 3600);
+    setCookie(res, users.createSession(u.id, req.headers['user-agent']), users.sessionPolicy().absDays * 24 * 3600);
     res.json({ user: users.publicUser(u) });
   })
 );
@@ -180,11 +243,32 @@ app.post(
   '/api/auth/login',
   wrap(async (req, res) => {
     rateLimit('login:' + req.ip, 10, 10 * 60_000);
+    const loginKey = String(req.body?.email || '')
+      .trim()
+      .toLowerCase()
+      .slice(0, 80);
+    if (loginKey) rateLimit('login-user:' + loginKey, 8, 15 * 60_000);
     const u = users.authenticate(req.body.email, req.body.password);
     if (!u) throw httpError(401, '账号或密码错误');
     buckets.delete('login:' + req.ip);
-    setCookie(res, users.createSession(u.id, req.headers['user-agent']), 30 * 24 * 3600);
+    if (totp.isTotpEnabled(u)) {
+      const ticket = totp.createLoginTicket(u.id);
+      return res.json({ needsTotp: true, ticket });
+    }
+    setCookie(res, users.createSession(u.id, req.headers['user-agent']), users.sessionPolicy().absDays * 24 * 3600);
     res.json({ user: users.publicUser(u) });
+  })
+);
+
+app.post(
+  '/api/auth/login/totp',
+  wrap(async (req, res) => {
+    rateLimit('login-totp:' + req.ip, 20, 10 * 60_000);
+    const ticketKey = String(req.body?.ticket || '').slice(0, 80);
+    if (ticketKey) rateLimit('login-totp-ticket:' + ticketKey, 8, 10 * 60_000);
+    const { user: u, via, recoveryLeft } = totp.consumeLoginTicket(req.body?.ticket, req.body?.code);
+    setCookie(res, users.createSession(u.id, req.headers['user-agent']), users.sessionPolicy().absDays * 24 * 3600);
+    res.json({ user: users.publicUser(u), via, recoveryLeft });
   })
 );
 
@@ -195,9 +279,95 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get(
+  '/api/me/totp',
+  auth,
+  wrap(async (req, res) => {
+    res.json(totp.userTotpStatus(req.user.id));
+  })
+);
+
+app.post(
+  '/api/me/totp/setup',
+  auth,
+  wrap(async (req, res) => {
+    rateLimit('totp-setup:' + req.user.id, 10, 3600_000);
+    const data = await totp.beginSetup(req.user.id, req.user.email);
+    res.json(data);
+  })
+);
+
+app.post(
+  '/api/me/totp/confirm',
+  auth,
+  wrap(async (req, res) => {
+    rateLimit('totp-confirm:' + req.user.id, 20, 3600_000);
+    res.json(totp.confirmSetup(req.user.id, req.body?.code));
+  })
+);
+
+app.post(
+  '/api/me/totp/disable',
+  auth,
+  wrap(async (req, res) => {
+    rateLimit('totp-disable:' + req.user.id, 10, 3600_000);
+    res.json(totp.disable(req.user.id, req.body?.code));
+  })
+);
+
+app.post(
+  '/api/me/totp/recovery',
+  auth,
+  wrap(async (req, res) => {
+    rateLimit('totp-recovery:' + req.user.id, 8, 3600_000);
+    res.json(totp.regenerateRecovery(req.user.id, req.body?.code));
+  })
+);
+
+app.get(
+  '/api/me/sessions',
+  auth,
+  wrap(async (req, res) => {
+    res.json({
+      sessions: users.listSessions(req.user.id, readCookie(req, COOKIE)),
+      policy: users.sessionPolicy(),
+    });
+  })
+);
+
+app.post(
+  '/api/me/sessions/revoke-others',
+  auth,
+  wrap(async (req, res) => {
+    const n = users.destroyOtherSessions(req.user.id, readCookie(req, COOKIE));
+    res.json({ ok: true, revoked: n });
+  })
+);
+
+function requireAiCloud(req) {
+  if (!ai.aiConfigured()) throw httpError(503, 'AI 未配置：请联系管理员');
+  if (users.settingsOf(req.user.id).aiCloudOk === false) {
+    throw httpError(403, '已关闭云端 AI：邮件不会外发。可在 设置 → 偏好 中重新开启');
+  }
+}
+
+app.get(
   '/api/me',
   auth,
-  wrap(async (req, res) => res.json({ user: users.publicUser(req.user), ai: ai.aiConfigured(), ...stateFor(req.user, req.query.dayStart) }))
+  wrap(async (req, res) => {
+    const configured = ai.aiConfigured();
+    const cloudOk = users.settingsOf(req.user.id).aiCloudOk !== false;
+    res.json({
+      user: users.publicUser(req.user),
+      ai: configured && cloudOk,
+      aiMeta: {
+        configured,
+        cloudOk,
+        vendorHost: ai.aiVendorHost(),
+        leavesServer: configured && cloudOk,
+      },
+      ...stateFor(req.user, req.query.dayStart),
+    });
+  })
 );
 
 app.get(
@@ -207,47 +377,10 @@ app.get(
 );
 
 // ---------- 今日待办 / 智能分拣 ----------
-app.get(
-  '/api/focus',
-  auth,
-  wrap(async (req, res) => {
-    const mailboxId = req.query.mailboxId || 'all';
-    if (mailboxId !== 'all') mailboxOf(req, mailboxId);
-    const data = priority.focus(req.user.id, users.publicUser(req.user).settings, { mailboxId, dayStart: req.query.dayStart });
-    data.reply = labels.attachLabels(req.user.id, data.reply || []);
-    data.followups = labels.attachLabels(req.user.id, data.followups || []);
-    res.json(data);
-  })
-);
+registerFocusRoutes(app, { auth, wrap, httpError, mailboxOf, priority, labels, users, emit });
 
-app.get('/api/sender-rules', auth, (req, res) => res.json({ rules: priority.listRules(req.user.id) }));
-app.post(
-  '/api/sender-rules',
-  auth,
-  wrap(async (req, res) => {
-    const key = priority.saveRule(req.user.id, req.body || {});
-    emit(req.user.id, 'sync', { local: true });
-    res.json({ ok: true, key });
-  })
-);
-app.delete(
-  '/api/sender-rules',
-  auth,
-  wrap(async (req, res) => {
-    priority.deleteRule(req.user.id, req.query.key);
-    emit(req.user.id, 'sync', { local: true });
-    res.json({ ok: true });
-  })
-);
-
-/** VIP 建议：往来频次 + 业务信号，不自动写入规则 */
-app.get(
-  '/api/vip-suggestions',
-  auth,
-  wrap(async (req, res) => {
-    res.json({ suggestions: priority.vipSuggestions(req.user.id) });
-  })
-);
+/** 团队认领 + 业务阶段（邮箱内，不对接已下线 CRM） */
+registerDealsRoutes(app, { auth, wrap, rateLimit, deals, labels, emit, users, push, db });
 
 app.patch(
   '/api/me',
@@ -273,6 +406,31 @@ app.post(
     res.json({ ok: true });
   })
 );
+
+// ---------- OAuth / 在看 / 团队公海 / 管理员运维（拆路由）----------
+registerCollabRoutes(app, {
+  auth,
+  admin,
+  wrap,
+  httpError,
+  rateLimit,
+  oauth,
+  presence,
+  teamQueue,
+  adminOps,
+  db,
+  repo,
+  sync,
+  priority,
+  emit,
+  encrypt,
+  assertSafeMailHosts,
+  crypto,
+  now,
+  COLORS,
+  MAX_MAILBOXES,
+  users,
+});
 
 // ---------- 团队管理 ----------
 app.get('/api/admin/users', auth, admin, (req, res) => res.json({ users: users.listUsers() }));
@@ -343,6 +501,7 @@ app.post(
     const detected = custom ? null : await detectProvider(email);
     const conn = connectionFrom({ ...req.body, email }, detected, null);
     if (!conn.imap_host || !conn.smtp_host) throw httpError(400, '无法识别邮件服务器，请在高级设置中填写');
+    await assertSafeMailHosts(conn);
     const probe = { ...conn, email };
 
     const [, smtpCheck] = await Promise.all([imap.verifyLogin(probe, req.body.password), verifySmtp(probe, req.body.password)]);
@@ -396,6 +555,7 @@ app.patch(
     let reconnect = false;
     if (b.password || b.advanced) {
       const conn = connectionFrom({ ...b, email: mb.email }, null, mb);
+      await assertSafeMailHosts(conn);
       const password = b.password || null;
       const probe = { ...mb, ...conn };
       if (password) await imap.verifyLogin(probe, password);
@@ -569,13 +729,21 @@ async function deepSearch(userId, opts) {
 }
 
 // ---------- 邮件详情 ----------
-async function loadBody(row) {
-  const cached = repo.getBody(row.id);
-  if (cached) return { html: cached.html, text: cached.text, meta: JSON.parse(cached.meta) };
+async function loadBody(row, { force = false } = {}) {
+  const cached = !force ? repo.getBody(row.id) : null;
+  // 旧缓存若仍含未解析 cid:，强制重拉并重写内联图（修复 Content-ID 匹配缺陷）
+  if (cached && !/cid:/i.test(cached.html || '') && !/__ZM_CID_\d+__/.test(cached.html || '')) {
+    const signals = repo.refreshSignals(row.id, row.subject, cached.text || row.snippet || '');
+    const html = imap.resolveCidPlaceholders(cached.html, row.id);
+    return { html, text: cached.text, meta: JSON.parse(cached.meta), signals };
+  }
   const mb = repo.getMailboxById(row.mailbox_id);
-  const body = imap.serializeParsed(await imap.fetchParsed(mb, row.folder, row.uid));
+  const parsed = await imap.fetchParsed(mb, row.folder, row.uid);
+  const body = imap.serializeParsed(parsed);
+  body.html = imap.resolveCidPlaceholders(body.html, row.id, parsed.attachments || []);
   repo.saveBody(row.id, body);
-  return body;
+  const signals = repo.refreshSignals(row.id, row.subject, body.text || row.snippet || '');
+  return { ...body, signals };
 }
 
 function markSeen(row) {
@@ -592,7 +760,7 @@ app.get(
     const row = messageOf(req);
     let body;
     try {
-      body = await loadBody(row);
+      body = await loadBody(row, { force: req.query.refresh === '1' });
     } catch (e) {
       if (e.status === 404) {
         repo.deleteMessageRows([row.id]);
@@ -600,17 +768,50 @@ app.get(
       }
       throw e;
     }
-    if (req.query.markSeen !== '0') markSeen(row);
-    const base = repo.rowToMessage({ ...row, seen: 1 });
+    // 默认不因 GET 标已读（防链接诱导）；显式 markSeen=1 或 POST /seen
+    const shouldMark = req.query.markSeen === '1' || req.query.markSeen === 'true';
+    if (shouldMark) markSeen(row);
+    const seen = shouldMark ? 1 : row.seen;
+    const base = repo.rowToMessage({ ...row, seen, signals: body.signals != null ? body.signals.join(',') : row.signals });
     const [withLabels] = labels.attachLabels(req.user.id, [base]);
+    // 允许同源 /api/... 内联图（cid 回退 URL）
+    const safeHtml = body.html
+      ? sanitizeMailHtml(body.html).replace(
+          /src="__ZM_CID_(\d+)__"/g,
+          (_, i) => `src="/api/messages/${row.id}/attachments/${i}?inline=1"`
+        )
+      : body.html;
     res.json({
       ...withLabels,
       ...body.meta,
-      html: body.html,
+      html: safeHtml,
       text: body.text,
+      signals: body.signals ?? withLabels.signals,
       knownSender: repo.isKnownContact(req.user.id, row.from_addr),
       sender: priority.senderInfo(req.user.id, row.from_addr),
+      conflict: priority.conflictHints(req.user.id, { fromAddr: row.from_addr, threadId: row.thread_id }),
+      ...(() => {
+        const d = deals.lookup(req.user.id, { address: row.from_addr, threadId: row.thread_id });
+        return {
+          deal: d.deal,
+          dealScope: d.scope,
+          dealScopes: d.scopes,
+          dealStages: d.stages,
+          canSplitDeal: !!d.canSplit,
+          canClaimPerson: !!d.canClaimPerson,
+        };
+      })(),
     });
+  })
+);
+
+app.post(
+  '/api/messages/:id/seen',
+  auth,
+  wrap(async (req, res) => {
+    const row = messageOf(req);
+    markSeen(row);
+    res.json({ ok: true, id: row.id, seen: true });
   })
 );
 
@@ -712,6 +913,7 @@ app.post(
     }
     const each = (fn) => Promise.all([...groups.values()].map((g) => fn(g)));
     let undoable = false;
+    let followRolled = [];
 
     switch (action) {
       case 'read':
@@ -719,8 +921,13 @@ app.post(
         const seen = action === 'read';
         repo.patchMessages(ids, { seen: seen ? 1 : 0 });
         await each(async (g) => {
-          await imap.setFlags(g.mb, g.folder, g.rows.map((r) => r.uid), { seen });
-          sync.touch(g.mb.id, g.folder);
+          const uids = g.rows.map((r) => r.uid);
+          try {
+            await imap.setFlags(g.mb, g.folder, uids, { seen });
+            sync.touch(g.mb.id, g.folder);
+          } catch (e) {
+            softImapFail(g.mb, e, { folder: g.folder, uids, flags: { seen } });
+          }
         });
         break;
       }
@@ -728,7 +935,14 @@ app.post(
       case 'unflag': {
         const flagged = action === 'flag';
         repo.patchMessages(ids, { flagged: flagged ? 1 : 0 });
-        await each((g) => imap.setFlags(g.mb, g.folder, g.rows.map((r) => r.uid), { flagged }));
+        await each(async (g) => {
+          const uids = g.rows.map((r) => r.uid);
+          try {
+            await imap.setFlags(g.mb, g.folder, uids, { flagged });
+          } catch (e) {
+            softImapFail(g.mb, e, { folder: g.folder, uids, flags: { flagged } });
+          }
+        });
         break;
       }
       case 'pin':
@@ -747,10 +961,28 @@ app.post(
       case 'done':
       case 'undone':
         repo.patchMessages(ids, { done_at: action === 'done' ? Date.now() : null });
+        if (action === 'done') {
+          try {
+            const days = Number(users.settingsOf(req.user.id).followupDays) || 3;
+            followRolled = deals.rollFollowAfterHandled(req.user.id, rows, { days, onlyDue: true }) || [];
+          } catch {
+            /* optional */
+          }
+        }
+        priority.invalidate(req.user.id);
         break;
       case 'nofollow':
       case 'follow':
         repo.patchMessages(ids, { nudge_off: action === 'nofollow' ? 1 : 0 });
+        if (action === 'nofollow') {
+          try {
+            const days = Number(users.settingsOf(req.user.id).followupDays) || 3;
+            followRolled = deals.rollFollowAfterHandled(req.user.id, rows, { days, onlyDue: false }) || [];
+          } catch {
+            /* optional */
+          }
+        }
+        priority.invalidate(req.user.id);
         break;
       case 'archive':
       case 'trash':
@@ -805,8 +1037,16 @@ app.post(
       default:
         throw httpError(400, '未知操作');
     }
-    emit(req.user.id, 'sync', { mailboxId: rows[0].mailbox_id, local: true });
-    res.json({ ok: true, undoable });
+    emit(req.user.id, 'sync', { mailboxId: rows[0].mailbox_id, local: true, deal: followRolled.length > 0 });
+    res.json({
+      ok: true,
+      undoable,
+      followRolled: followRolled.map((d) => ({
+        id: d.id,
+        scopeLabel: d.scopeLabel,
+        nextFollowAt: d.nextFollowAt,
+      })),
+    });
   })
 );
 
@@ -817,6 +1057,23 @@ function filesFrom(req) {
     content: f.buffer,
     contentType: f.mimetype,
   }));
+}
+
+function outboundClaimMeta(userId, payload) {
+  const settings = users.settingsOf(userId);
+  const selfEmails = repo
+    .listMailboxes(userId)
+    .map((m) => m.email)
+    .filter(Boolean);
+  try {
+    return deals.afterOutboundSend(userId, payload, {
+      mode: settings.sendAutoClaim === 'off' ? 'off' : 'auto',
+      selfEmails,
+    });
+  } catch (e) {
+    console.warn('[deals] after send', e.message);
+    return null;
+  }
 }
 
 app.post(
@@ -835,11 +1092,21 @@ app.post(
     const sendAt = payload.sendAt && Number(payload.sendAt) > Date.now() + 5000 ? Number(payload.sendAt) : Date.now() + delay;
     if (sendAt - Date.now() < 1000) {
       await mailer.deliver(mb, payload, files);
-      return res.json({ sent: true });
+      const dealMeta = outboundClaimMeta(req.user.id, payload);
+      if (dealMeta?.claimed || dealMeta?.conflict || dealMeta?.stageSuggest) {
+        for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
+      }
+      return res.json({ sent: true, dealMeta });
     }
     const dir = mailer.saveOutboxFiles(files);
     const id = repo.addOutbox(req.user.id, mb.id, payload, dir, sendAt);
-    res.json({ outboxId: id, sendAt, scheduled: !!payload.sendAt });
+    // 撤销窗口（delaySeconds）内不预认领，避免撤销后脏认领；长定时仍入队时认领防撞单
+    const undoWindow = !payload.sendAt && delay > 0;
+    const dealMeta = undoWindow ? null : outboundClaimMeta(req.user.id, payload);
+    if (dealMeta?.claimed || dealMeta?.conflict) {
+      for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
+    }
+    res.json({ outboxId: id, sendAt, scheduled: !!payload.sendAt, dealMeta, undoWindow: !!undoWindow });
   })
 );
 
@@ -860,10 +1127,17 @@ app.delete(
   '/api/outbox/:id',
   auth,
   wrap(async (req, res) => {
-    const o = repo.getOutbox(req.user.id, Number(req.params.id));
+    const id = Number(req.params.id);
+    const o = repo.getOutbox(req.user.id, id);
     if (!o) throw httpError(404, '邮件已发出，无法撤销');
     if (o.status === 'sending') throw httpError(409, '邮件正在发送，无法撤销');
-    repo.deleteOutbox(o.id);
+    // 条件删除：仅 scheduled，与调度器 claim 互斥，消灭「点了撤销仍发出」
+    if (!repo.deleteOutboxIfScheduled(id)) {
+      const again = repo.getOutbox(req.user.id, id);
+      if (!again) throw httpError(404, '邮件已发出，无法撤销');
+      if (again.status === 'sending') throw httpError(409, '邮件正在发送，无法撤销');
+      throw httpError(409, '无法撤销，请刷新发件箱');
+    }
     mailer.removeOutboxFiles(o.files_dir);
     res.json({ ok: true, payload: JSON.parse(o.payload) });
   })
@@ -895,7 +1169,8 @@ app.post(
     if (payload.draftUid && Number(payload.draftUid) !== result?.uid) {
       await imap.expungeMessages(mb, drafts.path, [Number(payload.draftUid)]).catch(() => {});
     }
-    sync.touch(mb.id, drafts.path);
+    sync.forceSync(mb.id, drafts.path).catch(() => {});
+    sync.touch(mb.id, drafts.path, 800);
     res.json({ ok: true, uid: result?.uid || null });
   })
 );
@@ -909,7 +1184,7 @@ app.post(
     const uid = Number(req.body.uid);
     if (drafts && uid) {
       await imap.expungeMessages(mb, drafts.path, [uid]);
-      db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?').run(mb.id, drafts.path, uid);
+      repo.deleteUids(mb.id, drafts.path, [uid]);
       sync.touch(mb.id, drafts.path);
     }
     res.json({ ok: true });
@@ -1318,11 +1593,20 @@ async function mailForAi(req, id) {
 
 const aiLimit = (req) => rateLimit('ai:' + req.user.id, 60, 10 * 60_000);
 
-app.post('/api/ai/summarize', auth, wrap(async (req, res) => (aiLimit(req), res.json(await ai.summarize(await mailForAi(req, req.body.id))))));
+app.post(
+  '/api/ai/summarize',
+  auth,
+  wrap(async (req, res) => {
+    requireAiCloud(req);
+    aiLimit(req);
+    res.json(await ai.summarize(await mailForAi(req, req.body.id)));
+  })
+);
 app.post(
   '/api/ai/translate',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
     const target = req.body.target || settings.translateTarget || '简体中文';
@@ -1348,15 +1632,25 @@ app.post(
   '/api/ai/reply',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
-    res.json(await ai.draftReply(await mailForAi(req, req.body.id), { ...req.body, glossary: settings.glossary }));
+    const row = messageOf(req, req.body.id);
+    const biz = aiContext.bizContextForRow(req.user.id, row, settings);
+    res.json(
+      await ai.draftReply(await mailForAi(req, req.body.id), {
+        ...req.body,
+        glossary: settings.glossary,
+        bizContext: aiContext.formatBizContext(biz),
+      })
+    );
   })
 );
 app.post(
   '/api/ai/compose',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
     res.json(await ai.compose({ ...req.body, glossary: settings.glossary }));
@@ -1366,6 +1660,7 @@ app.post(
   '/api/ai/rewrite',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     if (!String(req.body.text || '').trim()) throw httpError(400, '请先输入需要处理的内容');
     const settings = users.settingsOf(req.user.id);
@@ -1376,6 +1671,7 @@ app.post(
   '/api/ai/digest',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     const { messages } = repo.queryMessages(req.user.id, { mailboxId: req.body.mailboxId || 'all', box: 'unread', limit: 40 });
     if (!messages.length) return res.json({ overview: '所有收件箱都没有未读邮件，一切都处理完了 🎉', priorities: [], groups: [] });
@@ -1427,18 +1723,49 @@ app.post(
   '/api/ai/triage',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
+    const settings = users.settingsOf(req.user.id);
     const rows = repo.getMessagesForUser(req.user.id, (req.body.ids || []).slice(0, 25).map(Number));
     const todo = rows.filter((r) => !r.ai_note || req.body.force);
     if (todo.length) {
-      const result = await ai.triage(todo.map((r) => ({ uid: r.id, from: { name: r.from_name, address: r.from_addr }, subject: r.subject, snippet: r.snippet })));
+      const payload = todo.map((r) => {
+        const biz = aiContext.bizContextForRow(req.user.id, r, settings);
+        return {
+          uid: r.id,
+          from: { name: r.from_name, address: r.from_addr },
+          subject: r.subject,
+          snippet: r.snippet,
+          context: aiContext.triageContextLine(biz),
+          _biz: biz,
+        };
+      });
+      const result = await ai.triage(payload.map(({ _biz, ...m }) => m));
       const st = db.prepare('UPDATE messages SET ai_note = ? WHERE id = ?');
       for (const it of result.items || []) {
         const row = todo.find((r) => r.id === Number(it.uid));
-        if (row && it.note) st.run(JSON.stringify({ note: String(it.note).slice(0, 120), urgency: it.urgency || 'medium', at: Date.now() }), row.id);
+        const packed = payload.find((p) => p.uid === Number(it.uid));
+        if (row && it.note) {
+          const actions = aiContext.normalizeTriageActions(it.actions, packed?._biz || {});
+          st.run(
+            JSON.stringify({
+              note: String(it.note).slice(0, 120),
+              urgency: ['high', 'medium', 'low'].includes(it.urgency) ? it.urgency : 'medium',
+              actions,
+              at: Date.now(),
+              source: 'triage',
+            }),
+            row.id
+          );
+        }
       }
     }
-    const notes = repo.getMessagesForUser(req.user.id, rows.map((r) => r.id)).map((r) => [r.id, r.ai_note ? JSON.parse(r.ai_note) : null]);
+    const notes = repo
+      .getMessagesForUser(
+        req.user.id,
+        rows.map((r) => r.id)
+      )
+      .map((r) => [r.id, r.ai_note ? JSON.parse(r.ai_note) : null]);
     res.json({ notes: Object.fromEntries(notes) });
   })
 );
@@ -1460,6 +1787,37 @@ app.get('/api/events', auth, (req, res) => {
   });
 });
 
+app.get(
+  '/api/insights',
+  auth,
+  wrap(async (req, res) => {
+    res.json(analytics.teamInsights(req.user.id, { dayStart: req.query.dayStart }));
+  })
+);
+
+app.get('/api/push/vapid', auth, (_req, res) => res.json({ publicKey: push.publicKey() }));
+app.post(
+  '/api/push/subscribe',
+  auth,
+  wrap(async (req, res) => {
+    res.json(push.saveSubscription(req.user.id, req.body?.subscription || req.body, req.headers['user-agent']));
+  })
+);
+app.post(
+  '/api/push/unsubscribe',
+  auth,
+  wrap(async (req, res) => {
+    res.json(push.removeSubscription(req.user.id, req.body?.endpoint));
+  })
+);
+app.get(
+  '/api/push/status',
+  auth,
+  wrap(async (req, res) => {
+    res.json({ subscriptions: push.listForUser(req.user.id), publicKey: push.publicKey() });
+  })
+);
+
 app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在' }));
 
 // ---------- 前端静态资源 ----------
@@ -1473,6 +1831,7 @@ if (fs.existsSync(DIST)) {
     "font-src 'self' data: https:",
     "connect-src 'self'",
     "frame-src 'self' blob: data:",
+    "worker-src 'self'",
     "object-src 'none'",
     "form-action 'none'",
   ].join('; ');
@@ -1486,25 +1845,55 @@ if (fs.existsSync(DIST)) {
 }
 
 repo.backfillSignals();
+try {
+  repo.backfillFts();
+} catch (e) {
+  console.warn('[fts]', e.message);
+}
 mailer.startScheduler();
+flagRetry.startFlagRetryScheduler();
 sync.startAll();
 backup.startBackupScheduler();
 
 /** 客户邮件超过回复时限仍未处理时分阶段提醒（冷却后升级，最多 3 级） */
 function remindUser(u) {
   const settings = users.publicUser(u).settings;
-  if (!settings.remindOverdue || !isOnline(u.id) || !repo.listMailboxes(u.id).length) return;
+  if (!settings.remindOverdue || !repo.listMailboxes(u.id).length) return;
   try {
     const r = priority.overdueToRemind(u.id, settings);
-    if (r) emit(u.id, 'remind', r);
+    if (r) {
+      if (isOnline(u.id)) emit(u.id, 'remind', r);
+      if (settings.notify) {
+        push
+          .notifyUser(u.id, {
+            title: r.escalate ? '超时升级提醒' : '客户邮件待回复',
+            body: r.subject || `${r.count || ''} 封待处理`,
+            url: '/',
+            tag: 'zm-remind',
+          })
+          .catch(() => {});
+      }
+    }
   } catch (e) {
     console.error('[remind]', e.message);
   }
 }
-const remindOverdue = () => db.prepare('SELECT * FROM users').all().forEach(remindUser);
+const remindOverdue = () => {
+  db.prepare('SELECT * FROM users').all().forEach(remindUser);
+  try {
+    teamQueue.remindAdmins({ emit, push, isOnline });
+  } catch (e) {
+    console.error('[remind-queue]', e.message);
+  }
+};
 setTimeout(remindOverdue, 60_000).unref();
 setInterval(remindOverdue, 10 * 60_000).unref();
-const server = app.listen(PORT, () => console.log(`[zito-mail] 服务已启动 http://localhost:${PORT}`));
+const server = app.listen(PORT, BIND_HOST, () => {
+  console.log(`[zito-mail] 服务已启动 http://${BIND_HOST === '0.0.0.0' ? 'localhost' : BIND_HOST}:${PORT} (bind ${BIND_HOST})`);
+  try {
+    oauth.logStartupHints();
+  } catch (_) {}
+});
 
 function shutdown(signal) {
   console.log(`[zito-mail] 收到 ${signal}，正在关闭…`);

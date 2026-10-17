@@ -1,14 +1,24 @@
 import nodemailer from 'nodemailer';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { decrypt } from './security.js';
+import * as oauth from './oauth.js';
+import { assertSafeMailHost } from './net_guard.js';
 
-function transport(mb, password) {
+async function transport(mb, password) {
+  await assertSafeMailHost(mb.smtp_host, 'SMTP');
+  let auth;
+  if (mb.oauth_refresh_enc || mb.oauth_access_enc) {
+    const accessToken = await oauth.ensureAccessToken(mb);
+    auth = { type: 'OAuth2', user: mb.login_user || mb.email, accessToken };
+  } else {
+    auth = { user: mb.login_user || mb.email, pass: password ?? decrypt(mb.pass_enc) };
+  }
   return nodemailer.createTransport({
     host: mb.smtp_host,
     port: Number(mb.smtp_port),
     secure: !!mb.smtp_secure,
     requireTLS: !mb.smtp_secure,
-    auth: { user: mb.login_user || mb.email, pass: password ?? decrypt(mb.pass_enc) },
+    auth,
     connectionTimeout: 20_000,
     greetingTimeout: 20_000,
     socketTimeout: 90_000,
@@ -28,7 +38,7 @@ export function friendlySmtpError(e) {
 
 export async function verifySmtp(mb, password) {
   try {
-    await transport(mb, password).verify();
+    await (await transport(mb, password)).verify();
     return { ok: true };
   } catch (e) {
     return { ok: false, error: friendlySmtpError(e) };
@@ -60,7 +70,7 @@ export async function sendMail(mb, mail) {
   if (!all.length) throw new Error('请填写收件人');
   const raw = await buildRaw(mb, { ...mail, keepBcc: false });
   try {
-    await transport(mb).sendMail({ envelope: { from: mb.email, to: all }, raw });
+    await (await transport(mb)).sendMail({ envelope: { from: mb.email, to: all }, raw });
   } catch (e) {
     throw new Error(friendlySmtpError(e));
   }

@@ -235,9 +235,10 @@ export const TIERS = { vip: 'VIP', customer: '客户', new: '新联系人', coll
 
 export const dayStart = () => new Date(new Date().setHours(0, 0, 0, 0)).getTime();
 
-/** Focus 行「为何优先」：消费后端 reasons / signals / waiting，不改 API */
+/** Focus 行「为何进待办/等待」：优先后端 why，本地再拼 */
 export function whyPriority(m, variant = 'reply') {
   if (variant === 'reply' && m?.priority) {
+    if (m.priority.why) return m.priority.why;
     const p = m.priority;
     const parts = [...(p.reasons || [])];
     if (p.slaHours != null) parts.push(`时限 ${p.slaHours}h`);
@@ -246,14 +247,18 @@ export function whyPriority(m, variant = 'reply') {
     return [...new Set(parts.filter(Boolean))].slice(0, 5).join(' · ');
   }
   if (variant === 'follow' && m?.follow) {
+    if (m.follow.why) return m.follow.why;
     const f = m.follow;
     const parts = [];
+    if (f.due) parts.push('跟进日到期');
+    else if (f.nextFollowAt) parts.push('已设跟进日');
     if (f.tier === 'vip') parts.push('VIP');
     else if (f.tier === 'customer') parts.push('老客户');
     else if (f.tier === 'new') parts.push('新联系人');
     for (const s of f.signals || []) if (SIGNALS[s]) parts.push(SIGNALS[s]);
     if (f.days != null) parts.push(`${f.days} 天未回`);
-    return [...new Set(parts.filter(Boolean))].slice(0, 4).join(' · ');
+    parts.push('对方尚未回复');
+    return [...new Set(parts.filter(Boolean))].slice(0, 5).join(' · ');
   }
   return '';
 }

@@ -92,8 +92,9 @@ def deploy_app():
 
 
 def deploy_nginx():
+    upload(os.path.join(ROOT, 'deploy', 'nginx-zm-limit.conf'), '/etc/nginx/conf.d/zito-mail-limit.conf')
     upload(os.path.join(ROOT, 'deploy', 'nginx-zito-mail.conf'), '/etc/nginx/sites-available/zito-mail')
-    remote("sed -i 's/\\r$//' /etc/nginx/sites-available/zito-mail && "
+    remote("sed -i 's/\\r$//' /etc/nginx/conf.d/zito-mail-limit.conf /etc/nginx/sites-available/zito-mail && "
            "ln -sf /etc/nginx/sites-available/zito-mail /etc/nginx/sites-enabled/zito-mail && "
            "nginx -t && systemctl reload nginx")
 
