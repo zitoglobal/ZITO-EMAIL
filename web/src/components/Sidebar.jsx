@@ -5,6 +5,7 @@ import {
   Columns3,   Briefcase, BookOpen, Tag, Bookmark, MoreHorizontal, Pencil, Trash, ChevronDown, BarChart3, Users,
 } from 'lucide-react';
 import { avatarColor, folderDepth, folderLabel, initials, sortFolders } from '../utils.js';
+import { ICON_LG, ICON_MD, ICON_SM, Icon, ip } from '../uiIcons.jsx';
 import { BrandIcon } from './Brand.jsx';
 import { LAYOUT_MODES } from '../layout.js';
 
@@ -114,7 +115,7 @@ export default function Sidebar({
 
   const renderSmart = (s) => {
     const n = smartCount(s.box);
-    const Icon = s.icon;
+    const SmartIcon = s.icon;
     const v = { mailboxId: 'all', box: s.box };
     const active = isActive(v);
     const label = multi || s.box !== 'inbox' ? s.label : '收件箱';
@@ -154,7 +155,7 @@ export default function Sidebar({
         aria-label={label}
         aria-current={active ? 'page' : undefined}
       >
-        <Icon size={17} />
+        <SmartIcon {...ICON_LG} />
         <span className="folder-name">{label}</span>
         {overdue ? (
           <span
@@ -196,28 +197,28 @@ export default function Sidebar({
                 <small>{user.email}</small>
               </div>
               <div className="menu-sep" />
-              <button onClick={() => { setMenu(false); onSettings('mailboxes'); }}><Settings size={15} /> 设置</button>
-              <button onClick={onLogout} className="danger"><LogOut size={15} /> 退出登录</button>
+              <button onClick={() => { setMenu(false); onSettings('mailboxes'); }}><Icon as={Settings} {...ICON_MD} /> 设置</button>
+              <button onClick={onLogout} className="danger"><Icon as={LogOut} {...ICON_MD} /> 退出登录</button>
             </div>
           )}
         </div>
       </div>
 
       <button className="compose-btn" onClick={() => onCompose()} title="写邮件" aria-label="写邮件">
-        <PenSquare size={17} strokeWidth={1.75} />{!iconRail && ' 写邮件'}
+        <Icon as={PenSquare} {...ICON_LG} />{!iconRail && ' 写邮件'}
       </button>
 
       {/* Search: secondary ghost; hide in icon-rail (⌘K still works) */}
       {!iconRail && (
         <button className="cmd-btn" onClick={onCommand} title="搜索与命令" aria-label="搜索与命令">
-          <Search size={14} strokeWidth={1.75} /> 搜索与命令 <kbd>⌘K</kbd>
+          <Icon as={Search} {...ICON_SM} /> 搜索与命令 <kbd>⌘K</kbd>
         </button>
       )}
 
       {/* AI digest: link style, cyan sparkle — not in rail */}
       {!iconRail && (
         <button className="digest-link" onClick={onDigest} title="AI 今日简报" aria-label="AI 今日简报">
-          <Sparkles size={14} strokeWidth={1.6} /> AI 今日简报
+          <Icon as={Sparkles} {...ip(14, 1.6)} /> AI 今日简报
         </button>
       )}
 
@@ -243,7 +244,7 @@ export default function Sidebar({
               onClick={() => toggle('mailbox-more')}
               aria-expanded={moreOpen}
             >
-              {moreOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+              {moreOpen ? <Icon as={ChevronDown} {...ICON_MD} /> : <Icon as={ChevronRight} {...ICON_MD} />}
               <span className="folder-name">更多</span>
             </button>
             {moreOpen && moreItems.map(renderSmart)}
@@ -257,11 +258,11 @@ export default function Sidebar({
                   if (onCreateLabel) onCreateLabel();
                   else onSettings?.('labels');
                 }}
-              ><Plus size={14} /></button>
+              ><Icon as={Plus} {...ICON_SM} /></button>
             </div>
             {!labels.length && (
               <button className="folder sub label-empty-hint" onClick={() => onSettings?.('labels')} title="管理标签">
-                <Tag size={15} />
+                <Icon as={Tag} {...ICON_MD} />
                 <span className="folder-name muted-text">添加标签整理邮件</span>
               </button>
             )}
@@ -286,7 +287,7 @@ export default function Sidebar({
             })}
             {labels.length > 0 && (
               <button type="button" className="folder sub add-folder" onClick={() => onSettings?.('labels')}>
-                <Tag size={14} /> <span className="folder-name">管理标签</span>
+                <Icon as={Tag} {...ICON_SM} /> <span className="folder-name">管理标签</span>
               </button>
             )}
 
@@ -296,11 +297,11 @@ export default function Sidebar({
                 className="mini-btn"
                 title="新建智能文件夹"
                 onClick={() => onCreateSavedSearch?.()}
-              ><Plus size={14} /></button>
+              ><Icon as={Plus} {...ICON_SM} /></button>
             </div>
             {!savedSearches.length && (
               <button className="folder sub label-empty-hint" onClick={() => onCreateSavedSearch?.()} title="保存常用搜索">
-                <Bookmark size={15} />
+                <Icon as={Bookmark} {...ICON_MD} />
                 <span className="folder-name muted-text">保存常用搜索，一键回到「有附件」「某客户」</span>
               </button>
             )}
@@ -317,7 +318,7 @@ export default function Sidebar({
                     aria-label={`智能文件夹 ${s.name}`}
                     aria-current={active ? 'page' : undefined}
                   >
-                    <Bookmark size={15} />
+                    <Icon as={Bookmark} {...ICON_MD} />
                     <span className="folder-name">{s.name}</span>
                   </button>
                   <div className="folder-more-wrap">
@@ -328,18 +329,18 @@ export default function Sidebar({
                       aria-label={`管理 ${s.name}`}
                       onClick={(e) => { e.stopPropagation(); setSsMenu(ssMenu === s.id ? null : s.id); }}
                     >
-                      <MoreHorizontal size={14} />
+                      <Icon as={MoreHorizontal} {...ICON_SM} />
                     </button>
                     {ssMenu === s.id && (
                       <div className="account-menu folder-ss-menu" onMouseLeave={() => setSsMenu(null)}>
                         <button type="button" onClick={() => { setSsMenu(null); onEditSavedSearch?.(s); }}>
-                          <Pencil size={14} /> 重命名 / 编辑查询
+                          <Icon as={Pencil} {...ICON_SM} /> 重命名 / 编辑查询
                         </button>
                         <button type="button" onClick={() => { setSsMenu(null); onOpenSavedSearch?.(s); }}>
-                          <Search size={14} /> 打开并搜索
+                          <Icon as={Search} {...ICON_SM} /> 打开并搜索
                         </button>
                         <button type="button" className="danger" onClick={() => { setSsMenu(null); onDeleteSavedSearch?.(s); }}>
-                          <Trash size={14} /> 删除
+                          <Icon as={Trash} {...ICON_SM} /> 删除
                         </button>
                       </div>
                     )}
@@ -350,7 +351,7 @@ export default function Sidebar({
 
             <div className="folder-group">
               <span>邮箱账号</span>
-              <button className="mini-btn" title="绑定邮箱" onClick={onAddMailbox}><Plus size={14} /></button>
+              <button className="mini-btn" title="绑定邮箱" onClick={onAddMailbox}><Icon as={Plus} {...ICON_SM} /></button>
             </div>
 
             {mailboxes.map((mb) => {
@@ -360,14 +361,14 @@ export default function Sidebar({
               return (
                 <div key={mb.id} className="mb-group">
                   <button type="button" className="mb-head" onClick={() => toggle(mb.id)} title={mb.email}>
-                    <ChevronRight size={14} className={'chev' + (isOpen ? ' open' : '')} />
+                    <Icon as={ChevronRight} {...ICON_SM} className={'chev' + (isOpen ? ' open' : '')} />
                     <span className="mb-dot" style={{ background: mb.color }} />
                     <span className="folder-name">
                       <b>{mb.name || mb.email}</b>
                       <small>{mb.email}</small>
                     </span>
-                    {mb.status === 'error' && <AlertCircle size={14} className="mb-err" title={mb.lastError} />}
-                    {(mb.status === 'syncing' || mb.status === 'new') && <Loader2 size={13} className="spin muted-icon" />}
+                    {mb.status === 'error' && <Icon as={AlertCircle} {...ICON_SM} className="mb-err" title={mb.lastError} />}
+                    {(mb.status === 'syncing' || mb.status === 'new') && <Icon as={Loader2} {...ip(13)} className="spin muted-icon" />}
                     {!isOpen && inbox?.unseen > 0 && <span className="count">{inbox.unseen}</span>}
                   </button>
                   {mb.status === 'error' && isOpen && (
@@ -377,7 +378,7 @@ export default function Sidebar({
                   )}
                   {isOpen &&
                     list.map((f) => {
-                      const Icon = ICONS[f.specialUse] || Folder;
+                      const FolderIcon = ICONS[f.specialUse] || Folder;
                       const v = { mailboxId: mb.id, box: 'folder', folder: f.path };
                       const active = isActive(v);
                       const showCount = f.unseen > 0 && !['\\Sent', '\\Trash', '\\Drafts', '\\Junk', '\\All'].includes(f.specialUse);
@@ -391,7 +392,7 @@ export default function Sidebar({
                           title={f.path}
                           aria-current={active ? 'page' : undefined}
                         >
-                          <Icon size={15} />
+                          <FolderIcon {...ICON_MD} />
                           <span className="folder-name">{folderLabel(f)}</span>
                           {showCount && <span className="count">{f.unseen > 999 ? '999+' : f.unseen}</span>}
                           {f.specialUse === '\\Drafts' && f.total > 0 && <span className="count muted">{f.total}</span>}
@@ -400,7 +401,7 @@ export default function Sidebar({
                     })}
                   {isOpen && (
                     <button type="button" className="folder sub add-folder" style={{ paddingLeft: 30 }} onClick={() => onNewFolder(mb)}>
-                      <FolderPlus size={14} /> <span className="folder-name">新建文件夹</span>
+                      <Icon as={FolderPlus} {...ICON_SM} /> <span className="folder-name">新建文件夹</span>
                     </button>
                   )}
                 </div>
@@ -413,11 +414,11 @@ export default function Sidebar({
       {onLayoutMode && (
         <div className="layout-mode-switch" role="group" aria-label="布局模式">
           {!iconRail && (
-            <div className="layout-mode-label"><LayoutPanelLeft size={13} /> 布局</div>
+            <div className="layout-mode-label"><Icon as={LayoutPanelLeft} {...ip(13)} /> 布局</div>
           )}
           <div className="layout-mode-btns">
             {LAYOUT_MODES.map((m) => {
-              const Icon = MODE_ICONS[m.id] || Columns3;
+              const ModeIcon = MODE_ICONS[m.id] || Columns3;
               return (
                 <button
                   key={m.id}
@@ -428,7 +429,7 @@ export default function Sidebar({
                   aria-label={m.label}
                   onClick={() => onLayoutMode(m.id)}
                 >
-                  <Icon size={iconRail ? 16 : 13} strokeWidth={2} />
+                  <ModeIcon {...ip(iconRail ? 16 : 13)} />
                   {!iconRail && <span>{m.label}</span>}
                 </button>
               );
@@ -444,7 +445,7 @@ export default function Sidebar({
       )}
 
       <button type="button" className="folder settings-link" onClick={() => onSettings('preferences')} title="设置" aria-label="设置">
-        <Settings size={17} /> <span className="folder-name">设置</span>
+        <Icon as={Settings} {...ICON_LG} /> <span className="folder-name">设置</span>
       </button>
     </aside>
   );

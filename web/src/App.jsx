@@ -1,26 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, Menu } from 'lucide-react';
 import { api, qs } from './api.js';
 import Auth, { HeroBrand } from './components/Auth.jsx';
 import { BrandIcon } from './components/Brand.jsx';
-import MailboxForm from './components/MailboxForm.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import MailList from './components/MailList.jsx';
 import Reader from './components/Reader.jsx';
 import Composer from './components/Composer.jsx';
-import Outbox from './components/Outbox.jsx';
-import Digest from './components/Digest.jsx';
-import Settings from './components/Settings.jsx';
 import Focus from './components/Focus.jsx';
 import Waiting from './components/Waiting.jsx';
-import AdminEmpty from './components/AdminEmpty.jsx';
-import Deals from './components/Deals.jsx';
-import Insights from './components/Insights.jsx';
-import TeamQueue from './components/TeamQueue.jsx';
-import CustomerPanel from './components/CustomerPanel.jsx';
 import ColumnSplitter from './components/ColumnSplitter.jsx';
-import Palette from './components/Palette.jsx';
-import SaveSearchModal from './components/SaveSearchModal.jsx';
 import { SMART_VIEWS, dayStart, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
 import { buildComposeState, signatureHtml, toForm } from './compose.js';
 import {
@@ -34,6 +23,34 @@ import {
 import { ACTION_TEXT, DEFAULT_VIEW, followUpAiForStage, followUpBodyForStage, PAGE, REMOVING, SHORTCUTS, UNDO_OF } from './appConstants.js';
 import { useRealtimeMail } from './hooks/useRealtimeMail.js';
 import { useAppBoot } from './hooks/useAppBoot.js';
+import { ICON_LG, ip } from './uiIcons.jsx';
+
+/** 低频重页懒加载，压主包体积 */
+const Settings = lazy(() => import('./components/Settings.jsx'));
+const Digest = lazy(() => import('./components/Digest.jsx'));
+const Outbox = lazy(() => import('./components/Outbox.jsx'));
+const Deals = lazy(() => import('./components/Deals.jsx'));
+const Insights = lazy(() => import('./components/Insights.jsx'));
+const TeamQueue = lazy(() => import('./components/TeamQueue.jsx'));
+const CustomerPanel = lazy(() => import('./components/CustomerPanel.jsx'));
+const Palette = lazy(() => import('./components/Palette.jsx'));
+const SaveSearchModal = lazy(() => import('./components/SaveSearchModal.jsx'));
+const MailboxForm = lazy(() => import('./components/MailboxForm.jsx'));
+const AdminEmpty = lazy(() => import('./components/AdminEmpty.jsx'));
+
+function LazyPane({ children, label = '加载中' }) {
+  return (
+    <Suspense
+      fallback={(
+        <div className="reader-loading" role="status" aria-live="polite">
+          <Loader2 {...ICON_LG} className="spin" /> {label}…
+        </div>
+      )}
+    >
+      {children}
+    </Suspense>
+  );
+}
 
 function mergeLocalLabels(current = [], add = [], remove = [], allLabels = []) {
   const byId = new Map((current || []).map((l) => [l.id, l]));
@@ -1193,7 +1210,9 @@ export default function App() {
           <button className="hero-logout" onClick={logout}><LogOut size={14} /> 退出登录</button>
         </div>
         <div className="login-side">
-          <MailboxForm title="绑定你的邮箱" onDone={onMailboxBound} />
+          <LazyPane label="加载绑定表单">
+            <MailboxForm title="绑定你的邮箱" onDone={onMailboxBound} />
+          </LazyPane>
         </div>
       </div>
     );
@@ -1344,21 +1363,25 @@ export default function App() {
       ) : null}
 
       {user.role === 'admin' && !mailboxes.length && ['today', 'waiting', 'inbox', 'unread', 'flagged', 'sent', 'deals', 'team', 'insights'].includes(view.box) ? (
-        <AdminEmpty
-          user={user}
-          onAddMailbox={() => setModal({ type: 'add' })}
-          onOpenTeam={() => setModal({ type: 'settings', tab: 'team' })}
-          onOpenSettings={() => setModal({ type: 'settings', tab: 'preferences' })}
-        />
+        <LazyPane label="加载管理引导">
+          <AdminEmpty
+            user={user}
+            onAddMailbox={() => setModal({ type: 'add' })}
+            onOpenTeam={() => setModal({ type: 'settings', tab: 'team' })}
+            onOpenSettings={() => setModal({ type: 'settings', tab: 'preferences' })}
+          />
+        </LazyPane>
       ) : view.box === 'scheduled' ? (
-        <Outbox
-          mailboxMap={mailboxMap}
-          onMenu={() => setSidebarOpen(true)}
-          onEdit={editOutbox}
-          notify={notify}
-          version={outboxVersion}
-          onChanged={loadState}
-        />
+        <LazyPane label="加载定时发送">
+          <Outbox
+            mailboxMap={mailboxMap}
+            onMenu={() => setSidebarOpen(true)}
+            onEdit={editOutbox}
+            notify={notify}
+            version={outboxVersion}
+            onChanged={loadState}
+          />
+        </LazyPane>
       ) : view.box === 'today' ? (
         <Focus
           user={user}
@@ -1413,41 +1436,47 @@ export default function App() {
           onGoToday={() => setView({ mailboxId: 'all', box: 'today' })}
         />
       ) : view.box === 'team' ? (
-        <TeamQueue
-          onMenu={() => setSidebarOpen(true)}
-          notify={notify}
-          isAdmin={user.role === 'admin'}
-          onOpenMessage={(id) => openMessage(id, { box: 'inbox' })}
-          onGoToday={() => setView({ mailboxId: 'all', box: 'today' })}
-          onOpenInToday={(id) => openMessage(id, { box: 'today' })}
-          onComposeOutreach={(hint) => openCompose('new', null, hint || {})}
-        />
+        <LazyPane label="加载团队公海">
+          <TeamQueue
+            onMenu={() => setSidebarOpen(true)}
+            notify={notify}
+            isAdmin={user.role === 'admin'}
+            onOpenMessage={(id) => openMessage(id, { box: 'inbox' })}
+            onGoToday={() => setView({ mailboxId: 'all', box: 'today' })}
+            onOpenInToday={(id) => openMessage(id, { box: 'today' })}
+            onComposeOutreach={(hint) => openCompose('new', null, hint || {})}
+          />
+        </LazyPane>
       ) : view.box === 'deals' ? (
-        <Deals
-          key={dealsVersion}
-          onMenu={() => setSidebarOpen(true)}
-          notify={notify}
-          onOpenDeal={(d) => {
-            if (d.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
-          }}
-          onOpenDealMail={(id, d) => {
-            openMessage(id, { box: 'inbox' });
-            if (d?.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
-          }}
-          onComposeOutreach={(hint) => openCompose('new', null, hint || {})}
-        />
+        <LazyPane label="加载我的客户">
+          <Deals
+            key={dealsVersion}
+            onMenu={() => setSidebarOpen(true)}
+            notify={notify}
+            onOpenDeal={(d) => {
+              if (d.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
+            }}
+            onOpenDealMail={(id, d) => {
+              openMessage(id, { box: 'inbox' });
+              if (d?.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
+            }}
+            onComposeOutreach={(hint) => openCompose('new', null, hint || {})}
+          />
+        </LazyPane>
       ) : view.box === 'insights' ? (
-        <Insights
-          onMenu={() => setSidebarOpen(true)}
-          isAdmin={user.role === 'admin'}
-          onGo={(box, tab) => {
-            if (box === 'waiting' && tab) setWaitingTab(tab);
-            setView({ mailboxId: 'all', box: box || 'today' });
-            setSidebarOpen(false);
-          }}
-          onOpenMessage={(id) => openMessage(id, { box: 'today' })}
-          onOpenSettings={(tab) => setModal({ type: 'settings', tab: tab || 'mailboxes' })}
-        />
+        <LazyPane label="加载销售洞察">
+          <Insights
+            onMenu={() => setSidebarOpen(true)}
+            isAdmin={user.role === 'admin'}
+            onGo={(box, tab) => {
+              if (box === 'waiting' && tab) setWaitingTab(tab);
+              setView({ mailboxId: 'all', box: box || 'today' });
+              setSidebarOpen(false);
+            }}
+            onOpenMessage={(id) => openMessage(id, { box: 'today' })}
+            onOpenSettings={(tab) => setModal({ type: 'settings', tab: tab || 'mailboxes' })}
+          />
+        </LazyPane>
       ) : (
         <MailList
           title={title}
@@ -1553,16 +1582,18 @@ export default function App() {
 
       {showCustomerRail && (
         <aside className="customer-rail" aria-label="客户栏">
-          <CustomerPanel
-            mode="rail"
-            address={selectedId ? (customerCtx?.address || currentMsg?.from?.address || selectedItem?.from?.address) : null}
-            sender={selectedId ? (customerCtx?.sender || (currentMsg?.sender ? { ...currentMsg.sender, address: currentMsg.from?.address } : null)) : null}
-            slaHours={selectedId ? (customerCtx?.slaHours ?? selectedItem?.priority?.slaHours) : null}
-            listItem={selectedId ? selectedItem : null}
-            onRule={setCustomerRule}
-            onOpenThread={(mid) => setSelectedId(mid)}
-            onOpenContacts={() => setModal({ type: 'settings', tab: 'contacts' })}
-          />
+          <LazyPane label="加载客户栏">
+            <CustomerPanel
+              mode="rail"
+              address={selectedId ? (customerCtx?.address || currentMsg?.from?.address || selectedItem?.from?.address) : null}
+              sender={selectedId ? (customerCtx?.sender || (currentMsg?.sender ? { ...currentMsg.sender, address: currentMsg.from?.address } : null)) : null}
+              slaHours={selectedId ? (customerCtx?.slaHours ?? selectedItem?.priority?.slaHours) : null}
+              listItem={selectedId ? selectedItem : null}
+              onRule={setCustomerRule}
+              onOpenThread={(mid) => setSelectedId(mid)}
+              onOpenContacts={() => setModal({ type: 'settings', tab: 'contacts' })}
+            />
+          </LazyPane>
         </aside>
       )}
 
@@ -1570,17 +1601,19 @@ export default function App() {
         <>
           <div className="customer-drawer-mask" onClick={() => setCustomerOpen(false)} />
           <div className="customer-drawer" role="dialog" aria-modal="true" aria-label="客户">
-            <CustomerPanel
-              mode="drawer"
-              address={customerCtx?.address || currentMsg?.from?.address}
-              sender={customerCtx?.sender || (currentMsg?.sender ? { ...currentMsg.sender, address: currentMsg.from?.address } : null)}
-              slaHours={customerCtx?.slaHours ?? selectedItem?.priority?.slaHours}
-              listItem={selectedItem}
-              onRule={setCustomerRule}
-              onOpenThread={(mid) => { setCustomerOpen(false); setSelectedId(mid); }}
-              onClose={() => setCustomerOpen(false)}
-              onOpenContacts={() => { setCustomerOpen(false); setModal({ type: 'settings', tab: 'contacts' }); }}
-            />
+            <LazyPane label="加载客户">
+              <CustomerPanel
+                mode="drawer"
+                address={customerCtx?.address || currentMsg?.from?.address}
+                sender={customerCtx?.sender || (currentMsg?.sender ? { ...currentMsg.sender, address: currentMsg.from?.address } : null)}
+                slaHours={customerCtx?.slaHours ?? selectedItem?.priority?.slaHours}
+                listItem={selectedItem}
+                onRule={setCustomerRule}
+                onOpenThread={(mid) => { setCustomerOpen(false); setSelectedId(mid); }}
+                onClose={() => setCustomerOpen(false)}
+                onOpenContacts={() => { setCustomerOpen(false); setModal({ type: 'settings', tab: 'contacts' }); }}
+              />
+            </LazyPane>
           </div>
         </>
       )}
@@ -1605,39 +1638,45 @@ export default function App() {
       </div>
 
       {modal?.type === 'digest' && (
-        <Digest
-          aiEnabled={ai}
-          mailboxMap={mailboxMap}
-          onClose={() => setModal(null)}
-          onOpen={(m) => {
-            setModal(null);
-            setSelectedId(m.id);
-          }}
-        />
+        <LazyPane label="加载简报">
+          <Digest
+            aiEnabled={ai}
+            mailboxMap={mailboxMap}
+            onClose={() => setModal(null)}
+            onOpen={(m) => {
+              setModal(null);
+              setSelectedId(m.id);
+            }}
+          />
+        </LazyPane>
       )}
       {modal?.type === 'settings' && (
-        <Settings
-          user={user}
-          mailboxes={mailboxes}
-          tab={modal.tab}
-          focusMailbox={modal.mb}
-          onClose={() => setModal(null)}
-          notify={notify}
-          onUserChange={setUser}
-          onSettings={saveSettings}
-          onMailboxesChanged={loadState}
-          onAddMailbox={() => setModal({ type: 'add' })}
-          onLogout={logout}
-          aiEnabled={ai}
-          aiMeta={aiMeta}
-          onAiCloudChange={(ok) => setAi(!!(aiMeta?.configured && ok))}
-          onLabelsChanged={(list) => setLabels(list || [])}
-        />
+        <LazyPane label="加载设置">
+          <Settings
+            user={user}
+            mailboxes={mailboxes}
+            tab={modal.tab}
+            focusMailbox={modal.mb}
+            onClose={() => setModal(null)}
+            notify={notify}
+            onUserChange={setUser}
+            onSettings={saveSettings}
+            onMailboxesChanged={loadState}
+            onAddMailbox={() => setModal({ type: 'add' })}
+            onLogout={logout}
+            aiEnabled={ai}
+            aiMeta={aiMeta}
+            onAiCloudChange={(ok) => setAi(!!(aiMeta?.configured && ok))}
+            onLabelsChanged={(list) => setLabels(list || [])}
+          />
+        </LazyPane>
       )}
       {modal?.type === 'add' && (
         <div className="modal-mask" onClick={() => setModal(null)}>
           <div onClick={(e) => e.stopPropagation()}>
-            <MailboxForm onDone={onMailboxBound} onCancel={() => setModal(null)} />
+            <LazyPane label="加载绑定表单">
+              <MailboxForm onDone={onMailboxBound} onCancel={() => setModal(null)} />
+            </LazyPane>
           </div>
         </div>
       )}
@@ -1658,34 +1697,40 @@ export default function App() {
       )}
 
       {saveSearchModal && (
-        <SaveSearchModal
-          open={!!saveSearchModal}
-          mode={saveSearchModal.mode}
-          initialName={saveSearchModal.name}
-          initialQuery={saveSearchModal.query}
-          presets={searchPresets.length ? searchPresets : [
-            { name: '有附件', query: 'has:attachment' },
-            { name: 'VIP 未读', query: 'is:vip is:unread' },
-            { name: '未读询盘', query: 'is:unread subject:询价' },
-            { name: '待开票标签', query: 'label:待开票' },
-          ]}
-          onClose={() => setSaveSearchModal(null)}
-          onSubmit={submitSaveSearch}
-        />
+        <LazyPane label="加载智能文件夹">
+          <SaveSearchModal
+            open={!!saveSearchModal}
+            mode={saveSearchModal.mode}
+            initialName={saveSearchModal.name}
+            initialQuery={saveSearchModal.query}
+            presets={searchPresets.length ? searchPresets : [
+              { name: '有附件', query: 'has:attachment' },
+              { name: 'VIP 未读', query: 'is:vip is:unread' },
+              { name: '未读询盘', query: 'is:unread subject:询价' },
+              { name: '待开票标签', query: 'label:待开票' },
+            ]}
+            onClose={() => setSaveSearchModal(null)}
+            onSubmit={submitSaveSearch}
+          />
+        </LazyPane>
       )}
 
-      <Palette
-        open={palette}
-        messages={allItems}
-        hasSelection={!!selectedId}
-        onClose={() => setPalette(false)}
-        onOpen={(m) => { setPalette(false); selectMessage(m); }}
-        onGo={(box) => { setPalette(false); setView({ mailboxId: 'all', box }); }}
-        onCompose={() => { setPalette(false); openCompose(); }}
-        onReply={() => { setPalette(false); currentMsg && openCompose('reply', currentMsg); }}
-        onDone={() => { setPalette(false); selectedId && doAction([selectedId], selectedItem?._section === 'follow' ? 'nofollow' : 'done'); }}
-        onSnooze={() => { setPalette(false); selectedId && doAction([selectedId], 'snooze', { until: snoozePresets()[1].at }); }}
-      />
+      {palette && (
+        <LazyPane label="加载命令面板">
+          <Palette
+            open={palette}
+            messages={allItems}
+            hasSelection={!!selectedId}
+            onClose={() => setPalette(false)}
+            onOpen={(m) => { setPalette(false); selectMessage(m); }}
+            onGo={(box) => { setPalette(false); setView({ mailboxId: 'all', box }); }}
+            onCompose={() => { setPalette(false); openCompose(); }}
+            onReply={() => { setPalette(false); currentMsg && openCompose('reply', currentMsg); }}
+            onDone={() => { setPalette(false); selectedId && doAction([selectedId], selectedItem?._section === 'follow' ? 'nofollow' : 'done'); }}
+            onSnooze={() => { setPalette(false); selectedId && doAction([selectedId], 'snooze', { until: snoozePresets()[1].at }); }}
+          />
+        </LazyPane>
+      )}
 
       <nav className="zm-mob-nav" aria-label="ZITO 智能邮箱导航">
         <button
@@ -1695,7 +1740,7 @@ export default function App() {
           aria-label="工作台"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'today' }); setSidebarOpen(false); }}
         >
-          <ListTodo size={20} strokeWidth={1.75} aria-hidden />
+          <ListTodo {...ip(20)} aria-hidden />
           <span>工作台</span>
         </button>
         <button
@@ -1705,7 +1750,7 @@ export default function App() {
           aria-label="邮箱"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'inbox' }); setSidebarOpen(false); }}
         >
-          <Inbox size={20} strokeWidth={1.75} aria-hidden />
+          <Inbox {...ip(20)} aria-hidden />
           <span>邮箱</span>
         </button>
         <button
@@ -1715,7 +1760,7 @@ export default function App() {
           aria-expanded={sidebarOpen}
           onClick={() => setSidebarOpen((o) => !o)}
         >
-          <Menu size={20} strokeWidth={1.75} aria-hidden />
+          <Menu {...ip(20)} aria-hidden />
           <span>更多</span>
         </button>
       </nav>

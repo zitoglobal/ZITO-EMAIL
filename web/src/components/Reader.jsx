@@ -16,6 +16,7 @@ import { BrandSymbol } from './Brand.jsx';
 import TimeMenu from './TimeMenu.jsx';
 import LabelMenu from './LabelMenu.jsx';
 import DealBar from './DealBar.jsx';
+import { ICON, Icon } from '../uiIcons.jsx';
 
 const URGENCY = { high: ['紧急', 'high'], medium: ['一般', 'medium'], low: ['不急', 'low'] };
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
@@ -681,8 +682,8 @@ export default function Reader({
       <div className="reader-toolbar">
         <button type="button" className="icon-btn mobile-only" onClick={onBack} aria-label="返回列表"><ArrowLeft size={18} /></button>
         <div className="tb-group primary">
-          <button type="button" className="tb" onClick={() => onCompose('reply', msg)} disabled={!msg} title="回复 (R)" aria-label="回复"><Reply size={16} strokeWidth={1.75} /><span>回复</span></button>
-          <button type="button" className="tb" onClick={() => onCompose('replyAll', msg)} disabled={!msg} title="全部回复 (A)" aria-label="全部回复"><ReplyAll size={16} strokeWidth={1.75} /><span>全部回复</span></button>
+          <button type="button" className="tb" onClick={() => onCompose('reply', msg)} disabled={!msg} title="回复 (R)" aria-label="回复"><Icon as={Reply} {...ICON} /><span>回复</span></button>
+          <button type="button" className="tb" onClick={() => onCompose('replyAll', msg)} disabled={!msg} title="全部回复 (A)" aria-label="全部回复"><Icon as={ReplyAll} {...ICON} /><span>全部回复</span></button>
           <button type="button" className="tb" onClick={() => onCompose('forward', msg)} disabled={!msg} title="转发 (F)" aria-label="转发"><Forward size={16} /><span>转发</span></button>
         </div>
         <div className="tb-group">

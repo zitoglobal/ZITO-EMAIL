@@ -8,6 +8,7 @@ import {
   fileToInlineDataUrl, formatSize, htmlToText, insertHtmlAtCursor, relativeTime, sanitizeHtml, schedulePresets, textToHtml,
 } from '../utils.js';
 import { signatureHtml, signaturePlain, toPayload } from '../compose.js';
+import { ICON_MD, Icon } from '../uiIcons.jsx';
 import TimeMenu from './TimeMenu.jsx';
 
 const TONES = [
@@ -552,7 +553,7 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
       <div className="c-toolbar">
         <div className="send-group">
           <button className="btn-primary send" onClick={() => send()} title="发送 (Ctrl+Enter)">
-            <Send size={15} strokeWidth={1.75} /> 发送
+            <Icon as={Send} {...ICON_MD} /> 发送
           </button>
           <div className="move-wrap">
             <button className="btn-primary send-more" onClick={() => setMenu(menu === 'schedule' ? null : 'schedule')} title="定时发送">
@@ -570,13 +571,13 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
           </div>
         </div>
         <div className="fmt" role="toolbar" aria-label="正文格式">
-          <button type="button" onClick={() => exec('bold')} title="加粗"><Bold size={15} strokeWidth={1.75} /></button>
-          <button type="button" onClick={() => exec('italic')} title="斜体"><Italic size={15} strokeWidth={1.75} /></button>
-          <button type="button" onClick={() => exec('underline')} title="下划线"><Underline size={15} strokeWidth={1.75} /></button>
-          <button type="button" onClick={() => exec('strikeThrough')} title="删除线"><Strikethrough size={15} strokeWidth={1.75} /></button>
+          <button type="button" onClick={() => exec('bold')} title="加粗"><Icon as={Bold} {...ICON_MD} /></button>
+          <button type="button" onClick={() => exec('italic')} title="斜体"><Icon as={Italic} {...ICON_MD} /></button>
+          <button type="button" onClick={() => exec('underline')} title="下划线"><Icon as={Underline} {...ICON_MD} /></button>
+          <button type="button" onClick={() => exec('strikeThrough')} title="删除线"><Icon as={Strikethrough} {...ICON_MD} /></button>
           <span className="fmt-sep" aria-hidden />
-          <button type="button" onClick={() => exec('insertUnorderedList')} title="项目符号"><List size={15} strokeWidth={1.75} /></button>
-          <button type="button" onClick={() => exec('insertOrderedList')} title="编号"><ListOrdered size={15} strokeWidth={1.75} /></button>
+          <button type="button" onClick={() => exec('insertUnorderedList')} title="项目符号"><Icon as={List} {...ICON_MD} /></button>
+          <button type="button" onClick={() => exec('insertOrderedList')} title="编号"><Icon as={ListOrdered} {...ICON_MD} /></button>
           <button
             type="button"
             onClick={() => {
@@ -585,9 +586,9 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
             }}
             title="插入链接"
           >
-            <Link2 size={15} strokeWidth={1.75} />
+            <Icon as={Link2} {...ICON_MD} />
           </button>
-          <button type="button" onClick={() => exec('removeFormat')} title="清除格式"><Eraser size={15} strokeWidth={1.75} /></button>
+          <button type="button" onClick={() => exec('removeFormat')} title="清除格式"><Icon as={Eraser} {...ICON_MD} /></button>
           <span className="fmt-sep" aria-hidden />
           <button
             type="button"
@@ -595,9 +596,9 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
             title="插入正文图片（非附件）"
             disabled={imgBusy}
           >
-            {imgBusy ? <Loader2 size={15} className="spin" /> : <Image size={15} strokeWidth={1.75} />}
+            {imgBusy ? <Icon as={Loader2} {...ICON_MD} className="spin" /> : <Icon as={Image} {...ICON_MD} />}
           </button>
-          <button type="button" onClick={() => fileInput.current.click()} title="添加附件"><Paperclip size={15} strokeWidth={1.75} /></button>
+          <button type="button" onClick={() => fileInput.current.click()} title="添加附件"><Icon as={Paperclip} {...ICON_MD} /></button>
           <input
             ref={inlineImgInput}
             type="file"
