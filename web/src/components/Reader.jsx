@@ -312,6 +312,7 @@ export default function Reader({
   const [intel, setIntel] = useState(null); // 'summary' | 'translate' | null
   const [translateLayout, setTranslateLayout] = useState(() => localStorage.getItem('zm_translate_layout') || 'split');
   const [focusExplain, setFocusExplain] = useState(null);
+  const [whyHitsOpen, setWhyHitsOpen] = useState(false);
   const [viewers, setViewers] = useState([]);
   const alive = useRef(0);
   const scroller = useRef();
@@ -354,18 +355,20 @@ export default function Reader({
     setPinning(false);
     setIntel(null);
     setFocusExplain(null);
+    setWhyHitsOpen(false);
     setViewers([]);
     setExpanded(new Set([id]));
     scroller.current?.scrollTo(0, 0);
 
     loadDetail(id, token, { markSeen: true });
 
-    // 读信验真：已在今日待办/等待则用列表 why；否则问后端为何未进
+    // 读信验真：已在今日待办/等待则用列表 why/hits；否则问后端为何未进
     if (listItem?._section === 'reply' || listItem?._section === 'follow') {
       setFocusExplain({
         inFocus: true,
         section: listItem._section,
         why: listItem.priority?.why || listItem.follow?.why || '',
+        hits: listItem.priority?.hits || listItem.follow?.hits || [],
       });
     } else {
       api('/focus/explain' + qs({ id }))
@@ -787,7 +790,21 @@ export default function Reader({
                       [...(listItem.priority.reasons || []), listItem.priority.slaHours != null ? `时限 ${listItem.priority.slaHours}h` : '']
                         .filter(Boolean)
                         .join(' · ')}
+                    {(listItem.priority.hits || []).filter((h) => h.code !== 'conv').length > 0 && (
+                      <button type="button" className="why-hit-toggle" onClick={() => setWhyHitsOpen((o) => !o)}>
+                        {whyHitsOpen ? '收起明细' : '规则明细'}
+                      </button>
+                    )}
                   </small>
+                  {whyHitsOpen && (
+                    <ul className="why-hits">
+                      {(listItem.priority.hits || [])
+                        .filter((h) => h?.label && h.code !== 'conv')
+                        .map((h) => (
+                          <li key={h.code + h.label}>{h.label}</li>
+                        ))}
+                    </ul>
+                  )}
                 </div>
                 <div className="strip-actions">
                   <button type="button" className="btn-ghost sm" onClick={() => act('done')}><CheckCircle2 size={13} /> 无需回复</button>
@@ -803,7 +820,19 @@ export default function Reader({
                   <small>
                     {listItem.follow.why || displayName(listItem.follow.to)}
                     {listItem.follow.why && listItem.follow.to ? ` · ${displayName(listItem.follow.to)}` : ''}
+                    {(listItem.follow.hits || []).length > 0 && (
+                      <button type="button" className="why-hit-toggle" onClick={() => setWhyHitsOpen((o) => !o)}>
+                        {whyHitsOpen ? '收起明细' : '规则明细'}
+                      </button>
+                    )}
                   </small>
+                  {whyHitsOpen && (
+                    <ul className="why-hits">
+                      {(listItem.follow.hits || []).map((h) => (
+                        <li key={h.code + h.label}>{h.label}</li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
                 <div className="strip-actions">
                   <button type="button" className="btn-ghost sm" onClick={() => act('nofollow')}><BellOff size={13} /> 无需跟进</button>
@@ -811,12 +840,26 @@ export default function Reader({
                 </div>
               </div>
             )}
-            {!listItem?._section && focusExplain && !focusExplain.inFocus && (focusExplain.out || []).length > 0 && (
+            {!listItem?._section && focusExplain && !focusExplain.inFocus && (focusExplain.out || focusExplain.outHits || []).length > 0 && (
               <div className="await-strip explain-out" role="status">
                 <Hourglass size={15} />
                 <div>
                   <b>未进入今日待办 / 等待</b>
-                  <small>{focusExplain.out.slice(0, 4).join(' · ')}</small>
+                  <small>
+                    {(focusExplain.out || []).slice(0, 4).join(' · ')}
+                    {(focusExplain.outHits || []).length > 0 && (
+                      <button type="button" className="why-hit-toggle" onClick={() => setWhyHitsOpen((o) => !o)}>
+                        {whyHitsOpen ? '收起明细' : '规则明细'}
+                      </button>
+                    )}
+                  </small>
+                  {whyHitsOpen && (
+                    <ul className="why-hits">
+                      {(focusExplain.outHits || []).map((h) => (
+                        <li key={h.code + h.label}>{h.label}</li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </div>
             )}

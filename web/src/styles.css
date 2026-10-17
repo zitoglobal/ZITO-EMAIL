@@ -917,12 +917,37 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .folder-waiting.active svg { color: var(--waiting); }
 .folder.active { transition: background 0.12s var(--ease), color 0.12s var(--ease); }
 .why-priority {
-  align-self: flex-start; max-width: 100%; display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px;
+  align-self: flex-start; max-width: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px;
   margin-top: 5px; padding: 2px 0; font-size: 11.5px; color: var(--muted); line-height: 1.45;
 }
 .why-priority .why-label {
   flex: none; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; text-transform: none;
   color: var(--accent-ink); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; line-height: 16px;
+}
+.why-priority .why-toggle {
+  appearance: none; border: 0; background: transparent; padding: 0; margin: 0;
+  display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+  font: inherit; color: inherit; text-align: left; cursor: pointer; max-width: 100%;
+}
+.why-priority .why-toggle:hover .why-more { color: var(--accent-ink); }
+.why-priority .why-text { min-width: 0; }
+.why-priority .why-more {
+  flex: none; font-size: 10px; font-weight: 650; color: var(--accent);
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.why-priority .why-hits {
+  flex: 1 1 100%; margin: 2px 0 0; padding: 0 0 0 1.1em;
+  list-style: disc; font-size: 11px; color: var(--muted); line-height: 1.5;
+}
+.why-priority .why-hits li { margin: 0; }
+.await-strip .why-hits {
+  margin: 4px 0 0; padding: 0 0 0 1.1em; list-style: disc;
+  font-size: 11.5px; color: var(--muted); line-height: 1.5;
+}
+.await-strip .why-hit-toggle {
+  appearance: none; border: 0; background: transparent; padding: 0; margin: 0 0 0 6px;
+  font: inherit; font-size: 11px; font-weight: 650; color: var(--accent); cursor: pointer;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .admin-empty-pane {
   display: flex; align-items: center; justify-content: center; padding: 32px 24px; min-height: 0;
@@ -1596,6 +1621,10 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .ai-compose-opts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ai-compose-opts select { height: 28px; border: 1px solid var(--border); background: var(--panel); border-radius: 7px; padding: 0 6px; font-size: 12.5px; outline: none; }
 .ai-compose-opts .btn-primary { margin-left: auto; background: var(--ai); }
+.ai-route-chip {
+  margin-top: 6px; font-size: 11px; color: var(--muted); line-height: 1.4;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .c-body { flex: 1; overflow-y: auto; position: relative; min-height: 120px; }
 .c-busy {
@@ -2153,10 +2182,22 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .insight-card {
   padding: 12px 14px; border-radius: 10px; border: 1px solid var(--hairline);
   background: var(--panel-2); display: flex; flex-direction: column; gap: 4px;
+  text-align: left; color: inherit; font: inherit;
 }
+.insight-card.clickable { cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+.insight-card.clickable:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline)); background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel-2)); }
 .insight-card span { font-size: 12px; color: var(--muted); }
 .insight-card b { font-size: 22px; font-variant-numeric: tabular-nums; }
 .insight-card.danger b { color: var(--selvedge, #b45309); }
+.tier-pill.clickable { cursor: pointer; appearance: none; font: inherit; }
+.tier-pill.clickable:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--hairline)); }
+.insights-h .linkish, .insights-follow .linkish {
+  appearance: none; border: 0; background: transparent; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer; text-align: left;
+}
+.insights-h .linkish:hover, .insights-follow .linkish:hover { color: var(--accent-ink); }
+.insights-bars .clickable-row { cursor: pointer; }
+.insights-bars .clickable-row:hover .bar-label { color: var(--accent-ink); }
 .insights-h {
   display: flex; align-items: center; gap: 6px;
   font-size: 13px; margin: 18px 0 8px; font-weight: 700;

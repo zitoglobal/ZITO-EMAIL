@@ -25,10 +25,38 @@ function focusHint(db, userId, body = {}) {
         subject: subject ? `Re: ${subject}` : '',
         openAi: true,
         aiInstruction:
-          '这是团队公海认领的客户，原询盘在同事邮箱你看不到正文。请写一封专业的首封跟进：自我介绍并说明接手跟进，礼貌询问当前需求/规格/用量，勿编造报价或交期。',
+          '这是团队公海认领的客户，原询盘在同事邮箱你看不到正文。请写一封专业的首封跟进：自我介绍并说明接手跟进，礼貌询问当前需求/规格/用量，勿编造报价或交期。结尾邀请对方把规格表或参考链接发到本邮箱。',
       }
     : null;
   return { openToday: true, messageId: null, canOpen: false, startCompose };
+}
+
+/** 公海认领：通知原邮箱所有者（非认领人），避免「信还在我箱却不知已被接手」 */
+function notifyMailboxOwnerOnClaim({ db, emit, push, deal, claimer, body }) {
+  const mid = Number(body?.messageId);
+  if (!Number.isInteger(mid) || !db) return;
+  const row = db
+    .prepare(
+      `SELECT b.user_id AS owner_id, b.email AS mailbox
+       FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id WHERE m.id = ?`
+    )
+    .get(mid);
+  if (!row || row.owner_id === claimer.id) return;
+  const payload = {
+    scopeLabel: deal?.scopeLabel || body?.address || '客户',
+    from: claimer.name || claimer.email,
+    mailbox: row.mailbox,
+  };
+  emit(row.owner_id, 'deal-claimed-other', payload);
+  emit(row.owner_id, 'sync', { local: true, deal: true });
+  push
+    ?.notifyUser?.(row.owner_id, {
+      title: '同事已认领你箱内的客户',
+      body: `${payload.from} 认领了 ${payload.scopeLabel}`,
+      url: '/?box=team',
+      tag: 'zm-deal-claimed-other',
+    })
+    .catch?.(() => {});
 }
 
 export function registerDealsRoutes(app, ctx) {
@@ -73,9 +101,11 @@ export function registerDealsRoutes(app, ctx) {
     '/api/deals/claim',
     auth,
     wrap(async (req, res) => {
-      const deal = deals.claim(req.user.id, req.body || {});
+      const body = req.body || {};
+      const deal = deals.claim(req.user.id, body);
       broadcastDeal(emit, users);
-      const hint = db ? focusHint(db, req.user.id, req.body || {}) : { openToday: true };
+      notifyMailboxOwnerOnClaim({ db, emit, push, deal, claimer: req.user, body });
+      const hint = db ? focusHint(db, req.user.id, body) : { openToday: true };
       res.json({ deal, focusHint: hint });
     })
   );
@@ -132,13 +162,18 @@ export function registerDealsRoutes(app, ctx) {
         if (seenScope.has(scope.key)) continue;
         seenScope.add(scope.key);
         try {
-          const deal = deals.claim(req.user.id, {
+          const body = {
             address: it.address,
             threadId: it.threadId,
+            messageId: it.messageId || it.id,
+            subject: it.subject,
+            fromName: it.fromName,
             force: false,
             scopeKind,
-          });
+          };
+          const deal = deals.claim(req.user.id, body);
           claimed.push(deal);
+          notifyMailboxOwnerOnClaim({ db, emit, push, deal, claimer: req.user, body });
         } catch (e) {
           skipped.push({ address: it.address, error: e.message, deal: e.deal || null });
         }

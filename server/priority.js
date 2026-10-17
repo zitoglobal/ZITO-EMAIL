@@ -120,7 +120,7 @@ export function companyOf(idx, from) {
 
 const signalsFrom = (row) => (row.signals != null ? (row.signals ? row.signals.split(',') : []) : signalsOf(row.subject, row.snippet));
 
-/** 综合评分：客户等级 × 业务意图 × 等待时长 × 收件方式 */
+/** 综合评分：客户等级 × 业务意图 × 等待时长 × 收件方式；hits 供 UI 验真 */
 export function scoreRow(idx, row, { slaHours = 24, at = now() } = {}) {
   const tier = tierOf(idx, row.from_addr, row.category);
   const signals = signalsFrom(row);
@@ -140,21 +140,31 @@ export function scoreRow(idx, row, { slaHours = 24, at = now() } = {}) {
   if (!row.seen) score += 3;
   score = Math.round(score);
   const level = score >= 80 ? 'high' : score >= 50 ? 'medium' : 'low';
-  const reasons = [];
-  if (TIER_LABEL[tier]) reasons.push(tier === 'new' && signals.includes('inquiry') ? '新询盘' : TIER_LABEL[tier]);
-  for (const s of signals) if (SIGNAL_LABEL[s] && s !== 'question') reasons.push(SIGNAL_LABEL[s]);
-  if (!direct && to.length) reasons.push('抄送我');
+  const hits = [];
+  const tierLabel = tier === 'new' && signals.includes('inquiry') ? '新询盘' : TIER_LABEL[tier];
+  if (tierLabel) hits.push({ code: 'tier_' + tier, label: tierLabel });
+  for (const s of signals) {
+    if (SIGNAL_LABEL[s] && s !== 'question') hits.push({ code: 'signal_' + s, label: SIGNAL_LABEL[s] });
+  }
+  if (!direct && to.length) hits.push({ code: 'cc_only', label: '抄送我' });
+  if (direct) hits.push({ code: 'to_me', label: '直接发给我' });
+  if (row.flagged) hits.push({ code: 'flagged', label: '已加星' });
+  if (!row.seen) hits.push({ code: 'unseen', label: '未读' });
   const waitingHoursR = Math.round(waitingHours * 10) / 10;
+  if (slaHours != null) hits.push({ code: 'sla', label: `时限 ${slaHours}h`, detail: { slaHours } });
+  if (overdue) hits.push({ code: 'overdue', label: '已超时未回' });
+  else if (waitingHoursR >= 1) hits.push({ code: 'waiting', label: `已等 ${waitingHoursR}h`, detail: { hours: waitingHoursR } });
+  const conv = conversationKey(row);
+  if (conv) hits.push({ code: 'conv', label: '会话键', detail: { conversationKey: String(conv).slice(0, 80) } });
+  const reasons = hits.filter((h) => !['to_me', 'unseen', 'conv', 'flagged'].includes(h.code)).map((h) => h.label);
   const whyParts = [...reasons];
-  if (slaHours != null) whyParts.push(`时限 ${slaHours}h`);
-  if (overdue) whyParts.push('已超时未回');
-  else if (waitingHoursR >= 1) whyParts.push(`已等 ${waitingHoursR}h`);
   return {
     score,
     level,
     tier,
     signals,
-    reasons,
+    reasons: [...new Set(reasons)].slice(0, 8),
+    hits: hits.slice(0, 12),
     why: [...new Set(whyParts.filter(Boolean))].slice(0, 6).join(' · '),
     waitingHours: waitingHoursR,
     overdue,
@@ -162,17 +172,23 @@ export function scoreRow(idx, row, { slaHours = 24, at = now() } = {}) {
   };
 }
 
+function followHits(f) {
+  const hits = [];
+  if (f.due) hits.push({ code: 'follow_due', label: '跟进日到期' });
+  else if (f.nextFollowAt) hits.push({ code: 'follow_planned', label: '已设跟进日' });
+  if (f.tier === 'vip') hits.push({ code: 'tier_vip', label: 'VIP' });
+  else if (f.tier === 'customer') hits.push({ code: 'tier_customer', label: '老客户' });
+  else if (f.tier === 'new') hits.push({ code: 'tier_new', label: '新联系人' });
+  for (const s of f.signals || []) {
+    if (SIGNAL_LABEL[s] && s !== 'question') hits.push({ code: 'signal_' + s, label: SIGNAL_LABEL[s] });
+  }
+  if (f.days != null) hits.push({ code: 'days_waiting', label: `${f.days} 天未回` });
+  hits.push({ code: 'awaiting_them', label: '对方尚未回复' });
+  return hits.slice(0, 12);
+}
+
 function followWhy(f) {
-  const parts = [];
-  if (f.due) parts.push('跟进日到期');
-  else if (f.nextFollowAt) parts.push('已设跟进日');
-  if (f.tier === 'vip') parts.push('VIP');
-  else if (f.tier === 'customer') parts.push('老客户');
-  else if (f.tier === 'new') parts.push('新联系人');
-  for (const s of f.signals || []) if (SIGNAL_LABEL[s]) parts.push(SIGNAL_LABEL[s]);
-  if (f.days != null) parts.push(`${f.days} 天未回`);
-  parts.push('对方尚未回复');
-  return [...new Set(parts.filter(Boolean))].slice(0, 6).join(' · ');
+  return [...new Set(followHits(f).map((h) => h.label).filter(Boolean))].slice(0, 6).join(' · ');
 }
 
 // ---------- 今日待办 ----------
@@ -308,6 +324,7 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     const signals = signalsFrom(r);
     const score = (TIER_SCORE[tier] || 0) + Math.min(30, days * 4) + (signals.includes('inquiry') || signals.includes('sample') ? 10 : 0);
     const follow = { days, tier, to: external, score, company: companyOf(idx, external), signals };
+    follow.hits = followHits(follow);
     follow.why = followWhy(follow);
     followups.push({
       ...rowToMessage(r),
@@ -343,10 +360,12 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     .map((m) => {
       if (!m.deal?.mine || !m.priority) return m;
       const score = (m.priority.score || 0) + 28;
+      const hit = { code: 'claimed_boost', label: '我已认领' };
+      const hits = [hit, ...(m.priority.hits || [])].slice(0, 12);
       const why = ['我已认领', m.priority.why].filter(Boolean).join(' · ');
       return {
         ...m,
-        priority: { ...m.priority, score, why, claimedBoost: true },
+        priority: { ...m.priority, score, why, hits, claimedBoost: true },
       };
     })
     .sort((a, b) => (b.priority?.score || 0) - (a.priority?.score || 0) || b.date - a.date);
@@ -378,6 +397,7 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       nextFollowAt: d.nextFollowAt,
       due: true,
     };
+    follow.hits = followHits(follow);
     follow.why = followWhy(follow);
     followWithDeals.push({
       ...rowToMessage(sent),
@@ -400,6 +420,7 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
         score: (m.follow?.score || 0) + dueBoost,
         due,
       };
+      follow.hits = followHits(follow);
       follow.why = followWhy(follow);
       return { ...m, follow };
     })
@@ -420,6 +441,9 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       overdue,
       high: reply.filter((m) => m.priority.level === 'high').length,
       followups: followWithDeals.length,
+      /** 侧栏「等待」角标：等我 / 等对方 */
+      waitingMine: reply.length,
+      waitingThem: followWithDeals.length,
       todayIn,
       handledToday: repliedToday + doneToday,
     },
@@ -442,29 +466,41 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
 
 /**
  * 单封验真：是否在今日待办/等待，以及进/出原因（供 UI 与排查）
+ * hits / outHits：结构化规则命中，便于点开验真
  */
 export function explainMessage(userId, messageId, settings = {}) {
   const id = Number(messageId);
-  if (!Number.isInteger(id)) return { inFocus: false, section: null, why: '', out: ['无效邮件'] };
+  if (!Number.isInteger(id)) {
+    return { inFocus: false, section: null, why: '', out: ['无效邮件'], hits: [], outHits: [{ code: 'bad_id', label: '无效邮件' }] };
+  }
   const data = focus(userId, settings);
   const inReply = data.reply.find((m) => m.id === id);
   if (inReply) {
+    const hits = inReply.priority?.hits || [];
     return {
       inFocus: true,
       section: 'reply',
       why: inReply.priority?.why || (inReply.priority?.reasons || []).join(' · '),
+      hits,
       out: [],
+      outHits: [],
       priority: inReply.priority,
+      caps: { replyCandidate: REPLY_CANDIDATE_CAP, replyWindowDays: 21 },
     };
   }
   const inFollow = data.followups.find((m) => m.id === id);
   if (inFollow) {
+    const f = inFollow.follow || {};
+    const hits = f.hits?.length ? f.hits : followHits(f);
     return {
       inFocus: true,
       section: 'follow',
-      why: inFollow.follow?.why || '',
+      why: f.why || '',
+      hits,
       out: [],
-      follow: inFollow.follow,
+      outHits: [],
+      follow: f,
+      caps: { followWindowDays: 30 },
     };
   }
 
@@ -476,35 +512,70 @@ export function explainMessage(userId, messageId, settings = {}) {
        WHERE b.user_id = ? AND m.id = ?`
     )
     .get(userId, id);
-  if (!row) return { inFocus: false, section: null, why: '', out: ['邮件不存在或不属于你'] };
+  if (!row) {
+    return {
+      inFocus: false,
+      section: null,
+      why: '',
+      out: ['邮件不存在或不属于你'],
+      hits: [],
+      outHits: [{ code: 'missing', label: '邮件不存在或不属于你' }],
+    };
+  }
 
-  const out = [];
+  const outHits = [];
   const at = now();
   const idx = relationIndex(userId);
   if (row.special_use === '\\Inbox') {
     const tier = tierOf(idx, row.from_addr, row.category);
     if (handled(row)) {
-      if (row.answered || (row.my_last && row.my_last > row.date)) out.push('你已回复（不再进待办）');
-      if (row.done_at) out.push('已标记处理完成');
-      if (row.snooze_until) out.push('稍后处理中');
+      if (row.answered || (row.my_last && row.my_last > row.date)) {
+        outHits.push({ code: 'answered', label: '你已回复（不再进待办）' });
+      }
+      if (row.done_at) outHits.push({ code: 'done', label: '已标记处理完成' });
+      if (row.snooze_until) outHits.push({ code: 'snoozed', label: '稍后处理中' });
     }
-    if (!['vip', 'customer', 'new', 'colleague'].includes(tier)) out.push(`关系档位「${tier}」不进今日待办`);
-    if (row.category === 'notification' && tier !== 'vip' && tier !== 'customer') out.push('通知类邮件已过滤');
-    if (at - row.date > REPLY_WINDOW) out.push('超出待办时间窗（21 天）');
-    if (!out.length) out.push('未进入候选（可能被会话去重或硬帽截断）');
+    if (!['vip', 'customer', 'new', 'colleague'].includes(tier)) {
+      outHits.push({ code: 'tier_filtered', label: `关系档位「${tier}」不进今日待办` });
+    }
+    if (row.category === 'notification' && tier !== 'vip' && tier !== 'customer') {
+      outHits.push({ code: 'notification', label: '通知类邮件已过滤' });
+    }
+    if (at - row.date > REPLY_WINDOW) outHits.push({ code: 'reply_window', label: '超出待办时间窗（21 天）' });
+    const conv = conversationKey(row);
+    if (!outHits.length) {
+      outHits.push({
+        code: 'cap_or_dedupe',
+        label: '未进入候选（会话去重或硬帽截断）',
+        detail: { conversationKey: conv ? String(conv).slice(0, 80) : null, replyCandidateCap: REPLY_CANDIDATE_CAP },
+      });
+    }
   } else if (row.special_use === '\\Sent') {
-    if (row.nudge_off) out.push('已标记无需跟进');
-    if (row.their_last && row.their_last > row.date) out.push('对方已回复');
-    if (row.my_last && row.my_last > row.date) out.push('你有更新的发信');
+    if (row.nudge_off) outHits.push({ code: 'nofollow', label: '已标记无需跟进' });
+    if (row.their_last && row.their_last > row.date) outHits.push({ code: 'they_replied', label: '对方已回复' });
+    if (row.my_last && row.my_last > row.date) outHits.push({ code: 'newer_sent', label: '你有更新的发信' });
     const followDays = Number(settings.followupDays) || 3;
-    if (at - row.date < followDays * DAY) out.push(`未满跟进天数（${followDays} 天）`);
-    if (!expectsReply(row.subject, row.snippet)) out.push('主题/摘要判断为无需跟进');
-    if (at - row.date > FOLLOW_WINDOW) out.push('超出等待时间窗（30 天）');
-    if (!out.length) out.push('未进入等待列表');
+    if (at - row.date < followDays * DAY) {
+      outHits.push({ code: 'follow_days', label: `未满跟进天数（${followDays} 天）` });
+    }
+    if (!expectsReply(row.subject, row.snippet)) {
+      outHits.push({ code: 'expects_reply_false', label: '主题/摘要判断为无需跟进' });
+    }
+    if (at - row.date > FOLLOW_WINDOW) outHits.push({ code: 'follow_window', label: '超出等待时间窗（30 天）' });
+    if (!outHits.length) outHits.push({ code: 'not_in_follow', label: '未进入等待列表' });
   } else {
-    out.push('非收件箱/已发送，不参与今日待办与等待');
+    outHits.push({ code: 'wrong_folder', label: '非收件箱/已发送，不参与今日待办与等待' });
   }
-  return { inFocus: false, section: null, why: '', out };
+  const out = outHits.map((h) => h.label);
+  return {
+    inFocus: false,
+    section: null,
+    why: '',
+    hits: [],
+    out,
+    outHits,
+    caps: { replyCandidate: REPLY_CANDIDATE_CAP, replyWindowDays: 21, followWindowDays: 30 },
+  };
 }
 
 /** 认领客户到期时，用最近发给对方的已发送邮件挂到「等待」 */

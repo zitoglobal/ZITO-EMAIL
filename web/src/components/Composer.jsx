@@ -122,6 +122,7 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
   const [tone, setTone] = useState('professional');
   const [lang, setLang] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiRoute, setAiRoute] = useState(null);
   const [menu, setMenu] = useState(null);
   const [templates, setTemplates] = useState(null);
   const [dragging, setDragging] = useState(false);
@@ -262,10 +263,12 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
       if (initial.sourceId && initial.mode !== 'forward') {
         const r = await api('/ai/reply', { method: 'POST', body: { id: initial.sourceId, instruction: full, tone, language: lang, signature: sig } });
         editor.current.innerHTML = textToHtml(r.body);
+        setAiRoute(r.aiRoute || null);
       } else {
         const r = await api('/ai/compose', { method: 'POST', body: { prompt: full, tone, language: lang, to, signature: sig } });
         if (r.subject && !subject.trim()) setSubject(r.subject);
         editor.current.innerHTML = textToHtml(r.body || '');
+        setAiRoute(r.aiRoute || null);
       }
       touch();
     } catch (e) {
@@ -440,6 +443,13 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
               {aiBusy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />} 生成
             </button>
           </div>
+          {aiRoute && (
+            <div className="ai-route-chip" title={aiRoute.reason || ''}>
+              路由 · {aiRoute.tier === 'fast' ? '快' : aiRoute.tier === 'mid' ? '中' : '强'}
+              {aiRoute.thinking ? ' · 思考' : ''}
+              {aiRoute.reason ? ` · ${aiRoute.reason}` : ''}
+            </div>
+          )}
         </div>
       )}
 

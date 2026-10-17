@@ -27,6 +27,10 @@ const DEFAULT_SETTINGS = {
   slaVipHours: 4,
   slaCustomerHours: 24,
   slaNewInquiryHours: 8,
+  /**
+   * 公海超时 SLA：team=用首位管理员分层时限（全员一致）；viewer=各看各的设置
+   */
+  teamQueueSla: 'team',
   followupDays: 3,
   /** 发信后认领：auto 自动认领客户 / off 关闭 */
   sendAutoClaim: 'auto',
@@ -55,6 +59,7 @@ function sanitizeLayout(merged) {
   if ('layoutCustomer' in merged) merged.layoutCustomer = clampInt(merged.layoutCustomer, 240, 380, 280);
   if ('sendAutoClaim' in merged) merged.sendAutoClaim = merged.sendAutoClaim === 'off' ? 'off' : 'auto';
   if ('aiCloudOk' in merged) merged.aiCloudOk = merged.aiCloudOk !== false && merged.aiCloudOk !== 0;
+  if ('teamQueueSla' in merged) merged.teamQueueSla = merged.teamQueueSla === 'viewer' ? 'viewer' : 'team';
 }
 
 

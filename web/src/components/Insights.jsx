@@ -3,7 +3,7 @@ import { Menu, RefreshCw, BarChart3, Crown, AlertTriangle, Activity, Wifi } from
 import { api, qs } from '../api.js';
 import { dayStart, relativeTime } from '../utils.js';
 
-export default function Insights({ onMenu, isAdmin }) {
+export default function Insights({ onMenu, isAdmin, onGo }) {
   const [data, setData] = useState(null);
   const [ops, setOps] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -114,26 +114,36 @@ export default function Insights({ onMenu, isAdmin }) {
             )}
 
             <div className="insights-grid">
-              <div className="insight-card">
+              <button type="button" className="insight-card clickable" onClick={() => onGo?.('waiting', 'mine')} title="打开等待 · 等我">
                 <span>待回复</span><b>{f.needReply}</b>
-              </div>
-              <div className={'insight-card' + (f.overdue ? ' danger' : '')}>
+              </button>
+              <button type="button" className={'insight-card clickable' + (f.overdue ? ' danger' : '')} onClick={() => onGo?.('waiting', 'overdue')} title="打开等待 · 已超时">
                 <span>已超时</span><b>{f.overdue}</b>
-              </div>
-              <div className="insight-card">
+              </button>
+              <button type="button" className="insight-card clickable" onClick={() => onGo?.('waiting', 'them')} title="打开等待 · 等对方">
                 <span>待跟进</span><b>{f.followups}</b>
-              </div>
-              <div className="insight-card">
+              </button>
+              <button type="button" className="insight-card clickable" onClick={() => onGo?.('today')} title="打开今日待办">
                 <span>今日已处理</span><b>{f.handledToday}</b>
-              </div>
+              </button>
             </div>
 
             <h3 className="insights-h"><AlertTriangle size={14} /> 超时分层</h3>
             <div className="insights-tiers">
-              <span className="tier-pill vip"><Crown size={12} /> VIP {tiers.vip || 0}</span>
-              <span className="tier-pill">老客户 {tiers.customer || 0}</span>
-              <span className="tier-pill">新询盘 {tiers.new || 0}</span>
-              {(tiers.other || 0) > 0 && <span className="tier-pill">其他 {tiers.other}</span>}
+              <button type="button" className="tier-pill vip clickable" onClick={() => onGo?.('waiting', 'overdue')}>
+                <Crown size={12} /> VIP {tiers.vip || 0}
+              </button>
+              <button type="button" className="tier-pill clickable" onClick={() => onGo?.('waiting', 'overdue')}>
+                老客户 {tiers.customer || 0}
+              </button>
+              <button type="button" className="tier-pill clickable" onClick={() => onGo?.('waiting', 'overdue')}>
+                新询盘 {tiers.new || 0}
+              </button>
+              {(tiers.other || 0) > 0 && (
+                <button type="button" className="tier-pill clickable" onClick={() => onGo?.('waiting', 'overdue')}>
+                  其他 {tiers.other}
+                </button>
+              )}
               {data.overdueOldestHours > 0 && (
                 <small className="muted">最早已等 {data.overdueOldestHours}h</small>
               )}
@@ -151,10 +161,12 @@ export default function Insights({ onMenu, isAdmin }) {
               ))}
             </ul>
 
-            <h3 className="insights-h">阶段管线</h3>
+            <h3 className="insights-h">
+              <button type="button" className="linkish" onClick={() => onGo?.('deals')}>阶段管线</button>
+            </h3>
             <ul className="insights-bars">
               {(data.stages || []).map((s) => (
-                <li key={s.id}>
+                <li key={s.id} className="clickable-row" onClick={() => onGo?.('deals')}>
                   <span className="bar-label" style={{ color: s.color }}>{s.label}</span>
                   <span className="bar-track"><i style={{ width: `${(s.count / maxStage) * 100}%`, background: s.color }} /></span>
                   <span className="bar-n">{s.count}</span>
@@ -164,9 +176,13 @@ export default function Insights({ onMenu, isAdmin }) {
 
             <h3 className="insights-h">我的跟进日</h3>
             <div className="insights-follow">
-              <span>已到期 <b>{data.follow?.due || 0}</b></span>
+              <button type="button" className="linkish" onClick={() => onGo?.('waiting', 'them')}>
+                已到期 <b>{data.follow?.due || 0}</b>
+              </button>
               <span className="dot">·</span>
-              <span>7 日内 <b>{data.follow?.upcoming7d || 0}</b></span>
+              <button type="button" className="linkish" onClick={() => onGo?.('waiting', 'them')}>
+                7 日内 <b>{data.follow?.upcoming7d || 0}</b>
+              </button>
             </div>
 
             {(data.stageAge || []).length > 0 && (

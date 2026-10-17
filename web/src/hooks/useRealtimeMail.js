@@ -38,10 +38,15 @@ export function useRealtimeMail({
       }
     };
 
+    const bumpCollab = (detail) => {
+      window.dispatchEvent(new CustomEvent('zm-collab', { detail: detail || {} }));
+    };
+
     es.addEventListener('sync', (e) => {
       const d = parse(e);
       // Sent / 发信本地同步：更快刷新，稳住今日待办与等待
       if (d?.deal) window.dispatchEvent(new CustomEvent('zm-deal', { detail: d }));
+      if (d?.deal || d?.sent) bumpCollab(d);
       if (d?.sent || d?.deal) {
         clearTimeout(fastTimer);
         fastTimer = setTimeout(() => scheduleRef.current(), 200);
@@ -89,7 +94,8 @@ export function useRealtimeMail({
           if (first) openRef.current(first.id, { box: important ? 'today' : 'inbox' });
         };
       }
-      // 新来信可能消掉「等待对方」或抬高今日待办：快刷
+      // 新来信可能消掉「等待对方」或抬高今日待办 / 公海：快刷
+      bumpCollab({ new: true, important });
       clearTimeout(fastTimer);
       fastTimer = setTimeout(() => scheduleRef.current(), important ? 150 : 350);
     });
@@ -140,6 +146,7 @@ export function useRealtimeMail({
           goBoxRef.current?.('team');
         };
       }
+      bumpCollab({ queue: true, ...d });
     });
     es.addEventListener('deal-assigned', (e) => {
       const d = parse(e);
@@ -149,6 +156,19 @@ export function useRealtimeMail({
         { label: '去今日待办', fn: () => goTodayRef.current?.() },
         12_000
       );
+      window.dispatchEvent(new CustomEvent('zm-deal', { detail: d }));
+      bumpCollab({ assigned: true, ...d });
+    });
+    es.addEventListener('deal-claimed-other', (e) => {
+      const d = parse(e);
+      notify(
+        `${d.from || '同事'} 已认领 ${d.scopeLabel || '客户'}（来自你的邮箱）`,
+        'important',
+        { label: '看公海', fn: () => (goBoxRef.current ? goBoxRef.current('team') : goTodayRef.current?.()) },
+        12_000
+      );
+      window.dispatchEvent(new CustomEvent('zm-deal', { detail: d }));
+      bumpCollab({ claimedOther: true, ...d });
     });
     es.addEventListener('outbox', (e) => {
       const d = parse(e);

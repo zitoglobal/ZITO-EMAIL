@@ -7,6 +7,18 @@ import { isFreeDomain, domainOf, slaFor } from './priority.js';
 import { signalsOf } from './classify.js';
 import * as users from './users.js';
 
+/** 公海超时：默认用首位管理员 SLA，避免「因查看者设置而不同」；管理员可设 teamQueueSla=viewer 回退 */
+function slaSettingsForQueue(viewerId) {
+  const admin = db.prepare(`SELECT id FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1`).get();
+  if (admin) {
+    const settings = users.settingsOf(admin.id);
+    if (settings.teamQueueSla !== 'viewer') {
+      return { settings, source: 'team' };
+    }
+  }
+  return { settings: users.settingsOf(viewerId), source: 'viewer' };
+}
+
 const DAY = 86400_000;
 const WINDOW = 21 * DAY;
 const HOUR = 3600_000;
@@ -107,7 +119,7 @@ export function listQueue(viewerId, { limit = 60 } = {}) {
   const claimed = claimedKeys();
   const vipKeys = teamVipKeys();
   const viewer = users.publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(viewerId));
-  const settings = viewer?.settings || {};
+  const { settings, source: slaSource } = slaSettingsForQueue(viewerId);
 
   const rows = db
     .prepare(
@@ -194,6 +206,7 @@ export function listQueue(viewerId, { limit = 60 } = {}) {
       overdue: items.filter((x) => x.overdue).length,
       vip: items.filter((x) => x.vip).length,
     },
+    slaSource,
     canAssign: viewer?.role === 'admin',
     generatedAt: at,
   };

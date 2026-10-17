@@ -107,6 +107,12 @@ assert('score overdue vip-ish customer', scored.overdue === true && scored.score
 assert('score why has tier', /老客户|VIP/.test(scored.why), scored.why);
 assert('score why has overdue', scored.why.includes('已超时未回'), scored.why);
 assert('score why has sla', scored.why.includes('时限'), scored.why);
+assert('score hits array', Array.isArray(scored.hits) && scored.hits.length >= 3, JSON.stringify(scored.hits));
+assert(
+  'score hits codes',
+  scored.hits.some((h) => h.code === 'overdue') && scored.hits.some((h) => String(h.code).startsWith('tier_')),
+  JSON.stringify(scored.hits)
+);
 
 const fresh = scoreRow(
   idx,

@@ -364,7 +364,7 @@ ${mailContext(mail)}`,
 
 export async function compose({ prompt, tone = 'professional', language = '', to = '', signature = '', glossary = [] }) {
   const route = routeForTask('compose', { prompt });
-  return chat(
+  const out = await chat(
     [
       { role: 'system', content: SYSTEM },
       {
@@ -387,6 +387,11 @@ ${signature ? `署名：${signature}` : ''}${glossaryHint(glossary)}
       timeoutMs: route.enableThinking ? 120_000 : AI_TIMEOUT_MS,
     }
   );
+  return {
+    subject: out?.subject || '',
+    body: out?.body || '',
+    aiRoute: { tier: route.tier, thinking: route.enableThinking, reason: route.reason },
+  };
 }
 
 const REWRITE = {

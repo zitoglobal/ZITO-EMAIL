@@ -406,7 +406,7 @@ function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudCha
   );
 }
 
-function Triage({ settings, onSave, notify, mailboxes = [] }) {
+function Triage({ settings, onSave, notify, mailboxes = [], isAdmin = false }) {
   const [rules, setRules] = useState(null);
   const [suggestions, setSuggestions] = useState(null);
   const [form, setForm] = useState({ key: '', name: '', kind: 'vip' });
@@ -464,6 +464,23 @@ function Triage({ settings, onSave, notify, mailboxes = [] }) {
         <Choice icon={Hourglass} label="老客户" value={settings.slaCustomerHours ?? 24} onChange={set('slaCustomerHours')} options={[[8, '8 小时'], [12, '12 小时'], [24, '24 小时'], [48, '48 小时']]} />
         <Choice icon={Sparkles} label="新询盘" value={settings.slaNewInquiryHours ?? 8} onChange={set('slaNewInquiryHours')} options={[[4, '4 小时'], [8, '8 小时'], [12, '12 小时'], [24, '24 小时']]} />
       </div>
+      {isAdmin && (
+        <>
+          <Choice
+            icon={Users}
+            label="团队公海超时标准"
+            value={settings.teamQueueSla === 'viewer' ? 'viewer' : 'team'}
+            onChange={set('teamQueueSla')}
+            options={[
+              ['team', '全员统一（用管理员分层时限）'],
+              ['viewer', '各看各的（按个人设置）'],
+            ]}
+          />
+          <p className="set-desc muted-note">
+            默认「全员统一」：公海超时标红与催办按管理员账号的 VIP/客户/新询盘时限计算，避免同事因个人设置不同而对同一条公海判断不一致。
+          </p>
+        </>
+      )}
       <Choice icon={Send} label="对方未回复多久提醒跟进" value={settings.followupDays} onChange={set('followupDays')} options={[[2, '2 天'], [3, '3 天'], [5, '5 天'], [7, '7 天']]} />
       <Choice
         icon={Hand}
@@ -1138,7 +1155,15 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
           </nav>
           <div className="modal-body settings-body">
             {tab === 'mailboxes' && <Mailboxes mailboxes={mailboxes} onChanged={onMailboxesChanged} onAdd={onAddMailbox} notify={notify} focusId={focusMailbox} />}
-            {tab === 'triage' && <Triage settings={user.settings} onSave={onSettings} notify={notify} mailboxes={mailboxes} />}
+            {tab === 'triage' && (
+              <Triage
+                settings={user.settings}
+                onSave={onSettings}
+                notify={notify}
+                mailboxes={mailboxes}
+                isAdmin={user.role === 'admin'}
+              />
+            )}
             {tab === 'labels' && <LabelsPanel notify={notify} onChanged={onLabelsChanged} />}
             {tab === 'contacts' && <ContactsPanel notify={notify} />}
             {tab === 'preferences' && (

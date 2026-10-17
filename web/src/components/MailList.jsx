@@ -24,6 +24,39 @@ function remindChip(stage) {
   return <span key="rm" className="tag remind-1">提醒</span>;
 }
 
+/** Focus「为何」：摘要 + 可展开规则命中 */
+function WhyLine({ why, hits, variant }) {
+  const [open, setOpen] = useState(false);
+  const list = (Array.isArray(hits) ? hits : []).filter((h) => h?.label && h.code !== 'conv');
+  if (!why && !list.length) return null;
+  const label = variant === 'follow' ? '为何等待' : '为何待办';
+  const title = variant === 'follow' ? '为何出现在等待对方' : '为何出现在今日待办';
+  return (
+    <div className={'why-priority' + (open ? ' open' : '')} title={title}>
+      <span className="why-label">{label}</span>
+      <button
+        type="button"
+        className="why-toggle"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (list.length) setOpen((o) => !o);
+        }}
+        aria-expanded={list.length ? open : undefined}
+      >
+        <span className="why-text">{why || list.map((h) => h.label).join(' · ')}</span>
+        {list.length > 0 && <span className="why-more">{open ? '收起' : '明细'}</span>}
+      </button>
+      {open && list.length > 0 && (
+        <ul className="why-hits">
+          {list.map((h) => (
+            <li key={h.code + h.label}>{h.label}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function Chips({ m, variant }) {
   const p = m.priority;
   const chips = [];
@@ -102,6 +135,7 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
   const person = follow ? m.follow?.to : isSent ? m.to?.[0] || m.from : m.from;
   const p = m.priority;
   const why = focus ? whyPriority(m, variant) : '';
+  const whyHits = variant === 'follow' ? m.follow?.hits : p?.hits;
   return (
     <div
       className={
@@ -177,12 +211,7 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
           </div>
         )}
         {(!compact || focus) && !(focus && why) && <Chips m={m} variant={variant} />}
-        {why && (
-          <div className="why-priority" title={variant === 'follow' ? '为何出现在等待对方' : '为何出现在今日待办'}>
-            <span className="why-label">{variant === 'follow' ? '为何等待' : '为何待办'}</span>
-            {why}
-          </div>
-        )}
+        {why && <WhyLine why={why} hits={whyHits} variant={variant} />}
         {!focus && m.category !== 'people' && m.specialUse === '\\Inbox' && (
           <span className={'cat-tag ' + m.category}>{m.category === 'notification' ? '通知' : '订阅'}</span>
         )}

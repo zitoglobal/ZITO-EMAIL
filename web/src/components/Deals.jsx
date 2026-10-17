@@ -43,6 +43,16 @@ export default function Deals({ onMenu, notify, onOpenDeal }) {
     load();
   }, [load]);
 
+  useEffect(() => {
+    const onBump = () => load(true);
+    window.addEventListener('zm-deal', onBump);
+    window.addEventListener('zm-collab', onBump);
+    return () => {
+      window.removeEventListener('zm-deal', onBump);
+      window.removeEventListener('zm-collab', onBump);
+    };
+  }, [load]);
+
   const counts = useMemo(() => {
     const map = { all: deals.length };
     for (const s of stages) map[s.id] = 0;

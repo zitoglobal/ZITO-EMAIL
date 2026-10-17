@@ -63,7 +63,13 @@ export default function Focus({
     try {
       const d = await api('/deals/claim', {
         method: 'POST',
-        body: { address, threadId: m.threadId },
+        body: {
+          address,
+          threadId: m.threadId,
+          messageId: m.id,
+          subject: m.subject,
+          fromName: m.from?.name || '',
+        },
       });
       notify?.(`已认领 ${d.deal.scopeLabel}`, 'success');
       onRefresh?.();
@@ -85,7 +91,13 @@ export default function Focus({
       const address = m.from?.address;
       if (!address || seen.has(address.toLowerCase())) continue;
       seen.add(address.toLowerCase());
-      items.push({ address, threadId: m.threadId });
+      items.push({
+        address,
+        threadId: m.threadId,
+        messageId: m.id,
+        subject: m.subject,
+        fromName: m.from?.name || '',
+      });
     }
     if (!items.length) {
       notify?.('所选邮件中没有未认领客户', 'info');

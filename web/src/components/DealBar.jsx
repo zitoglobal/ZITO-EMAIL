@@ -76,7 +76,7 @@ export default function DealBar({
     try {
       const d = await api('/deals/claim', {
         method: 'POST',
-        body: { address, threadId, force, scopeKind },
+        body: { address, threadId, messageId: messageId || undefined, force, scopeKind },
       });
       onChange?.(d.deal);
       const label =

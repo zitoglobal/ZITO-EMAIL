@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Menu, RefreshCw, Hourglass, Hand, Loader2 } from 'lucide-react';
+import { Menu, RefreshCw, Hourglass, Hand, Loader2, Sparkles } from 'lucide-react';
 import { api } from '../api.js';
 import { Row } from './MailList.jsx';
 import ClaimFilter, { filterByClaim, loadClaimFilter, saveClaimFilter } from './ClaimFilter.jsx';
@@ -10,9 +10,10 @@ const TABS = [
   { key: 'overdue', label: '已超时' },
 ];
 
-/** 统一 Waiting：复用 Focus 数据 + Row；支持单封/批量认领 */
+/** 统一 Waiting：复用 Focus 数据 + Row；支持单封/批量认领与 AI 分诊 */
 export default function Waiting({
   data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, onFollowUp, onMenu, tab, setTab, notify, checked, setChecked,
+  aiEnabled, onAiTriage, aiBusy, onAiAction, aiActionBusy,
 }) {
   const reply = messages.filter((m) => m._section === 'reply');
   const follow = messages.filter((m) => m._section === 'follow');
@@ -58,7 +59,16 @@ export default function Waiting({
     if (!address || claimBusy) return;
     setClaimBusy(true);
     try {
-      const d = await api('/deals/claim', { method: 'POST', body: { address, threadId: m.threadId, messageId: m.id } });
+      const d = await api('/deals/claim', {
+        method: 'POST',
+        body: {
+          address,
+          threadId: m.threadId,
+          messageId: m.id,
+          subject: m.subject,
+          fromName: m.from?.name || '',
+        },
+      });
       notify?.(`已认领 ${d.deal.scopeLabel}`, 'success');
       onRefresh?.();
     } catch (e) {
@@ -79,7 +89,13 @@ export default function Waiting({
       const address = m.from?.address;
       if (!address || seen.has(address.toLowerCase())) continue;
       seen.add(address.toLowerCase());
-      items.push({ address, threadId: m.threadId });
+      items.push({
+        address,
+        threadId: m.threadId,
+        messageId: m.id,
+        subject: m.subject,
+        fromName: m.from?.name || '',
+      });
     }
     if (!items.length) {
       notify?.('所选邮件中没有未认领客户', 'info');
@@ -114,6 +130,18 @@ export default function Waiting({
             <h2>等待</h2>
             <small>等我回复 · 等对方回复</small>
           </div>
+          {aiEnabled && (tab === 'mine' || tab === 'overdue') && onAiTriage && (
+            <button
+              type="button"
+              className="ai-chip"
+              onClick={onAiTriage}
+              disabled={aiBusy}
+              title="AI 逐封给出行动建议"
+              aria-label="AI 分析等待"
+            >
+              {aiBusy ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} AI 分析
+            </button>
+          )}
           {showClaimBatch && checked?.size > 0 && (
             <button type="button" className="icon-btn" title="批量认领未跟客户" disabled={claimBusy} onClick={claimSelected}>
               {claimBusy ? <Loader2 size={15} className="spin" /> : <Hand size={15} />}
@@ -179,6 +207,8 @@ export default function Waiting({
             onFollowUp={onFollowUp}
             onClaim={m._section === 'reply' ? claimOne : undefined}
             claimBusy={claimBusy}
+            onAiAction={onAiAction}
+            aiActionBusy={aiActionBusy}
           />
         ))}
       </div>

@@ -397,10 +397,10 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (view.box !== 'today' || !ai || !settings?.autoTriageFocus || aiBusy) return;
+    if ((view.box !== 'today' && view.box !== 'waiting') || !ai || !settings?.autoTriageFocus || aiBusy) return;
     const need = list.messages.filter((m) => m._section === 'reply' && !m.aiNote).slice(0, 12);
     if (!need.length) return;
-    const key = need.map((m) => m.id).join(',');
+    const key = view.box + ':' + need.map((m) => m.id).join(',');
     if (autoTriageDone.current === key) return;
     autoTriageDone.current = key;
     aiTriage({ silent: true, ids: need.map((m) => m.id) });
@@ -491,6 +491,21 @@ export default function App() {
     goToday,
     goBox: (box) => setView({ mailboxId: 'all', box }),
   });
+
+  // 回前台 / 网络恢复：补刷，避免 SSE 空转后「已回仍待办」
+  useEffect(() => {
+    if (boot !== 'ready') return;
+    const onVis = () => {
+      if (document.visibilityState === 'visible') scheduleRefresh();
+    };
+    const onOnline = () => scheduleRefresh();
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('online', onOnline);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [boot, scheduleRefresh]);
 
   // ---------- 邮件操作 ----------
   function nextAfter(ids) {
@@ -1388,6 +1403,11 @@ export default function App() {
           notify={notify}
           checked={checked}
           setChecked={setChecked}
+          aiEnabled={ai}
+          onAiTriage={aiTriage}
+          aiBusy={aiBusy}
+          onAiAction={runAiAction}
+          aiActionBusy={aiActionBusy}
         />
       ) : view.box === 'team' ? (
         <TeamQueue
@@ -1409,7 +1429,15 @@ export default function App() {
           }}
         />
       ) : view.box === 'insights' ? (
-        <Insights onMenu={() => setSidebarOpen(true)} isAdmin={user.role === 'admin'} />
+        <Insights
+          onMenu={() => setSidebarOpen(true)}
+          isAdmin={user.role === 'admin'}
+          onGo={(box, tab) => {
+            if (box === 'waiting' && tab) setWaitingTab(tab);
+            setView({ mailboxId: 'all', box: box || 'today' });
+            setSidebarOpen(false);
+          }}
+        />
       ) : (
         <MailList
           title={title}

@@ -37,9 +37,13 @@ export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, on
   }, [load]);
 
   useEffect(() => {
-    const onDeal = () => load(true);
-    window.addEventListener('zm-deal', onDeal);
-    return () => window.removeEventListener('zm-deal', onDeal);
+    const onBump = () => load(true);
+    window.addEventListener('zm-deal', onBump);
+    window.addEventListener('zm-collab', onBump);
+    return () => {
+      window.removeEventListener('zm-deal', onBump);
+      window.removeEventListener('zm-collab', onBump);
+    };
   }, [load]);
 
   const items = (data?.items || []).filter((it) => {
@@ -129,7 +133,10 @@ export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, on
           <button type="button" className="icon-btn mobile-only" onClick={onMenu} aria-label="打开菜单"><Menu size={18} /></button>
           <div className="list-title">
             <h2>团队公海</h2>
-            <small>未认领优先跟 · 同事箱不展示正文预览</small>
+            <small>
+              未认领优先跟 · 同事箱不展示正文预览
+              {data?.slaSource === 'team' ? ' · 超时按团队统一 SLA' : data?.slaSource === 'viewer' ? ' · 超时按个人 SLA' : ''}
+            </small>
           </div>
           <button type="button" className="icon-btn" onClick={() => load(true)} title="刷新" aria-label="刷新">
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
