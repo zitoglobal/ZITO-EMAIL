@@ -2059,7 +2059,7 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 }
 
 @media (max-width: 720px) {
-  .focus-pane .section-head { position: sticky; top: 0; z-index: 2; background: var(--panel); padding-top: 6px; }
+  .focus-pane .focus-section { position: sticky; top: 0; z-index: 2; background: var(--panel); padding-top: 6px; }
 }
 
 .conflict-banner {
