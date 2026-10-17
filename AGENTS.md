@@ -3,6 +3,10 @@
 ## 语言要求
 - 除非用户明确要求，否则所有回复一律使用简体中文；代码注释、变量名遵循项目已有惯例。
 
+## 品牌 LOGO（锁定）
+- **禁止**改动 `web/src/components/Brand.jsx`（BrandIcon / BrandWordmark / BrandSymbol）的路径、配色、比例与布局，除非用户明确要求改 LOGO。
+- UI 精修只动按钮/列表/读信等控件；侧栏 `.brand-name` 字标排版保持品牌规范原样，勿对 LOGO 做滤镜、改色、拉伸或重排。
+
 ## 本地开发
 - 启动：`npm run dev`（API 3310 + Vite），或 `npx vite build` 后 `node server/index.js`，访问 `http://localhost:3310`
 - 纯逻辑单测：`npm test`（classify / SLA / mail rules / deals 认领键，不依赖真实邮箱）

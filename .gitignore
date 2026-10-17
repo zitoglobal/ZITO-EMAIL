@@ -3,6 +3,11 @@ node_modules/
 dist/
 .vite/
 
+# 本地临时探测脚本（勿提交）
+_tmp_*.mjs
+_tmp_*.js
+_tmp_*.py
+
 # 运行数据（SQLite 数据库、附件、定时发送队列）
 data/
 *.db
