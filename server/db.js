@@ -397,13 +397,13 @@ CREATE INDEX IF NOT EXISTS idx_deal_events_deal ON deal_events(deal_id, created_
 }
 
 // FTS5 全文（主题/摘要/发件人/正文）
+// 注意：不可用 content=''（contentless 不支持 DELETE，会导致删信/丢草稿失败）
 db.exec(`
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   subject,
   snippet,
   from_text,
   body,
-  content='',
   tokenize='unicode61 remove_diacritics 2'
 );
 `);

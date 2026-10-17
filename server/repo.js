@@ -281,24 +281,23 @@ function ftsEscape(term) {
     .join(' ');
 }
 
-/** SQLite / FTS 损坏（删信、丢弃草稿常踩中） */
+/** SQLite / FTS 损坏或 contentless 误建（删信、丢弃草稿常踩中） */
 export function isSqliteCorrupt(e) {
   const m = String(e?.message || e || '');
-  return /malformed|corrupt|SQLITE_CORRUPT|disk image/i.test(m);
+  return /malformed|corrupt|SQLITE_CORRUPT|disk image|contentless/i.test(m);
 }
 
-const FTS_DDL = `CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+const FTS_DDL = `CREATE VIRTUAL TABLE messages_fts USING fts5(
   subject,
   snippet,
   from_text,
   body,
-  content='',
   tokenize='unicode61 remove_diacritics 2'
 )`;
 
 let ftsRebuildBusy = false;
 
-/** 丢弃损坏的 FTS 索引并全量重建（邮件主表不动） */
+/** 丢弃损坏/contentless 的 FTS 索引并全量重建（邮件主表不动） */
 export function rebuildFtsIndex() {
   if (ftsRebuildBusy) return;
   ftsRebuildBusy = true;
@@ -348,10 +347,22 @@ export function removeFts(messagePks = []) {
   }
 }
 
-/** 启动探针：DELETE 探针失败则重建，避免删信/丢草稿整链失败 */
+/** 启动探针：contentless 或损坏则重建，避免删信/丢草稿整链失败 */
 export function ensureFtsHealthy() {
   try {
-    db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(-999999);
+    const row = db.prepare('SELECT id FROM messages ORDER BY id DESC LIMIT 1').get();
+    if (!row) {
+      // 空库也要能 DELETE（暴露 contentless）
+      db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(-1);
+      return;
+    }
+    const snap = db.prepare('SELECT * FROM messages_fts WHERE rowid = ?').get(row.id);
+    db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(row.id);
+    if (snap) {
+      db.prepare(
+        `INSERT INTO messages_fts (rowid, subject, snippet, from_text, body) VALUES (?, ?, ?, ?, ?)`
+      ).run(row.id, snap.subject || '', snap.snippet || '', snap.from_text || '', snap.body || '');
+    }
   } catch (e) {
     if (!isSqliteCorrupt(e)) {
       console.warn('[fts] probe:', e.message);
