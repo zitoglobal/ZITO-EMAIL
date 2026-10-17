@@ -7,7 +7,9 @@
 - 启动：`npm run dev`（API 3310 + Vite），或 `npx vite build` 后 `node server/index.js`，访问 `http://localhost:3310`
 - 纯逻辑单测：`npm test`（classify / SLA / mail rules / deals 认领键，不依赖真实邮箱）
 - 团队认领与业务阶段：邮箱内 `deals` 表（勿对接已下线的 crm.zitoglobal.com）
-- 安全基线：生产默认 `BIND_HOST=127.0.0.1`、Cookie Secure、绑定邮箱禁内网 SSRF（`server/net_guard.js`）；读信 HTML 服务端消毒（`sanitize_mail.js`）；会话空闲 14 天 / 绝对 30 天；可选 TOTP + 备用恢复码（设置 → 账号）
+- 安全基线：生产默认 `BIND_HOST=127.0.0.1`、Cookie Secure、绑定/连接前 SSRF 复检（`net_guard.js`）；读信 HTML 消毒；会话空闲 14 / 绝对 30 天；登录默认踢掉其它会话；可选 TOTP（管理员强建议开启）
+- 隐私：用户可关「云端 AI」（`aiCloudOk`，设置→偏好）；公海同事箱不回传 snippet；presence 仅同信观众；备份默认 `.db.enc`（`BACKUP_SECRET`/`MAIL_SECRET`）
+- Nginx：`deploy/nginx-zm-limit.conf` 登录/API 边缘限流；部署用 `python deploy/deploy.py nginx`
 - 业务阶段变更会同步外贸标签；今日待办 / 等待 可按「未认领 / 我跟 / 同事跟」筛选，支持单封/批量认领
 - 发信默认自动认领客户（设置可关）；发信后可软提示推进阶段；侧栏「我的客户」按阶段扫管线
 - 认领/接管/改阶段/释放写入 `deal_events`；DealBar 可改备注、下次跟进日、看记录；催单模板按阶段区分

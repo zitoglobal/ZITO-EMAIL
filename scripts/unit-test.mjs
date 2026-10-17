@@ -14,6 +14,7 @@ import { threadIdOf } from '../server/imap.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
+import { encrypt, decrypt, encryptBuffer, decryptBuffer } from '../server/security.js';
 import { generateSecret, generateSync, verifySync } from 'otplib';
 
 let fail = 0;
@@ -260,6 +261,16 @@ assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.i
     dealOwner: null,
   });
   assert('normalize injects claim when unclaimed', unclaimed[0]?.type === 'claim');
+}
+
+// ---------- crypto / backup blob ----------
+{
+  const round = decrypt(encrypt('imap-app-password-测试'));
+  assert('encrypt v2 roundtrip', round === 'imap-app-password-测试');
+  assert('encrypt has v2 prefix', encrypt('x').startsWith('v2.'));
+  const blob = encryptBuffer(Buffer.from('sqlite-bytes'));
+  assert('backup magic ZMB1', blob.subarray(0, 4).toString() === 'ZMB1');
+  assert('backup decrypt', decryptBuffer(blob).toString() === 'sqlite-bytes');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

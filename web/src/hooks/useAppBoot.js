@@ -6,12 +6,13 @@ import { DEFAULT_VIEW } from '../appConstants.js';
 /**
  * 登录后首屏：拉 /me、恢复智能文件夹、处理 OAuth 回调提示。
  */
-export function useAppBoot({ applyState, setUser, setAi, setBoot, setQ, setViewState, notify }) {
+export function useAppBoot({ applyState, setUser, setAi, setAiMeta, setBoot, setQ, setViewState, notify }) {
   useEffect(() => {
     api('/me' + qs({ dayStart: dayStart() }))
       .then((d) => {
         setUser(d.user);
         setAi(d.ai);
+        setAiMeta?.(d.aiMeta || null);
         applyState(d);
         try {
           const v = JSON.parse(localStorage.getItem('zm_view') || 'null');
@@ -43,5 +44,5 @@ export function useAppBoot({ applyState, setUser, setAi, setBoot, setQ, setViewS
         }
       })
       .catch(() => setBoot('auth'));
-  }, [applyState, setUser, setAi, setBoot, setQ, setViewState, notify]);
+  }, [applyState, setUser, setAi, setAiMeta, setBoot, setQ, setViewState, notify]);
 }

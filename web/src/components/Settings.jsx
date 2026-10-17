@@ -331,18 +331,43 @@ function PushRow({ notify }) {
   );
 }
 
-function Preferences({ settings, onSave, aiEnabled, notify }) {
+function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudChange }) {
   const set = (k) => (v) => {
     onSave({ [k]: v });
     if (k === 'notify' && v && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+    if (k === 'aiCloudOk') onAiCloudChange?.(!!v);
   };
   const translateTarget = settings.translateTarget === 'English' || settings.translateTarget === '英文' ? 'English' : '简体中文';
+  const cloudOk = settings.aiCloudOk !== false;
+  const vendor = aiMeta?.vendorHost || '';
+  const configured = aiMeta?.configured ?? aiEnabled;
   return (
     <>
       <div className={'ai-status-card ' + (aiEnabled ? 'on' : 'off')} id="ai-status">
-        <b>{aiEnabled ? '智能功能正常 · 模型已配置' : '智能功能未开通 · 请联系管理员配置服务器 AI 密钥'}</b>
-        <small>{aiEnabled ? '摘要、翻译、润色与今日简报可用' : '此前翻译、摘要按钮会隐藏或提示，避免误以为坏掉。密钥在服务端 .env，此处只读。'}</small>
+        <b>
+          {aiEnabled
+            ? '智能功能已开启 · 邮件会发往云端模型'
+            : configured && !cloudOk
+              ? '云端 AI 已按你的选择关闭'
+              : '智能功能未开通 · 请联系管理员配置服务器 AI 密钥'}
+        </b>
+        <small>
+          {aiEnabled
+            ? `摘要、翻译、润色、分诊等会把主题与正文发送至 ${vendor || '已配置的 AI 服务'}，请勿对极度敏感邮件使用。`
+            : configured && !cloudOk
+              ? '关闭后摘要/翻译/分诊不可用，邮件不会外发。需要时再打开下方开关。'
+              : '密钥在服务端 .env，此处只读。'}
+        </small>
       </div>
+      {configured && (
+        <Toggle
+          icon={Sparkles}
+          label="允许云端 AI（邮件出域）"
+          desc={vendor ? `开启后内容发往 ${vendor}` : '开启后邮件内容会发送到服务器配置的 AI 接口'}
+          checked={cloudOk}
+          onChange={set('aiCloudOk')}
+        />
+      )}
       <Choice icon={settings.theme === 'dark' ? Moon : Sun} label="外观" value={settings.theme} onChange={set('theme')} options={[['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']]} />
       <Choice icon={Rows3} label="列表密度" value={settings.density} onChange={set('density')} options={[['comfortable', '舒适'], ['compact', '紧凑']]} />
       <Choice
@@ -356,9 +381,9 @@ function Preferences({ settings, onSave, aiEnabled, notify }) {
       <Choice icon={Image} label="外部图片" value={settings.remoteImages} onChange={set('remoteImages')} options={[['always', '总是显示'], ['contacts', '仅联系人'], ['never', '询问']]} />
       <Choice icon={Undo2} label="撤销发送时长" value={settings.undoSeconds} onChange={set('undoSeconds')} options={[[0, '关闭'], [5, '5 秒'], [10, '10 秒'], [20, '20 秒'], [30, '30 秒']]} />
       <Toggle icon={MessagesSquare} label="会话视图" desc="把同一主题的往来邮件合并展示" checked={settings.conversationView} onChange={set('conversationView')} />
-      <Toggle icon={Sparkles} label="打开邮件时自动生成 AI 摘要" checked={settings.autoSummary} onChange={set('autoSummary')} />
+      <Toggle icon={Sparkles} label="打开邮件时自动生成 AI 摘要" checked={!!settings.autoSummary && cloudOk} onChange={set('autoSummary')} />
       <Choice icon={Languages} label="默认翻译目标" value={translateTarget} onChange={set('translateTarget')} options={[['简体中文', '中文'], ['English', 'English']]} />
-      <Toggle icon={Languages} label="打开邮件时自动翻译" desc="外文邮件自动译成默认目标语言（消耗 AI 额度，默认关闭）" checked={settings.autoTranslate} onChange={set('autoTranslate')} />
+      <Toggle icon={Languages} label="打开邮件时自动翻译" desc="外文邮件自动译成默认目标语言（消耗 AI 额度，默认关闭）" checked={!!settings.autoTranslate && cloudOk} onChange={set('autoTranslate')} />
       <Toggle icon={Bell} label="新邮件桌面通知" desc="浏览器在后台时弹出系统通知" checked={settings.notify} onChange={set('notify')} />
       <PushRow notify={notify || (() => {})} />
       <GlossaryEditor glossary={settings.glossary} onSave={onSave} />
@@ -626,6 +651,12 @@ function Account({ user, onUserChange, onLogout, notify }) {
       </form>
       <div className="set-account">
         <h4><ShieldCheck size={15} /> 二次验证（TOTP）</h4>
+        {user.role === 'admin' && !totpOn && (
+          <div className="ai-status-card off" style={{ marginBottom: 10 }}>
+            <b>管理员建议开启二次验证</b>
+            <small>管理员可重置他人密码与查看运维信息，开启 TOTP 可显著降低账号被盗风险。</small>
+          </div>
+        )}
         <p className="set-hint">
           {totpOn
             ? '已开启：登录时除密码外还需验证器动态码（推荐管理员开启）。'
@@ -1073,7 +1104,7 @@ function LabelsPanel({ notify, onChanged }) {
   );
 }
 
-export default function Settings({ user, mailboxes, tab: initialTab, focusMailbox, onClose, notify, onUserChange, onSettings, onMailboxesChanged, onAddMailbox, onLogout, aiEnabled, onLabelsChanged }) {
+export default function Settings({ user, mailboxes, tab: initialTab, focusMailbox, onClose, notify, onUserChange, onSettings, onMailboxesChanged, onAddMailbox, onLogout, aiEnabled, aiMeta, onAiCloudChange, onLabelsChanged }) {
   const [tab, setTab] = useState(initialTab || 'mailboxes');
   const tabs = TABS.filter(([k]) => k !== 'team' || user.role === 'admin');
 
@@ -1095,7 +1126,16 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
             {tab === 'triage' && <Triage settings={user.settings} onSave={onSettings} notify={notify} mailboxes={mailboxes} />}
             {tab === 'labels' && <LabelsPanel notify={notify} onChanged={onLabelsChanged} />}
             {tab === 'contacts' && <ContactsPanel notify={notify} />}
-            {tab === 'preferences' && <Preferences settings={user.settings} onSave={onSettings} aiEnabled={aiEnabled} notify={notify} />}
+            {tab === 'preferences' && (
+              <Preferences
+                settings={user.settings}
+                onSave={onSettings}
+                aiEnabled={aiEnabled}
+                aiMeta={aiMeta}
+                onAiCloudChange={onAiCloudChange}
+                notify={notify}
+              />
+            )}
             {tab === 'templates' && <Templates notify={notify} />}
             {tab === 'account' && <Account user={user} onUserChange={onUserChange} onLogout={onLogout} notify={notify} />}
             {tab === 'team' && <Team me={user} notify={notify} />}

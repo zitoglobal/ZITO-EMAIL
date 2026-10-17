@@ -112,7 +112,7 @@ export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, on
           <button type="button" className="icon-btn mobile-only" onClick={onMenu} aria-label="打开菜单"><Menu size={18} /></button>
           <div className="list-title">
             <h2>团队公海</h2>
-            <small>未认领优先跟 · VIP / 超时靠前</small>
+            <small>未认领优先跟 · 同事箱不展示正文预览</small>
           </div>
           <button type="button" className="icon-btn" onClick={() => load(true)} title="刷新" aria-label="刷新">
             <RefreshCw size={16} className={loading ? 'spin' : ''} />

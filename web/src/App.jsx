@@ -64,6 +64,7 @@ export default function App() {
   const [boot, setBoot] = useState('loading');
   const [user, setUser] = useState(null);
   const [ai, setAi] = useState(false);
+  const [aiMeta, setAiMeta] = useState(null);
   const [mailboxes, setMailboxes] = useState([]);
   const [folders, setFolders] = useState({});
   const [counts, setCounts] = useState({ unifiedUnread: 0, snoozed: 0, scheduled: 0 });
@@ -244,7 +245,7 @@ export default function App() {
     setDeep(false);
   }
 
-  useAppBoot({ applyState, setUser, setAi, setBoot, setQ, setViewState: setView, notify });
+  useAppBoot({ applyState, setUser, setAi, setAiMeta, setBoot, setQ, setViewState: setView, notify });
 
   // 视图引用的邮箱/文件夹不存在时回到默认视图
   useEffect(() => {
@@ -935,6 +936,14 @@ export default function App() {
     try {
       const r = await api('/me/settings', { method: 'PUT', body: patch });
       setUser((u) => ({ ...u, settings: r.settings }));
+      if ('aiCloudOk' in patch) {
+        api('/me' + qs({ dayStart: dayStart() }))
+          .then((d) => {
+            setAi(!!d.ai);
+            if (d.aiMeta) setAiMeta(d.aiMeta);
+          })
+          .catch(() => {});
+      }
       if ('replySlaHours' in patch || 'followupDays' in patch) {
         loadState();
         if (view.box === 'today' || view.box === 'waiting') loadList({ silent: true });
@@ -1003,6 +1012,7 @@ export default function App() {
     try {
       const d = await api('/me');
       setAi(d.ai);
+      if (d.aiMeta) setAiMeta(d.aiMeta);
       applyState(d);
     } catch {
       // ignore
@@ -1559,6 +1569,8 @@ export default function App() {
           onAddMailbox={() => setModal({ type: 'add' })}
           onLogout={logout}
           aiEnabled={ai}
+          aiMeta={aiMeta}
+          onAiCloudChange={(ok) => setAi(!!(aiMeta?.configured && ok))}
           onLabelsChanged={(list) => setLabels(list || [])}
         />
       )}
