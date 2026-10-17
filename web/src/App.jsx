@@ -1369,6 +1369,9 @@ export default function App() {
           onMenu={() => setSidebarOpen(true)}
           tab={waitingTab}
           setTab={setWaitingTab}
+          notify={notify}
+          checked={checked}
+          setChecked={setChecked}
         />
       ) : view.box === 'team' ? (
         <TeamQueue
@@ -1378,6 +1381,7 @@ export default function App() {
           onOpenMessage={(id) => openMessage(id, { box: 'inbox' })}
           onGoToday={() => setView({ mailboxId: 'all', box: 'today' })}
           onOpenInToday={(id) => openMessage(id, { box: 'today' })}
+          onComposeOutreach={(hint) => openCompose('new', null, hint || {})}
         />
       ) : view.box === 'deals' ? (
         <Deals

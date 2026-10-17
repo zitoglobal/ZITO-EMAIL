@@ -46,8 +46,11 @@ export const specialFolder = (mailboxId, use) =>
 
 export const replaceFolders = tx((mailboxId, folders) => {
   const keep = new Set(folders.map((f) => f.path));
+  const delFts = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
+  const idsOf = db.prepare('SELECT id FROM messages WHERE mailbox_id = ? AND folder = ?');
   for (const f of listFolders(mailboxId)) {
     if (!keep.has(f.path)) {
+      for (const r of idsOf.all(mailboxId, f.path)) delFts.run(r.id);
       db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, f.path);
       db.prepare('DELETE FROM folders WHERE mailbox_id = ? AND path = ?').run(mailboxId, f.path);
     }
@@ -157,12 +160,21 @@ export const applyFlagChanges = tx((mailboxId, folder, changes) => {
 });
 
 export const deleteUids = tx((mailboxId, folder, uids) => {
-  const st = db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?');
-  for (const u of uids) st.run(mailboxId, folder, u);
+  const getId = db.prepare('SELECT id FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?');
+  const delFts = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
+  const delMsg = db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?');
+  for (const u of uids) {
+    const row = getId.get(mailboxId, folder, u);
+    if (row) delFts.run(row.id);
+    delMsg.run(mailboxId, folder, u);
+  }
 });
 
-export const clearFolderMessages = (mailboxId, folder) =>
-  db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, folder);
+export const clearFolderMessages = (mailboxId, folder) => {
+  const ids = db.prepare('SELECT id FROM messages WHERE mailbox_id = ? AND folder = ?').all(mailboxId, folder).map((r) => r.id);
+  removeFts(ids);
+  return db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, folder);
+};
 
 export function getMessagesForUser(userId, ids) {
   if (!ids.length) return [];
@@ -290,17 +302,23 @@ export function searchFtsIds(terms = [], limit = 500) {
   }
 }
 
-/** 启动时补齐 FTS（主题/摘要/正文） */
+/** 启动时差量补齐 FTS，并清理孤儿索引（删信路径漏清时自愈） */
 export function backfillFts(limit = 15000) {
-  const n = db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get().n;
-  if (n > 0) return;
+  try {
+    db.prepare('DELETE FROM messages_fts WHERE rowid NOT IN (SELECT id FROM messages)').run();
+  } catch {
+    /* ignore */
+  }
   const rows = db
     .prepare(
       `SELECT m.id, m.subject, m.snippet, m.from_name, m.from_addr, b.text AS body
-       FROM messages m LEFT JOIN bodies b ON b.message_pk = m.id
+       FROM messages m
+       LEFT JOIN bodies b ON b.message_pk = m.id
+       WHERE m.id NOT IN (SELECT rowid FROM messages_fts)
        ORDER BY m.date DESC LIMIT ?`
     )
     .all(limit);
+  if (!rows.length) return;
   const run = tx(() => {
     for (const r of rows) {
       upsertFts(r.id, {
@@ -584,7 +602,12 @@ export function queryMessages(userId, { mailboxId, box = 'inbox', folder, catego
   const rows = db
     .prepare(
       `SELECT m.*, f.special_use,
-        (SELECT COUNT(DISTINCT IFNULL(t.message_id, t.id)) FROM messages t WHERE t.mailbox_id = m.mailbox_id AND t.thread_id = m.thread_id AND m.thread_id IS NOT NULL) AS thread_count,
+        (SELECT COUNT(DISTINCT IFNULL(t.message_id, t.id))
+           FROM messages t
+           JOIN mailboxes tb ON tb.id = t.mailbox_id
+          WHERE tb.user_id = b.user_id
+            AND m.thread_id IS NOT NULL
+            AND t.thread_id = m.thread_id) AS thread_count,
         ${MY_LAST_SQL} AS my_last
        FROM messages m
        JOIN mailboxes b ON b.id = m.mailbox_id

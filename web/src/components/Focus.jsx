@@ -324,7 +324,7 @@ export default function Focus({
             id="fs-reply"
             title="需要你回复"
             count={filteredReply.length}
-            hint={claimFilter !== 'all' ? `筛选后 ${filteredReply.length}/${reply.length}` : `VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 询盘 ${slaTier.inquiry}h`}
+            hint={claimFilter !== 'all' && claimFilter !== 'active' ? `筛选后 ${filteredReply.length}/${reply.length}` : claimFilter === 'active' ? `跟进中 ${filteredReply.length}（未认领+我跟）` : `VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 询盘 ${slaTier.inquiry}h`}
           />
         )}
         {!loading && !error && data && reply.length > 0 && !filteredReply.length && (

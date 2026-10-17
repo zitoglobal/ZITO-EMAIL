@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { Menu, RefreshCw, Hourglass } from 'lucide-react';
+import { Menu, RefreshCw, Hourglass, Hand, Loader2 } from 'lucide-react';
+import { api } from '../api.js';
 import { Row } from './MailList.jsx';
 import ClaimFilter, { filterByClaim, loadClaimFilter, saveClaimFilter } from './ClaimFilter.jsx';
 
@@ -9,14 +10,15 @@ const TABS = [
   { key: 'overdue', label: '已超时' },
 ];
 
-/** 统一 Waiting：复用 Focus 数据 + Row */
+/** 统一 Waiting：复用 Focus 数据 + Row；支持单封/批量认领 */
 export default function Waiting({
-  data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, onFollowUp, onMenu, tab, setTab,
+  data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, onFollowUp, onMenu, tab, setTab, notify, checked, setChecked,
 }) {
   const reply = messages.filter((m) => m._section === 'reply');
   const follow = messages.filter((m) => m._section === 'follow');
   const overdue = reply.filter((m) => m.priority?.overdue);
   const [claimFilter, setClaimFilter] = useState(() => loadClaimFilter('zm_waiting_claim'));
+  const [claimBusy, setClaimBusy] = useState(false);
 
   const setClaim = (v) => {
     setClaimFilter(v);
@@ -38,10 +40,9 @@ export default function Waiting({
     them: filteredFollow.length,
     overdue: filteredOverdue.length,
   };
-  const unclaimedN =
-    (tab === 'them' ? follow : tab === 'overdue' ? overdue : reply).filter((m) => !m.deal).length;
-  const mineN =
-    (tab === 'them' ? follow : tab === 'overdue' ? overdue : reply).filter((m) => m.deal?.mine).length;
+  const sourceForClaim = tab === 'them' ? follow : tab === 'overdue' ? overdue : reply;
+  const unclaimedN = sourceForClaim.filter((m) => !m.deal).length;
+  const mineN = sourceForClaim.filter((m) => m.deal?.mine).length;
   const multi = Object.keys(mailboxMap).length > 1;
   const emptyText =
     claimFilter !== 'all' && (tab === 'them' ? follow.length : tab === 'overdue' ? overdue.length : reply.length) > 0
@@ -52,6 +53,58 @@ export default function Waiting({
           ? '很好，没有超时邮件'
           : '没有等待你回复的邮件';
 
+  async function claimOne(m) {
+    const address = m.from?.address;
+    if (!address || claimBusy) return;
+    setClaimBusy(true);
+    try {
+      const d = await api('/deals/claim', { method: 'POST', body: { address, threadId: m.threadId, messageId: m.id } });
+      notify?.(`已认领 ${d.deal.scopeLabel}`, 'success');
+      onRefresh?.();
+    } catch (e) {
+      notify?.(e.message, 'error');
+      if (e.status === 409) onRefresh?.();
+    } finally {
+      setClaimBusy(false);
+    }
+  }
+
+  async function claimSelected() {
+    if (!checked?.size || claimBusy) return;
+    const items = [];
+    const seen = new Set();
+    for (const id of checked) {
+      const m = messages.find((x) => x.id === id);
+      if (!m || m.deal || m._section !== 'reply') continue;
+      const address = m.from?.address;
+      if (!address || seen.has(address.toLowerCase())) continue;
+      seen.add(address.toLowerCase());
+      items.push({ address, threadId: m.threadId });
+    }
+    if (!items.length) {
+      notify?.('所选邮件中没有未认领客户', 'info');
+      return;
+    }
+    setClaimBusy(true);
+    try {
+      const r = await api('/deals/claim-batch', { method: 'POST', body: { items } });
+      notify?.(
+        r.skippedCount
+          ? `已认领 ${r.claimedCount} 个客户，${r.skippedCount} 个跳过`
+          : `已认领 ${r.claimedCount} 个客户`,
+        r.claimedCount ? 'success' : 'info'
+      );
+      setChecked?.(new Set());
+      onRefresh?.();
+    } catch (e) {
+      notify?.(e.message, 'error');
+    } finally {
+      setClaimBusy(false);
+    }
+  }
+
+  const showClaimBatch = tab === 'mine' || tab === 'overdue';
+
   return (
     <section className="list-pane waiting-pane">
       <header className="list-head">
@@ -61,6 +114,11 @@ export default function Waiting({
             <h2>等待</h2>
             <small>等我回复 · 等对方回复</small>
           </div>
+          {showClaimBatch && checked?.size > 0 && (
+            <button type="button" className="icon-btn" title="批量认领未跟客户" disabled={claimBusy} onClick={claimSelected}>
+              {claimBusy ? <Loader2 size={15} className="spin" /> : <Hand size={15} />}
+            </button>
+          )}
           <button type="button" className="icon-btn" onClick={onRefresh} title="同步" aria-label="同步">
             <RefreshCw size={16} className={refreshing ? 'spin' : ''} />
           </button>
@@ -79,7 +137,7 @@ export default function Waiting({
           ))}
         </div>
         <ClaimFilter value={claimFilter} onChange={setClaim} unclaimedN={unclaimedN} mineN={mineN} />
-        <p className="waiting-hint">等我 = 需你回；等对方 = 你已回待回音；已超时 = 超过回复时限 · 可用认领筛选避免催同事客户</p>
+        <p className="waiting-hint">默认「跟进中」= 未认领+我跟 · 可单封/批量认领 · 等对方勿催同事客户</p>
       </header>
       <div className="list-body">
         {error && <div className="list-error">{error}</div>}
@@ -106,12 +164,21 @@ export default function Waiting({
             mb={mailboxMap[m.mailboxId]}
             showMailbox={multi}
             selected={selectedId === m.id}
-            checked={false}
+            checked={checked?.has?.(m.id) || false}
             onSelect={onSelect}
-            onToggleCheck={() => onSelect(m)}
+            onToggleCheck={(id) => {
+              if (!setChecked) return onSelect(m);
+              setChecked((prev) => {
+                const next = new Set(prev || []);
+                next.has(id) ? next.delete(id) : next.add(id);
+                return next;
+              });
+            }}
             onAction={onAction}
             variant={m._section === 'follow' ? 'follow' : m._section === 'reply' ? 'reply' : 'mail'}
             onFollowUp={onFollowUp}
+            onClaim={m._section === 'reply' ? claimOne : undefined}
+            claimBusy={claimBusy}
           />
         ))}
       </div>

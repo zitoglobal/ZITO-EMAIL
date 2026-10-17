@@ -7,15 +7,28 @@ function broadcastDeal(emit, users) {
 
 function focusHint(db, userId, body = {}) {
   const mid = Number(body.messageId);
-  if (!Number.isInteger(mid)) return { openToday: true, messageId: null, canOpen: false };
-  const row = db
-    .prepare(
-      `SELECT m.id FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id WHERE m.id = ? AND b.user_id = ?`
-    )
-    .get(mid, userId);
-  return row
-    ? { openToday: true, messageId: row.id, canOpen: true }
-    : { openToday: true, messageId: null, canOpen: false };
+  const address = String(body.address || '').trim();
+  const subject = String(body.subject || '').replace(/^((Re|RE|Fwd|FW)\s*:\s*)+/i, '').trim();
+  const fromName = String(body.fromName || '').trim();
+  if (Number.isInteger(mid)) {
+    const row = db
+      .prepare(
+        `SELECT m.id FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id WHERE m.id = ? AND b.user_id = ?`
+      )
+      .get(mid, userId);
+    if (row) return { openToday: true, messageId: row.id, canOpen: true, startCompose: null };
+  }
+  // 同事箱认领：不能打开原信，引导写首封跟进（只用主题/地址，不读同事正文）
+  const startCompose = address
+    ? {
+        to: fromName ? `${fromName} <${address}>` : address,
+        subject: subject ? `Re: ${subject}` : '',
+        openAi: true,
+        aiInstruction:
+          '这是团队公海认领的客户，原询盘在同事邮箱你看不到正文。请写一封专业的首封跟进：自我介绍并说明接手跟进，礼貌询问当前需求/规格/用量，勿编造报价或交期。',
+      }
+    : null;
+  return { openToday: true, messageId: null, canOpen: false, startCompose };
 }
 
 export function registerDealsRoutes(app, ctx) {

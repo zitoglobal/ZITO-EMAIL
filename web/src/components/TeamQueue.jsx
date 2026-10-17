@@ -6,7 +6,7 @@ import { displayName, relativeTime, waitText } from '../utils.js';
 /**
  * 团队公海：跨成员未认领客户来信（认领/指派；仅自己邮箱可打开原文）
  */
-export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, onOpenInToday, isAdmin }) {
+export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, onOpenInToday, onComposeOutreach, isAdmin }) {
   const [data, setData] = useState(null);
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -51,12 +51,21 @@ export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, on
   });
 
   function afterClaim(label, { assigned, focusHint, mine } = {}) {
+    const goCompose =
+      !assigned && focusHint?.startCompose && onComposeOutreach
+        ? { label: '写首封跟进', fn: () => onComposeOutreach(focusHint.startCompose) }
+        : null;
     const goFocus = focusHint?.canOpen && focusHint.messageId && onOpenInToday
       ? { label: '打开待办', fn: () => onOpenInToday(focusHint.messageId) }
-      : onGoToday
+      : goCompose || (onGoToday
         ? { label: mine || !assigned ? '去今日待办' : '查看客户', fn: () => onGoToday() }
-        : null;
-    notify?.(assigned ? `已指派 ${label}` : `已认领 ${label}${focusHint?.canOpen ? ' · 已置顶待办' : ''}`, 'success', goFocus, 10_000);
+        : null);
+    const extra = focusHint?.canOpen
+      ? ' · 已置顶待办'
+      : focusHint?.startCompose
+        ? ' · 原信在同事箱，请写首封'
+        : '';
+    notify?.(assigned ? `已指派 ${label}` : `已认领 ${label}${extra}`, 'success', goFocus, 12_000);
   }
 
   async function claim(it) {
@@ -66,12 +75,20 @@ export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, on
     try {
       const res = await api('/deals/claim', {
         method: 'POST',
-        body: { address: addr, threadId: it.threadId, messageId: it.mine ? it.id : undefined },
+        body: {
+          address: addr,
+          threadId: it.threadId,
+          messageId: it.id,
+          subject: it.subject,
+          fromName: it.from?.name || '',
+        },
       });
       afterClaim(it.scopeLabel, { focusHint: res.focusHint, mine: it.mine });
       setData((d) => (d ? { ...d, items: d.items.filter((x) => x.scopeKey !== it.scopeKey) } : d));
       if (res.focusHint?.canOpen && res.focusHint.messageId && onOpenInToday) {
         setTimeout(() => onOpenInToday(res.focusHint.messageId), 200);
+      } else if (res.focusHint?.startCompose && onComposeOutreach) {
+        setTimeout(() => onComposeOutreach(res.focusHint.startCompose), 280);
       }
     } catch (e) {
       if (e.status === 409) notify?.(e.message || '同事已认领', 'error');
