@@ -149,10 +149,12 @@ export function listQueue(viewerId, { limit = 60 } = {}) {
     const slaHours = slaFor(settings, tier, signals);
     const waitingHours = Math.round(((at - r.date) / HOUR) * 10) / 10;
     const overdue = waitingHours >= slaHours;
+    const mine = r.owner_user_id === viewerId;
     const item = {
       id: r.id,
       subject: r.subject,
-      snippet: r.snippet,
+      // 同事箱不回传正文预览，避免公海跨账号泄露业务摘要
+      snippet: mine ? r.snippet || '' : '',
       from: { name: r.from_name, address: r.from_addr },
       date: r.date,
       threadId: r.thread_id,
@@ -169,8 +171,8 @@ export function listQueue(viewerId, { limit = 60 } = {}) {
         name: r.owner_name || r.owner_email,
         mailbox: r.mailbox_email,
       },
-      mine: r.owner_user_id === viewerId,
-      canOpen: r.owner_user_id === viewerId,
+      mine,
+      canOpen: mine,
     };
     item.score = queueScore(item);
     byScope.set(scope.key, item);

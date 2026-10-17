@@ -190,9 +190,14 @@ export default function App() {
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
 
   useEffect(() => {
-    const onResize = () => setViewportW(window.innerWidth);
+    const onResize = () => setViewportW(window.visualViewport?.width || window.innerWidth);
+    onResize();
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
+    };
   }, []);
 
   // 从用户设置恢复布局（与 localStorage 双写，设置优先）
@@ -741,6 +746,20 @@ export default function App() {
     }
     pushComposer(buildComposeState(mode, msg, composeCtx, extra));
   }
+
+  /* 服务号菜单深链：?compose=1 → 打开写信 */
+  useEffect(() => {
+    if (boot !== 'ready' || !user) return;
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get('compose') !== '1') return;
+      window.history.replaceState({}, '', window.location.pathname);
+      openCompose();
+    } catch {
+      /* ignore */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首屏 ready 时读一次 URL
+  }, [boot, user?.id]);
 
   async function followUp(m) {
     try {
@@ -1596,32 +1615,35 @@ export default function App() {
         onSnooze={() => { setPalette(false); selectedId && doAction([selectedId], 'snooze', { until: snoozePresets()[1].at }); }}
       />
 
-      <nav className="zm-mob-nav" aria-label="移动主导航">
+      <nav className="zm-mob-nav" aria-label="ZITO 智能邮箱导航">
         <button
           type="button"
           className={view.box === 'today' ? 'on' : ''}
+          aria-current={view.box === 'today' ? 'page' : undefined}
           aria-label="今日待办"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'today' }); setSidebarOpen(false); }}
         >
-          <ListTodo size={20} strokeWidth={1.75} />
+          <ListTodo size={20} strokeWidth={1.75} aria-hidden />
           <span>待办</span>
         </button>
         <button
           type="button"
           className={view.box === 'inbox' ? 'on' : ''}
+          aria-current={view.box === 'inbox' ? 'page' : undefined}
           aria-label="收件箱"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'inbox' }); setSidebarOpen(false); }}
         >
-          <Inbox size={20} strokeWidth={1.75} />
+          <Inbox size={20} strokeWidth={1.75} aria-hidden />
           <span>收件</span>
         </button>
         <button
           type="button"
           className={view.box === 'waiting' ? 'on' : ''}
+          aria-current={view.box === 'waiting' ? 'page' : undefined}
           aria-label="等待"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'waiting' }); setSidebarOpen(false); }}
         >
-          <Hourglass size={20} strokeWidth={1.75} />
+          <Hourglass size={20} strokeWidth={1.75} aria-hidden />
           <span>等待</span>
         </button>
         <button
@@ -1630,15 +1652,17 @@ export default function App() {
           aria-label="写邮件"
           onClick={() => { setSidebarOpen(false); openCompose(); }}
         >
-          <PenSquare size={20} strokeWidth={1.75} />
+          <PenSquare size={20} strokeWidth={1.75} aria-hidden />
           <span>写信</span>
         </button>
         <button
           type="button"
+          className={sidebarOpen || !['today', 'inbox', 'waiting'].includes(view.box) ? 'on' : ''}
           aria-label="更多"
-          onClick={() => setSidebarOpen(true)}
+          aria-expanded={sidebarOpen}
+          onClick={() => setSidebarOpen((o) => !o)}
         >
-          <Menu size={20} strokeWidth={1.75} />
+          <Menu size={20} strokeWidth={1.75} aria-hidden />
           <span>更多</span>
         </button>
       </nav>

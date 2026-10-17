@@ -17,6 +17,15 @@ export function aiConfigured() {
   return !!API_KEY();
 }
 
+/** 仅主机名，供设置页披露「邮件会发往何处」 */
+export function aiVendorHost() {
+  try {
+    return new URL(BASE_URL()).hostname || '';
+  } catch {
+    return '';
+  }
+}
+
 const AI_TIMEOUT_MS = 90_000;
 
 /** POST JSON over IPv4-only https.request (avoids bare fetch/undici path). */

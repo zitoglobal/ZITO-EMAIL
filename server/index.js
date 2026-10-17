@@ -331,10 +331,31 @@ app.post(
   })
 );
 
+function requireAiCloud(req) {
+  if (!ai.aiConfigured()) throw httpError(503, 'AI 未配置：请联系管理员');
+  if (users.settingsOf(req.user.id).aiCloudOk === false) {
+    throw httpError(403, '已关闭云端 AI：邮件不会外发。可在 设置 → 偏好 中重新开启');
+  }
+}
+
 app.get(
   '/api/me',
   auth,
-  wrap(async (req, res) => res.json({ user: users.publicUser(req.user), ai: ai.aiConfigured(), ...stateFor(req.user, req.query.dayStart) }))
+  wrap(async (req, res) => {
+    const configured = ai.aiConfigured();
+    const cloudOk = users.settingsOf(req.user.id).aiCloudOk !== false;
+    res.json({
+      user: users.publicUser(req.user),
+      ai: configured && cloudOk,
+      aiMeta: {
+        configured,
+        cloudOk,
+        vendorHost: ai.aiVendorHost(),
+        leavesServer: configured && cloudOk,
+      },
+      ...stateFor(req.user, req.query.dayStart),
+    });
+  })
 );
 
 app.get(
@@ -1532,11 +1553,20 @@ async function mailForAi(req, id) {
 
 const aiLimit = (req) => rateLimit('ai:' + req.user.id, 60, 10 * 60_000);
 
-app.post('/api/ai/summarize', auth, wrap(async (req, res) => (aiLimit(req), res.json(await ai.summarize(await mailForAi(req, req.body.id))))));
+app.post(
+  '/api/ai/summarize',
+  auth,
+  wrap(async (req, res) => {
+    requireAiCloud(req);
+    aiLimit(req);
+    res.json(await ai.summarize(await mailForAi(req, req.body.id)));
+  })
+);
 app.post(
   '/api/ai/translate',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
     const target = req.body.target || settings.translateTarget || '简体中文';
@@ -1562,6 +1592,7 @@ app.post(
   '/api/ai/reply',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
     const row = messageOf(req, req.body.id);
@@ -1579,6 +1610,7 @@ app.post(
   '/api/ai/compose',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
     res.json(await ai.compose({ ...req.body, glossary: settings.glossary }));
@@ -1588,6 +1620,7 @@ app.post(
   '/api/ai/rewrite',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     if (!String(req.body.text || '').trim()) throw httpError(400, '请先输入需要处理的内容');
     const settings = users.settingsOf(req.user.id);
@@ -1598,6 +1631,7 @@ app.post(
   '/api/ai/digest',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     const { messages } = repo.queryMessages(req.user.id, { mailboxId: req.body.mailboxId || 'all', box: 'unread', limit: 40 });
     if (!messages.length) return res.json({ overview: '所有收件箱都没有未读邮件，一切都处理完了 🎉', priorities: [], groups: [] });
@@ -1649,6 +1683,7 @@ app.post(
   '/api/ai/triage',
   auth,
   wrap(async (req, res) => {
+    requireAiCloud(req);
     aiLimit(req);
     const settings = users.settingsOf(req.user.id);
     const rows = repo.getMessagesForUser(req.user.id, (req.body.ids || []).slice(0, 25).map(Number));

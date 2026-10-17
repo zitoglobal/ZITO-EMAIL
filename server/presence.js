@@ -1,7 +1,8 @@
 /**
  * 读信「同事正在看」：内存态，90 秒无心跳过期。
+ * 仅向正在看同一封信的用户推送（不再 emitAll 全域广播）。
  */
-import { emitAll } from './events.js';
+import { emit } from './events.js';
 
 const TTL = 90_000;
 /** @type {Map<number, Map<number, { name: string, at: number, threadId: string|null }>>} */
@@ -14,6 +15,13 @@ function pruneMessage(mid, t = Date.now()) {
   if (!m.size) byMessage.delete(mid);
 }
 
+function emitToViewers(mid, payload, extraUserIds = []) {
+  const m = byMessage.get(mid);
+  const ids = new Set(extraUserIds.map(Number).filter((n) => Number.isInteger(n)));
+  if (m) for (const uid of m.keys()) ids.add(uid);
+  for (const uid of ids) emit(uid, 'presence', payload);
+}
+
 export function touch(userId, name, messageId, threadId = null) {
   const mid = Number(messageId);
   const uid = Number(userId);
@@ -23,7 +31,7 @@ export function touch(userId, name, messageId, threadId = null) {
   byMessage.get(mid).set(uid, { name: String(name || '').slice(0, 40), at: t, threadId: threadId || null });
   pruneMessage(mid, t);
   const viewers = list(mid, uid);
-  emitAll('presence', { messageId: mid, threadId: threadId || null, viewers });
+  emitToViewers(mid, { messageId: mid, threadId: threadId || null, viewers }, [uid]);
   return viewers;
 }
 
@@ -35,7 +43,8 @@ export function leave(userId, messageId) {
   m.delete(uid);
   if (!m.size) byMessage.delete(mid);
   const viewers = list(mid, uid);
-  emitAll('presence', { messageId: mid, viewers });
+  // 通知仍在看的人 + 刚离开的人（清自己 UI）
+  emitToViewers(mid, { messageId: mid, viewers }, [uid]);
   return viewers;
 }
 
@@ -46,8 +55,8 @@ export function list(messageId, excludeUserId = null) {
   if (!m) return [];
   const ex = excludeUserId != null ? Number(excludeUserId) : null;
   return [...m.entries()]
-    .filter(([uid]) => uid !== ex)
-    .map(([userId, v]) => ({ userId, name: v.name, at: v.at }));
+    .filter(([id]) => id !== ex)
+    .map(([id, v]) => ({ userId: id, name: v.name, at: v.at }));
 }
 
 setInterval(() => {

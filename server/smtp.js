@@ -2,8 +2,10 @@ import nodemailer from 'nodemailer';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { decrypt } from './security.js';
 import * as oauth from './oauth.js';
+import { assertSafeMailHost } from './net_guard.js';
 
 async function transport(mb, password) {
+  await assertSafeMailHost(mb.smtp_host, 'SMTP');
   let auth;
   if (mb.oauth_refresh_enc || mb.oauth_access_enc) {
     const accessToken = await oauth.ensureAccessToken(mb);

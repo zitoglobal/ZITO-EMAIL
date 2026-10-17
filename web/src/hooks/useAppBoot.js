@@ -33,9 +33,10 @@ export function useAppBoot({ applyState, setUser, setAi, setBoot, setQ, setViewS
           } else if (sp.get('oauth_error')) {
             notify(`OAuth 绑定失败：${sp.get('oauth_error')}`, 'error', null, 12_000);
             window.history.replaceState({}, '', window.location.pathname);
-          } else if (['team', 'today', 'waiting', 'deals', 'insights'].includes(sp.get('box'))) {
+          } else if (['team', 'today', 'waiting', 'deals', 'insights', 'inbox', 'unread', 'flagged', 'sent', 'snoozed'].includes(sp.get('box'))) {
             setViewState({ mailboxId: 'all', box: sp.get('box') });
-            window.history.replaceState({}, '', window.location.pathname);
+            const keepCompose = sp.get('compose') === '1';
+            window.history.replaceState({}, '', keepCompose ? `${window.location.pathname}?compose=1` : window.location.pathname);
           }
         } catch {
           /* ignore */

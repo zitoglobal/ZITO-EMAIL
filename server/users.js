@@ -33,6 +33,11 @@ const DEFAULT_SETTINGS = {
   remindOverdue: true,
   translateTarget: '简体中文',
   autoTranslate: false,
+  /**
+   * 是否允许把邮件正文发往云端 AI（摘要/翻译/润色/分诊等）。
+   * 关闭后服务端拒绝云端 AI 接口；密钥仍可在服务器配置。
+   */
+  aiCloudOk: true,
   glossary: [],
   /** 布局：standard 标准三栏 / sales 销售台 / focus 专注读信 */
   layoutMode: 'standard',
@@ -47,6 +52,7 @@ function sanitizeLayout(merged) {
   if ('layoutList' in merged) merged.layoutList = clampInt(merged.layoutList, 280, 520, 360);
   if ('layoutCustomer' in merged) merged.layoutCustomer = clampInt(merged.layoutCustomer, 240, 380, 280);
   if ('sendAutoClaim' in merged) merged.sendAutoClaim = merged.sendAutoClaim === 'off' ? 'off' : 'auto';
+  if ('aiCloudOk' in merged) merged.aiCloudOk = merged.aiCloudOk !== false && merged.aiCloudOk !== 0;
 }
 
 
@@ -64,6 +70,7 @@ export function publicUser(u) {
       if (s.translateTarget !== 'English' && s.translateTarget !== '英文') s.translateTarget = '简体中文';
       else s.translateTarget = 'English';
       s.autoTranslate = !!s.autoTranslate;
+      s.aiCloudOk = s.aiCloudOk !== false && s.aiCloudOk !== 0;
       sanitizeLayout(s);
       return s;
     })(),
@@ -125,6 +132,13 @@ export function updateSettings(userId, patch) {
     merged.translateTarget = t === 'English' || t === '英文' ? 'English' : '简体中文';
   }
   if ('autoTranslate' in merged) merged.autoTranslate = !!merged.autoTranslate;
+  if ('aiCloudOk' in merged) {
+    merged.aiCloudOk = merged.aiCloudOk !== false && merged.aiCloudOk !== 0;
+    if (!merged.aiCloudOk) {
+      merged.autoSummary = false;
+      merged.autoTranslate = false;
+    }
+  }
   sanitizeLayout(merged);
   db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(merged), userId);
   const settings = { ...DEFAULT_SETTINGS, ...merged };
@@ -139,7 +153,10 @@ export function updateProfile(userId, { name }) {
   if (name !== undefined) db.prepare('UPDATE users SET name = ? WHERE id = ?').run(String(name).trim(), userId);
 }
 
-export function createSession(userId, userAgent) {
+/** 登录成功后默认吊销同账号其它会话（可用 SESSION_REVOKE_OTHERS_ON_LOGIN=0 关闭） */
+const REVOKE_OTHERS_ON_LOGIN = process.env.SESSION_REVOKE_OTHERS_ON_LOGIN !== '0';
+
+export function createSession(userId, userAgent, { revokeOthers = REVOKE_OTHERS_ON_LOGIN } = {}) {
   const token = randomToken();
   db.prepare('INSERT INTO sessions (token_hash, user_id, created_at, last_seen, user_agent) VALUES (?, ?, ?, ?, ?)').run(
     sha256(token),
@@ -148,6 +165,9 @@ export function createSession(userId, userAgent) {
     now(),
     String(userAgent || '').slice(0, 200)
   );
+  if (revokeOthers) {
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(userId, sha256(token));
+  }
   return token;
 }
 

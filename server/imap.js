@@ -5,6 +5,7 @@ import iconv from 'iconv-lite';
 import { decrypt } from './security.js';
 import { classify } from './classify.js';
 import * as oauth from './oauth.js';
+import { assertSafeMailHost } from './net_guard.js';
 
 const IDLE_CLOSE_MS = 10 * 60 * 1000;
 
@@ -25,6 +26,8 @@ export function friendlyImapError(e) {
 }
 
 export async function buildClient(mb, password) {
+  // 连接前复检 DNS，缩小绑定时校验与实际连接之间的重绑定窗口
+  await assertSafeMailHost(mb.imap_host, 'IMAP');
   let auth;
   if (mb.oauth_refresh_enc || mb.oauth_access_enc) {
     const accessToken = await oauth.ensureAccessToken(mb);

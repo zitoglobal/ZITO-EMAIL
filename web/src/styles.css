@@ -7,7 +7,14 @@
    ============================================================ */
 
 :root {
-  --font: 'Instrument Sans Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font: 'Instrument Sans Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'HarmonyOS Sans SC', 'HarmonyOS Sans', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --safe-t: 0px;
+  --safe-r: 0px;
+  --safe-b: 0px;
+  --safe-l: 0px;
+  --vvh: 100dvh;
+  --vv-top: 0px;
+  --mob-nav-h: 56px;
 
   /* Surfaces · light (spark-palette §2.1) */
   --bg: #f2f5fa;
@@ -73,6 +80,22 @@
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   color-scheme: light;
 }
+@supports (padding: constant(safe-area-inset-top)) {
+  :root {
+    --safe-t: constant(safe-area-inset-top);
+    --safe-r: constant(safe-area-inset-right);
+    --safe-b: constant(safe-area-inset-bottom);
+    --safe-l: constant(safe-area-inset-left);
+  }
+}
+@supports (padding: env(safe-area-inset-top)) {
+  :root {
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-l: env(safe-area-inset-left, 0px);
+  }
+}
 
 [data-theme='dark'] {
   /* Surfaces · near-navy ladder (#050A14 / #0B1528 / #122038 / #1A2B45) */
@@ -130,8 +153,20 @@
 
 /* ---------- 基础 ---------- */
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; }
+html, body, #root {
+  height: 100%;
+  height: 100dvh;
+  margin: 0;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html { height: -webkit-fill-available; }
 body {
+  min-height: 100%;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+  overscroll-behavior-y: contain;
+  -webkit-tap-highlight-color: transparent;
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.5;
@@ -1821,22 +1856,126 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
   .login-side { padding: 24px 16px 40px; }
   .relation-card { margin-left: 0; }
   .mb-sync-strip { left: 0; }
+  .sidebar {
+    padding-top: max(14px, var(--safe-t));
+    padding-bottom: max(10px, var(--safe-b));
+    padding-left: max(10px, var(--safe-l));
+    width: min(272px, calc(100vw - 48px));
+  }
+  .sidebar-mask {
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
   .zm-mob-nav {
-    display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 65;
-    height: calc(56px + env(safe-area-inset-bottom, 0px)); padding: 0 8px env(safe-area-inset-bottom, 0px);
-    background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(14px);
-    border-top: 1px solid var(--hairline); box-shadow: 0 -8px 24px -16px rgba(11, 31, 58, 0.28);
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 65;
+    height: calc(var(--mob-nav-h) + var(--safe-b));
+    padding: 0 max(8px, var(--safe-r)) var(--safe-b) max(8px, var(--safe-l));
+    background: color-mix(in srgb, var(--panel) 92%, transparent);
+    backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    border-top: 1px solid var(--hairline);
+    box-shadow: 0 -8px 24px -16px rgba(11, 31, 58, 0.28);
+    /* 折叠屏 / 横屏：避开系统手势条 */
+    padding-bottom: max(var(--safe-b), env(safe-area-inset-bottom, 0px));
   }
   .zm-mob-nav button {
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-    color: var(--muted); font-size: 11px; font-weight: 600; border-radius: 12px; margin: 4px 2px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-height: 44px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 12px;
+    margin: 4px 2px;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .zm-mob-nav button.on { color: var(--accent); background: var(--accent-soft); }
   .zm-mob-nav button.zm-mob-compose { color: var(--accent-ink); }
   .zm-mob-nav button:active { background: var(--hover); }
-  .app.zm-has-mob:not(.has-selection) .list-pane { padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px)); }
+  .app.zm-has-mob:not(.has-selection) .list-pane,
+  .app.zm-has-mob:not(.has-selection) .focus-pane,
+  .app.zm-has-mob:not(.has-selection) .waiting-pane {
+    padding-bottom: calc(var(--mob-nav-h) + var(--safe-b) + 8px);
+  }
   .app.has-selection .zm-mob-nav { display: none; }
-  .toasts { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+  .toasts { bottom: calc(var(--mob-nav-h) + var(--safe-b) + 16px); left: max(16px, var(--safe-l)); right: max(16px, var(--safe-r)); }
+}
+
+/* —— 导航全端深适配：微信 / iOS / Android / 鸿蒙 / 桌面 / 折叠 —— */
+@media (max-width: 900px) {
+  /* 软键盘：收起底栏，避免挡输入 */
+  body.kb-open .zm-mob-nav { transform: translateY(110%); pointer-events: none; opacity: 0; transition: transform 0.18s var(--ease), opacity 0.15s; }
+  body.kb-open .toasts { bottom: calc(16px + var(--safe-b)); }
+
+  /* 微信内置浏览器：底栏略抬高，避开菜单手势条 */
+  html.plat-wechat .zm-mob-nav,
+  body.in-wechat .zm-mob-nav {
+    padding-bottom: max(8px, calc(var(--safe-b) + 2px));
+    height: calc(var(--mob-nav-h) + max(8px, calc(var(--safe-b) + 2px)));
+  }
+
+  /* iOS：禁橡皮筋抢滚动；底栏用实色防透出 */
+  html.plat-ios {
+    overscroll-behavior-y: none;
+  }
+  html.plat-ios .zm-mob-nav {
+    background: color-mix(in srgb, var(--panel) 96%, transparent);
+  }
+
+  /* Android：地址栏伸缩用视觉视口；触控反馈 */
+  html.plat-android .app {
+    min-height: var(--vvh, 100dvh);
+  }
+
+  /* 鸿蒙：backdrop 易闪，改实底 */
+  html.plat-harmony .zm-mob-nav,
+  html.plat-harmony .sidebar {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--panel);
+  }
+
+  /* 窄屏 / 外屏折叠 */
+  @media (max-width: 380px) {
+    .zm-mob-nav button { font-size: 10px; margin: 3px 1px; gap: 1px; }
+    .zm-mob-nav button svg { width: 18px; height: 18px; }
+    :root { --mob-nav-h: 52px; }
+  }
+
+  /* 矮屏横持 */
+  @media (max-height: 420px) and (orientation: landscape) {
+    :root { --mob-nav-h: 44px; }
+    .zm-mob-nav button span { display: none; }
+    .zm-mob-nav button { gap: 0; }
+  }
+}
+
+/* 仅精确定点设备 hover，避免触控 sticky */
+@media (hover: hover) and (pointer: fine) {
+  .zm-mob-nav button:hover { background: var(--hover); color: var(--text); }
+  .zm-mob-nav button.on:hover { background: var(--accent-soft); color: var(--accent); }
+}
+
+/* 桌面宽屏：底栏隐藏（已有），侧栏顶安全区留给刘海外接屏 */
+@media (min-width: 901px) {
+  .sidebar { padding-top: max(0px, var(--safe-t)); }
+  html.plat-desktop .zm-mob-nav { display: none !important; }
+}
+
+/* 折叠展开中宽（约平板）：仍用抽屉+底栏，触控目标加大 */
+@media (min-width: 600px) and (max-width: 900px) {
+  .zm-mob-nav button { font-size: 12px; min-height: 48px; }
+  .sidebar { width: min(320px, 42vw); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
