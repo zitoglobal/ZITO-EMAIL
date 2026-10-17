@@ -42,8 +42,13 @@ export const domainOf = (a) => String(a || '').toLowerCase().split('@')[1] || ''
 export const isFreeDomain = (d) => FREE_DOMAINS.has(d);
 
 const TIER_SCORE = { vip: 50, customer: 30, new: 12, colleague: 8, bulk: -40, muted: -80, self: -80 };
-const SIGNAL_SCORE = { urgent: 22, complaint: 22, order: 20, payment: 18, inquiry: 14, sample: 10, shipping: 8, question: 6 };
-const SIGNAL_LABEL = { urgent: '紧急', complaint: '投诉', order: '订单', payment: '付款', inquiry: '询盘', sample: '样品', shipping: '物流', question: '有提问' };
+const SIGNAL_SCORE = {
+  urgent: 22, complaint: 22, order: 20, payment: 18, inquiry: 14, sample: 12, fabric: 9, fit: 9, shipping: 8, question: 6,
+};
+const SIGNAL_LABEL = {
+  urgent: '紧急', complaint: '投诉', order: '订单', payment: '付款', inquiry: '询盘', sample: '样品',
+  fabric: '面料', fit: '尺码', shipping: '物流', question: '有提问',
+};
 const TIER_LABEL = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事' };
 
 // ---------- 发件人关系索引 ----------

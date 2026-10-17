@@ -152,7 +152,7 @@ export function registerCollabRoutes(app, ctx) {
     wrap(async (req, res) => {
       const mid = Number(req.params.messageId);
       if (!Number.isInteger(mid)) throw httpError(400, '无效 id');
-      res.json({ viewers: presence.list(mid, req.user.id) });
+      res.json({ viewers: presence.list(mid, req.user.id, req.query.threadId || null) });
     })
   );
 

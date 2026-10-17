@@ -265,6 +265,12 @@ export default function ContactsPanel({ notify }) {
   useEffect(() => { load(); loadTags(); }, []);
 
   useEffect(() => {
+    const onBump = () => load(q);
+    window.addEventListener('zm-contacts', onBump);
+    return () => window.removeEventListener('zm-contacts', onBump);
+  }, [q]);
+
+  useEffect(() => {
     const t = setTimeout(() => load(q), 220);
     return () => clearTimeout(t);
   }, [q]);

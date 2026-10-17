@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   X, Trash2, Plus, Moon, Sun, Bell, Sparkles, RefreshCw, ArrowUp, ArrowDown, Server, Loader2, AlertCircle, CheckCircle2, Mail,
   SlidersHorizontal, FileStack, User, Users, Pencil, LogOut, Image, Undo2, MessagesSquare, Rows3, KeyRound, ListTodo, Hourglass, Send,
@@ -6,11 +6,16 @@ import {
 } from 'lucide-react';
 import { LAYOUT_MODES } from '../layout.js';
 import { api } from '../api.js';
-import { MAILBOX_COLORS, relativeTime } from '../utils.js';
+import {
+  MAILBOX_COLORS, fileToInlineDataUrl, htmlToText, insertHtmlAtCursor, insertImageAtCursor, looksLikeHtml, relativeTime,
+  sanitizeHtml, textToHtml,
+} from '../utils.js';
+import { signatureHtml } from '../compose.js';
 import MailboxForm from './MailboxForm.jsx';
 import MailRulesPanel from './MailRulesPanel.jsx';
 import ContactsPanel from './ContactsPanel.jsx';
 import { disableWebPush, enableWebPush, pushStatus } from '../pushClient.js';
+import { APPAREL_EMAIL_TEMPLATES, APPAREL_GLOSSARY_EXTRA } from '../apparelPresets.js';
 
 const TRADE_GLOSSARY_PRESET = [
   { src: 'MOQ', dst: '最小起订量' },
@@ -21,6 +26,8 @@ const TRADE_GLOSSARY_PRESET = [
   { src: 'Lab Dip', dst: '色样 / 确认色' },
   { src: 'PP sample', dst: '产前样' },
   { src: 'SMS', dst: '推销样' },
+  { src: 'Fit sample', dst: '试穿样 / 合体样' },
+  { src: 'Tech pack', dst: '工艺单 / 技术包' },
   { src: 'Bulk', dst: '大货' },
   { src: 'Lead time', dst: '交货周期' },
   { src: 'PO', dst: '采购订单' },
@@ -29,8 +36,13 @@ const TRADE_GLOSSARY_PRESET = [
   { src: 'OEM', dst: '贴牌生产' },
   { src: 'ODM', dst: '设计代工' },
   { src: 'QC', dst: '质检' },
+  { src: 'AQL', dst: '可接受质量水平（抽检）' },
+  { src: 'GSM', dst: '克重' },
+  { src: 'Size run', dst: '尺码配比' },
+  { src: 'Colorway', dst: '配色' },
   { src: 'T/T', dst: '电汇' },
   { src: 'L/C', dst: '信用证' },
+  ...APPAREL_GLOSSARY_EXTRA,
 ];
 
 const TABS = [
@@ -46,18 +58,68 @@ const TABS = [
 const DEFAULT_LABEL_COLORS = ['#0a66ff', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#0d9488', '#475569', '#0891b2'];
 
 
+function serializeSignatureEditor(el) {
+  if (!el) return '';
+  const html = sanitizeHtml(el.innerHTML || '');
+  if (!html.trim() || html === '<br>') return '';
+  // 无图无链 → 存纯文本，兼容旧逻辑
+  if (!/<img\b/i.test(html) && !/<a\b/i.test(html)) return htmlToText(html);
+  return html;
+}
+
+function signatureEditorHtml(sig) {
+  const raw = String(sig || '').trim();
+  if (!raw) return '';
+  return looksLikeHtml(raw) ? sanitizeHtml(raw) : textToHtml(raw);
+}
+
 function MailboxCard({ mb, index, total, onMove, onChanged, notify, focus }) {
   const [name, setName] = useState(mb.name || '');
   const [color, setColor] = useState(mb.color);
   const [signature, setSignature] = useState(mb.signature || '');
   const [editConn, setEditConn] = useState(focus && mb.status === 'error');
   const [busy, setBusy] = useState('');
+  const [sigBusy, setSigBusy] = useState(false);
+  const sigRef = useRef(null);
+  const sigFileRef = useRef(null);
   const dirty = name !== (mb.name || '') || color !== mb.color || signature !== (mb.signature || '');
+
+  useEffect(() => {
+    if (sigRef.current) sigRef.current.innerHTML = signatureEditorHtml(mb.signature || '');
+    setSignature(mb.signature || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mb.id, mb.signature]);
+
+  function syncSigFromEditor() {
+    const next = serializeSignatureEditor(sigRef.current);
+    setSignature(next);
+    return next;
+  }
+
+  async function insertSigImage(file) {
+    if (!file || !sigRef.current) return;
+    setSigBusy(true);
+    try {
+      const dataUrl = await fileToInlineDataUrl(file, { maxW: 400, maxH: 240, maxBytes: 220_000 });
+      sigRef.current.focus();
+      const ok = insertImageAtCursor(dataUrl, sigRef.current, { alt: '签名图片', maxWidth: 240 });
+      if (!ok) throw new Error('图片未能插入编辑器，请改用「插入图片」按钮重试');
+      const sig = syncSigFromEditor();
+      if (!/<img\b/i.test(sig)) throw new Error('图片未写入签名，请插入后立刻点保存');
+      notify('已插入签名图片 · 请点「保存」生效', 'success');
+    } catch (e) {
+      notify(e.message || '插入图片失败', 'error');
+    } finally {
+      setSigBusy(false);
+    }
+  }
 
   async function save() {
     setBusy('save');
     try {
-      await api(`/mailboxes/${mb.id}`, { method: 'PATCH', body: { name, color, signature } });
+      const sig = syncSigFromEditor();
+      await api(`/mailboxes/${mb.id}`, { method: 'PATCH', body: { name, color, signature: sig } });
+      setSignature(sig);
       notify('已保存');
       onChanged();
     } catch (e) {
@@ -126,10 +188,75 @@ function MailboxCard({ mb, index, total, onMove, onChanged, notify, focus }) {
           </div>
         </div>
       </div>
-      <label className="field">
-        <span>签名（写信时自动附加，切换发件邮箱时自动替换）</span>
-        <textarea rows={3} value={signature} onChange={(e) => setSignature(e.target.value)} placeholder={'例如：\nAlice Chen | Sales Manager\nGuangzhou Elevia Apparel Technology Co., Ltd.'} />
-      </label>
+      <div className="field">
+        <span>签名（写信时自动附加；可粘贴 / 插入 Logo 图片）</span>
+        <div
+          ref={sigRef}
+          className="sig-editor"
+          contentEditable
+          suppressContentEditableWarning
+          data-placeholder="Alice Chen | Sales Manager&#10;可粘贴公司 Logo…"
+          onInput={syncSigFromEditor}
+          onPaste={(e) => {
+            const items = [...(e.clipboardData?.items || [])];
+            const imgItem = items.find((i) => i.type.startsWith('image/'));
+            if (imgItem) {
+              e.preventDefault();
+              const f = imgItem.getAsFile();
+              if (f) insertSigImage(f);
+              return;
+            }
+            const fileImg = [...(e.clipboardData?.files || [])].find((f) => String(f.type || '').startsWith('image/'));
+            if (fileImg) {
+              e.preventDefault();
+              insertSigImage(fileImg);
+              return;
+            }
+            // HTML 剪贴板：仅当已含 data:image 时 DOM 插入；外链图无效，提示用「插入图片」
+            const html = e.clipboardData?.getData('text/html');
+            if (html && /<img\b/i.test(html)) {
+              e.preventDefault();
+              const cleaned = sanitizeHtml(html);
+              if (/data:image\//i.test(cleaned)) {
+                insertHtmlAtCursor(cleaned, sigRef.current);
+                syncSigFromEditor();
+              } else {
+                notify('剪贴板图片无法直接使用，请点「插入图片」选本地 Logo', 'error');
+              }
+            }
+          }}
+        />
+        <div className="sig-editor-tools">
+          <button type="button" className="btn-ghost sm" disabled={sigBusy} onClick={() => sigFileRef.current?.click()}>
+            {sigBusy ? <Loader2 size={13} className="spin" /> : <Image size={13} />} 插入图片
+          </button>
+          <button
+            type="button"
+            className="btn-ghost sm"
+            onClick={() => {
+              if (sigRef.current) sigRef.current.innerHTML = '';
+              setSignature('');
+            }}
+          >
+            清空
+          </button>
+          <small className="muted">粘贴截图或选文件；自动压缩。切换发件箱时会替换签名。</small>
+          <input
+            ref={sigFileRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) insertSigImage(f);
+            }}
+          />
+        </div>
+        {signature && /<img\b/i.test(signature) && (
+          <div className="sig-preview" dangerouslySetInnerHTML={{ __html: signatureHtml(signature) }} />
+        )}
+      </div>
       <div className="set-actions">
         <button className="btn-primary sm" disabled={!dirty || busy === 'save'} onClick={save}>
           {busy === 'save' && <Loader2 size={13} className="spin" />} 保存
@@ -536,6 +663,7 @@ function Triage({ settings, onSave, notify, mailboxes = [], isAdmin = false }) {
 function Templates({ notify }) {
   const [list, setList] = useState(null);
   const [edit, setEdit] = useState(null);
+  const [seeding, setSeeding] = useState(false);
 
   const load = () => api('/templates').then((r) => setList(r.templates)).catch((e) => notify(e.message, 'error'));
   useEffect(() => {
@@ -560,6 +688,27 @@ function Templates({ notify }) {
     load();
   }
 
+  async function seedApparel() {
+    const names = new Set((list || []).map((t) => String(t.name || '').toLowerCase()));
+    const todo = APPAREL_EMAIL_TEMPLATES.filter((t) => !names.has(t.name.toLowerCase()));
+    if (!todo.length) {
+      notify('服装外贸模板已全部存在，无需重复导入');
+      return;
+    }
+    setSeeding(true);
+    try {
+      for (const t of todo) {
+        await api('/templates', { method: 'POST', body: t });
+      }
+      load();
+      notify(`已导入 ${todo.length} 个服装外贸模板`);
+    } catch (e) {
+      notify(e.message || '导入失败', 'error');
+    } finally {
+      setSeeding(false);
+    }
+  }
+
   return (
     <>
       <p className="set-desc">常用回复、报价、开发信可以存成模板，写信时一键插入。正文中的 <code>{'{{name}}'}</code> 会自动替换为收件人称呼。</p>
@@ -574,7 +723,12 @@ function Templates({ notify }) {
           </div>
         </div>
       ) : (
-        <button className="btn-ghost" onClick={() => setEdit({ name: '', subject: '', body: '' })}><Plus size={15} /> 新建模板</button>
+        <div className="set-actions" style={{ marginBottom: 10 }}>
+          <button className="btn-ghost" onClick={() => setEdit({ name: '', subject: '', body: '' })}><Plus size={15} /> 新建模板</button>
+          <button className="btn-ghost" disabled={seeding || list == null} onClick={seedApparel}>
+            {seeding ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} 导入服装外贸模板
+          </button>
+        </div>
       )}
       {list?.map((t) => (
         <div key={t.id} className="tpl-row">

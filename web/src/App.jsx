@@ -487,6 +487,8 @@ export default function App() {
     mbRef,
     setMailboxes,
     setOutboxVersion,
+    setLabels,
+    setSavedSearches,
     openMessage,
     goToday,
     goBox: (box) => setView({ mailboxId: 'all', box }),
@@ -1408,6 +1410,7 @@ export default function App() {
           aiBusy={aiBusy}
           onAiAction={runAiAction}
           aiActionBusy={aiActionBusy}
+          onGoToday={() => setView({ mailboxId: 'all', box: 'today' })}
         />
       ) : view.box === 'team' ? (
         <TeamQueue
@@ -1427,6 +1430,11 @@ export default function App() {
           onOpenDeal={(d) => {
             if (d.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
           }}
+          onOpenDealMail={(id, d) => {
+            openMessage(id, { box: 'inbox' });
+            if (d?.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
+          }}
+          onComposeOutreach={(hint) => openCompose('new', null, hint || {})}
         />
       ) : view.box === 'insights' ? (
         <Insights
@@ -1437,6 +1445,8 @@ export default function App() {
             setView({ mailboxId: 'all', box: box || 'today' });
             setSidebarOpen(false);
           }}
+          onOpenMessage={(id) => openMessage(id, { box: 'today' })}
+          onOpenSettings={(tab) => setModal({ type: 'settings', tab: tab || 'mailboxes' })}
         />
       ) : (
         <MailList

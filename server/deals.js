@@ -79,6 +79,8 @@ function publicDeal(row, viewerId) {
     nextFollowAt: row.next_follow_at || null,
     lastThreadId: row.last_thread_id || null,
     lastAddress: row.last_address || null,
+    /** 当前用户邮箱内可打开的最近线索邮件（列表附加，见 attachLastMessageIds） */
+    lastMessageId: row._lastMessageId != null ? row._lastMessageId : null,
     owner: owner
       ? { id: owner.id, name: owner.name || owner.email, email: owner.email, role: owner.role }
       : { id: row.owner_user_id, name: '未知同事', email: '', role: 'member' },
@@ -520,21 +522,70 @@ export function listDeals(viewerId, { owner = 'mine', stage, limit = 100 } = {})
     params.push(stage);
   }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const at = now();
+  // 跟进到期置顶 → 有跟进日 → 最近更新
   const rows = db
-    .prepare(`SELECT * FROM deals ${where} ORDER BY updated_at DESC LIMIT ?`)
-    .all(...params, lim);
+    .prepare(
+      `SELECT * FROM deals ${where}
+       ORDER BY
+         CASE
+           WHEN next_follow_at IS NOT NULL AND next_follow_at <= ? THEN 0
+           WHEN next_follow_at IS NOT NULL THEN 1
+           ELSE 2
+         END,
+         next_follow_at ASC,
+         updated_at DESC
+       LIMIT ?`
+    )
+    .all(...params, at, lim);
+  attachLastMessageIds(viewerId, rows);
   return rows.map((r) => publicDeal(r, viewerId));
 }
 
-/** 从主题/正文推断「发信后可推进到」的阶段（软建议，不自动改） */
+/** 为管线列表解析「打开线索」用的本账号最近邮件 id */
+function attachLastMessageIds(viewerId, rows) {
+  if (!rows?.length) return;
+  const byThread = db.prepare(
+    `SELECT m.id FROM messages m
+     JOIN mailboxes b ON b.id = m.mailbox_id
+     WHERE b.user_id = ? AND m.thread_id = ?
+     ORDER BY m.date DESC LIMIT 1`
+  );
+  const byAddr = db.prepare(
+    `SELECT m.id FROM messages m
+     JOIN mailboxes b ON b.id = m.mailbox_id
+     WHERE b.user_id = ? AND LOWER(m.from_addr) = ?
+     ORDER BY m.date DESC LIMIT 1`
+  );
+  const byTo = db.prepare(
+    `SELECT m.id FROM messages m
+     JOIN mailboxes b ON b.id = m.mailbox_id
+     WHERE b.user_id = ? AND LOWER(m.to_json) LIKE ?
+     ORDER BY m.date DESC LIMIT 1`
+  );
+  for (const r of rows) {
+    let mid = null;
+    if (r.last_thread_id) {
+      mid = byThread.get(viewerId, r.last_thread_id)?.id || null;
+    }
+    if (!mid && r.last_address) {
+      const addr = String(r.last_address).trim().toLowerCase();
+      mid = byAddr.get(viewerId, addr)?.id || null;
+      if (!mid) mid = byTo.get(viewerId, `%"${addr}"%`)?.id || null;
+    }
+    r._lastMessageId = mid;
+  }
+}
+
+/** 从主题/正文推断「发信后可推进到」的阶段（软建议，不自动改；服装链路优先） */
 export function suggestStageAfterSend(currentStage, subject = '', text = '') {
   const blob = `${subject}\n${text}`.toLowerCase();
   let hint = null;
-  if (/\b(pi|proforma|invoice|payment|tt\b|wire|deposit|付款|形式发票|定金|尾款)\b/i.test(blob)) hint = 'payment';
-  else if (/\b(po\b|purchase order|bulk order|大货|订单确认|confirm.*(order|po))\b/i.test(blob)) hint = 'bulk';
-  else if (/\b(sample|lab dip|strike off|样品|色卡|产前样)\b/i.test(blob)) hint = 'sample';
-  else if (/\b(quot(e|ation)|offer|price list|报价|单价|fob|cif)\b/i.test(blob)) hint = 'quote';
-  else if (/\b(inquiry|enquiry|rfq|询盘|询价)\b/i.test(blob)) hint = 'inquiry';
+  if (/\b(pi|proforma|invoice|payment|tt\b|wire|deposit|付款|形式发票|定金|尾款|水单)\b/i.test(blob)) hint = 'payment';
+  else if (/\b(po\b|purchase order|bulk order|大货|订单确认|confirm.*(order|po)|size run|packing list|carton mark)\b/i.test(blob)) hint = 'bulk';
+  else if (/\b(sample|lab dip|strike.?off|fit sample|pp sample|size set|sms\b|样品|色卡|产前样|推销样|试穿样)\b/i.test(blob)) hint = 'sample';
+  else if (/\b(quot(e|ation)|offer|price list|报价|单价|fob|cif|moq)\b/i.test(blob)) hint = 'quote';
+  else if (/\b(inquiry|enquiry|rfq|tech\s*pack|询盘|询价|工艺单)\b/i.test(blob)) hint = 'inquiry';
   if (!hint) return null;
   const order = STAGES.map((s) => s.id);
   const cur = order.indexOf(currentStage || 'inquiry');

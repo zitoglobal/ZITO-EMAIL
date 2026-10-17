@@ -262,7 +262,8 @@ function mailContext(m) {
   return `发件人：${from}\n主题：${m.subject || ''}\n日期：${m.date || ''}\n\n正文：\n${body}${history}`;
 }
 
-const SYSTEM = '你是 ZITO 智能邮箱的 AI 助理，服务于一家外贸服装企业。你专业、简洁、准确，不编造邮件中没有的事实。';
+const SYSTEM =
+  '你是 ZITO 智能邮箱的 AI 助理，服务于外贸服装（成衣 OEM/ODM）企业。你熟悉询盘→报价→样品（色卡/Fit/PP）→大货→付款→出货链路，用语专业简洁；涉及面料、尺码、MOQ、交期、贸易术语时用行业惯用英文（海外客户）或中英对照（国内协作），绝不编造邮件中没有的价格、日期、数量等事实，未知处用 [ ] 占位。';
 
 /** Heuristic language tag for mail body: '中文' | 'English' | '其他'. */
 export function detectLang(text) {
@@ -494,22 +495,34 @@ ${list}`,
 
 export async function digest(items) {
   const list = items
-    .slice(0, 30)
-    .map((m, i) => `${i + 1}. [uid:${m.uid}] 来自 ${m.from?.name || m.from?.address}｜${m.subject}｜${(m.snippet || '').slice(0, 120)}`)
+    .slice(0, 36)
+    .map((m, i) => {
+      const kind =
+        m.digestKind === 'need_reply'
+          ? '待我回复'
+          : m.digestKind === 'waiting'
+            ? '等对方'
+            : m.digestKind === 'unread'
+              ? '未读补漏'
+              : '邮件';
+      const why = m.priority?.why || m.follow?.why || '';
+      const tier = m.priority?.tier || m.follow?.tier || m.tier || '';
+      return `${i + 1}. [uid:${m.uid}] [${kind}]${tier ? ` tier:${tier}` : ''}${why ? `｜${why}` : ''}｜来自 ${m.from?.name || m.from?.address}｜${m.subject}｜${(m.snippet || '').slice(0, 100)}`;
+    })
     .join('\n');
-  const route = routeForTask('digest', { text: list.slice(0, 1500), itemCount: items?.length || 0 });
+  const route = routeForTask('digest', { text: list.slice(0, 1800), itemCount: items?.length || 0 });
   return chat(
     [
       { role: 'system', content: SYSTEM },
       {
         role: 'user',
-        content: `下面是收件箱里的未读邮件，请帮我做一份今日邮件简报，输出 JSON：
+        content: `下面是「今日待办 / 等待对方」为主、少量未读客户信为辅的候选列表（已过滤通知订阅噪音）。请做销售向今日简报，输出 JSON：
 {
-  "overview": "一句话总体情况",
+  "overview": "一句话总体情况（突出超时/VIP/待回）",
   "priorities": [{"uid": 数字, "reason": "为什么需要优先处理", "action": "建议动作"}],
-  "groups": [{"title": "主题分组名，如 客户询盘 / 订单物流 / 系统通知", "uids": [数字], "summary": "该组概括"}]
+  "groups": [{"title": "主题分组名，如 客户询盘 / 订单物流 / 等待跟进", "uids": [数字], "summary": "该组概括"}]
 }
-priorities 最多 5 条，按重要程度排序。
+priorities 最多 5 条，优先 [待我回复] 与 VIP/超时；不要把系统通知当优先。
 
 ${list}`,
       },

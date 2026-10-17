@@ -1,7 +1,10 @@
 /**
  * 团队认领 / 业务阶段路由（从 index 拆出）。
  */
-function broadcastDeal(emit, users) {
+function broadcastDeal(emit, users, teamQueue) {
+  try {
+    teamQueue?.invalidateQueueStatsCache?.();
+  } catch (_) {}
   for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
 }
 
@@ -60,7 +63,8 @@ function notifyMailboxOwnerOnClaim({ db, emit, push, deal, claimer, body }) {
 }
 
 export function registerDealsRoutes(app, ctx) {
-  const { auth, wrap, rateLimit, deals, labels, emit, users, push, db } = ctx;
+  const { auth, wrap, rateLimit, deals, labels, emit, users, push, db, teamQueue } = ctx;
+  const bump = () => broadcastDeal(emit, users, teamQueue);
 
   app.get(
     '/api/deals/lookup',
@@ -103,7 +107,7 @@ export function registerDealsRoutes(app, ctx) {
     wrap(async (req, res) => {
       const body = req.body || {};
       const deal = deals.claim(req.user.id, body);
-      broadcastDeal(emit, users);
+      bump();
       notifyMailboxOwnerOnClaim({ db, emit, push, deal, claimer: req.user, body });
       const hint = db ? focusHint(db, req.user.id, body) : { openToday: true };
       res.json({ deal, focusHint: hint });
@@ -114,7 +118,7 @@ export function registerDealsRoutes(app, ctx) {
     auth,
     wrap(async (req, res) => {
       const deal = deals.splitToPerson(req.user.id, Number(req.params.id));
-      broadcastDeal(emit, users);
+      bump();
       res.json({ deal });
     })
   );
@@ -123,7 +127,7 @@ export function registerDealsRoutes(app, ctx) {
     auth,
     wrap(async (req, res) => {
       const deal = deals.assign(req.user.id, req.body || {});
-      broadcastDeal(emit, users);
+      bump();
       if (deal?.owner?.id) {
         emit(deal.owner.id, 'sync', { local: true, deal: true, assigned: true });
         emit(deal.owner.id, 'deal-assigned', {
@@ -178,7 +182,7 @@ export function registerDealsRoutes(app, ctx) {
           skipped.push({ address: it.address, error: e.message, deal: e.deal || null });
         }
       }
-      broadcastDeal(emit, users);
+      bump();
       res.json({ claimed, skipped, claimedCount: claimed.length, skippedCount: skipped.length });
     })
   );
@@ -187,7 +191,7 @@ export function registerDealsRoutes(app, ctx) {
     auth,
     wrap(async (req, res) => {
       deals.release(req.user.id, Number(req.params.id));
-      broadcastDeal(emit, users);
+      bump();
       res.json({ ok: true });
     })
   );
@@ -216,7 +220,7 @@ export function registerDealsRoutes(app, ctx) {
         if (!row) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
         deal = deals.lookup(req.user.id, { address: row.last_address }).deal;
       }
-      broadcastDeal(emit, users);
+      bump();
       res.json({ deal, stageLabel });
     })
   );

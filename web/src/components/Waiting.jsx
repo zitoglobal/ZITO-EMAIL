@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Menu, RefreshCw, Hourglass, Hand, Loader2, Sparkles } from 'lucide-react';
+import React, { useMemo, useRef, useState } from 'react';
+import { Menu, RefreshCw, Hourglass, Hand, Loader2, Sparkles, Archive, Trash2, CheckCircle2, MailOpen, PartyPopper, ListTodo } from 'lucide-react';
 import { api } from '../api.js';
 import { Row } from './MailList.jsx';
 import ClaimFilter, { filterByClaim, loadClaimFilter, saveClaimFilter } from './ClaimFilter.jsx';
@@ -13,8 +13,9 @@ const TABS = [
 /** 统一 Waiting：复用 Focus 数据 + Row；支持单封/批量认领与 AI 分诊 */
 export default function Waiting({
   data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, onFollowUp, onMenu, tab, setTab, notify, checked, setChecked,
-  aiEnabled, onAiTriage, aiBusy, onAiAction, aiActionBusy,
+  aiEnabled, onAiTriage, aiBusy, onAiAction, aiActionBusy, onGoToday,
 }) {
+  const lastChecked = useRef(null);
   const reply = messages.filter((m) => m._section === 'reply');
   const follow = messages.filter((m) => m._section === 'follow');
   const overdue = reply.filter((m) => m.priority?.overdue);
@@ -120,6 +121,7 @@ export default function Waiting({
   }
 
   const showClaimBatch = tab === 'mine' || tab === 'overdue';
+  const ids = checked?.size ? [...checked] : [];
 
   return (
     <section className="list-pane waiting-pane">
@@ -142,11 +144,6 @@ export default function Waiting({
               {aiBusy ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} AI 分析
             </button>
           )}
-          {showClaimBatch && checked?.size > 0 && (
-            <button type="button" className="icon-btn" title="批量认领未跟客户" disabled={claimBusy} onClick={claimSelected}>
-              {claimBusy ? <Loader2 size={15} className="spin" /> : <Hand size={15} />}
-            </button>
-          )}
           <button type="button" className="icon-btn" onClick={onRefresh} title="同步" aria-label="同步">
             <RefreshCw size={16} className={refreshing ? 'spin' : ''} />
           </button>
@@ -166,6 +163,26 @@ export default function Waiting({
         </div>
         <ClaimFilter value={claimFilter} onChange={setClaim} unclaimedN={unclaimedN} mineN={mineN} />
         <p className="waiting-hint">默认「跟进中」= 未认领+我跟 · 可单封/批量认领 · 等对方勿催同事客户</p>
+        {checked && checked.size > 0 && (
+          <div className="bulk" style={{ padding: '0 0 2px' }}>
+            <span>已选 {checked.size}</span>
+            {showClaimBatch && (
+              <button type="button" title="批量认领未跟客户" aria-label="批量认领" disabled={claimBusy} onClick={claimSelected}>
+                {claimBusy ? <Loader2 size={15} className="spin" /> : <Hand size={15} />}
+              </button>
+            )}
+            <button type="button" title="标为已读" aria-label="标为已读" onClick={() => onAction(ids, 'read')}><MailOpen size={15} /></button>
+            <button type="button" title="归档" aria-label="归档" onClick={() => onAction(ids, 'archive')}><Archive size={15} /></button>
+            <button type="button" title="删除" aria-label="删除" onClick={() => onAction(ids, 'trash')}><Trash2 size={15} /></button>
+            {(tab === 'mine' || tab === 'overdue') && (
+              <button type="button" title="无需回复" aria-label="无需回复" onClick={() => onAction(ids, 'done')}><CheckCircle2 size={15} /></button>
+            )}
+            {tab === 'them' && (
+              <button type="button" title="无需跟进" aria-label="无需跟进" onClick={() => onAction(ids, 'nofollow')}><CheckCircle2 size={15} /></button>
+            )}
+            <button type="button" className="text" onClick={() => setChecked(new Set())}>取消</button>
+          </div>
+        )}
       </header>
       <div className="list-body">
         {error && <div className="list-error">{error}</div>}
@@ -177,11 +194,19 @@ export default function Waiting({
           </div>
         )}
         {!loading && !list.length && !error && (
-          <div className="empty">
-            <Hourglass size={42} strokeWidth={1.2} />
+          <div className="empty focus-empty">
+            {tab === 'overdue' ? <PartyPopper size={42} strokeWidth={1.2} /> : <Hourglass size={42} strokeWidth={1.2} />}
             <p>{emptyText}</p>
+            {tab === 'overdue' && claimFilter === 'all' && (
+              <small className="muted">超时清零 · 继续保持</small>
+            )}
             {claimFilter !== 'all' && (
               <button type="button" className="btn-ghost sm" onClick={() => setClaim('all')}>查看全部</button>
+            )}
+            {tab === 'overdue' && claimFilter === 'all' && onGoToday && (
+              <button type="button" className="btn-ghost sm" onClick={onGoToday}>
+                <ListTodo size={13} /> 去今日待办
+              </button>
             )}
           </div>
         )}
@@ -194,11 +219,21 @@ export default function Waiting({
             selected={selectedId === m.id}
             checked={checked?.has?.(m.id) || false}
             onSelect={onSelect}
-            onToggleCheck={(id) => {
+            onToggleCheck={(id, range) => {
               if (!setChecked) return onSelect(m);
+              const ids = list.map((x) => x.id);
               setChecked((prev) => {
                 const next = new Set(prev || []);
+                if (range && lastChecked.current != null) {
+                  const a = ids.indexOf(lastChecked.current);
+                  const b = ids.indexOf(id);
+                  if (a >= 0 && b >= 0) {
+                    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) next.add(ids[i]);
+                    return next;
+                  }
+                }
                 next.has(id) ? next.delete(id) : next.add(id);
+                lastChecked.current = id;
                 return next;
               });
             }}

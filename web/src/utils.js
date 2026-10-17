@@ -136,12 +136,158 @@ export function sanitizeHtml(html = '') {
   doc.body.querySelectorAll('*').forEach((el) => {
     for (const attr of [...el.attributes]) {
       const name = attr.name.toLowerCase();
-      if (name.startsWith('on') || (/^(href|src|xlink:href|action|formaction)$/.test(name) && /^\s*(javascript|vbscript|data:text)/i.test(attr.value))) {
+      const val = attr.value || '';
+      if (name.startsWith('on')) {
         el.removeAttribute(attr.name);
+        continue;
       }
+      if (/^(href|src|xlink:href|action|formaction)$/.test(name)) {
+        // 允许 http(s)/mailto/cid/blob/data:image；拦 javascript 与其它 data:
+        if (/^\s*(javascript|vbscript)/i.test(val)) el.removeAttribute(attr.name);
+        else if (/^\s*data:/i.test(val) && !/^\s*data:image\//i.test(val)) el.removeAttribute(attr.name);
+      }
+    }
+    if (el.tagName === 'IMG') {
+      el.removeAttribute('srcset');
+      const w = Number(el.getAttribute('width'));
+      if (!Number.isFinite(w) || w > 640) el.setAttribute('style', 'max-width:240px;height:auto;' + (el.getAttribute('style') || ''));
     }
   });
   return doc.body.innerHTML;
+}
+
+/** 是否像 HTML（签名富文本 / 含图片） */
+export function looksLikeHtml(s) {
+  return /<[a-z][\s\S]*>/i.test(String(s || '').trim());
+}
+
+/**
+ * 图片文件 → 压缩后的 data:image URL（签名/写信内联用）
+ * 注意：勿用 execCommand('insertHTML') 插入 data URL，浏览器会剥掉图片。
+ * @returns {Promise<string>}
+ */
+export function fileToInlineDataUrl(file, { maxW = 480, maxH = 320, quality = 0.82, maxBytes = 220_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!file || !String(file.type || '').startsWith('image/')) {
+      reject(new Error('请选择图片文件'));
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      reject(new Error('单张图片请小于 8MB'));
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        const scale = Math.min(1, maxW / w, maxH / h);
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        // JPEG 无透明通道，白底避免黑块
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const tryEncode = (type, q) => {
+          try {
+            return canvas.toDataURL(type, q);
+          } catch {
+            return '';
+          }
+        };
+        let q = quality;
+        let data = tryEncode('image/webp', q) || tryEncode('image/jpeg', q);
+        while (data && data.length > maxBytes && q > 0.4) {
+          q -= 0.08;
+          data = tryEncode('image/webp', q) || tryEncode('image/jpeg', q);
+        }
+        if (!data || data.length > maxBytes * 1.4) {
+          reject(new Error('图片过大，请换更小的 Logo（建议宽 < 400px）'));
+          return;
+        }
+        resolve(data);
+      } catch (e) {
+        reject(e);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('无法读取图片'));
+    };
+    img.src = url;
+  });
+}
+
+function selectionRangeIn(rootEl) {
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && rootEl) {
+    const range = sel.getRangeAt(0);
+    if (rootEl.contains(range.commonAncestorContainer)) return { sel, range };
+  }
+  if (!rootEl) return null;
+  rootEl.focus();
+  const range = document.createRange();
+  range.selectNodeContents(rootEl);
+  range.collapse(false);
+  const nextSel = window.getSelection();
+  nextSel?.removeAllRanges();
+  nextSel?.addRange(range);
+  return { sel: nextSel, range };
+}
+
+/** 用 DOM 插入（支持 data:image；execCommand 会剥掉 data URL） */
+export function insertHtmlAtCursor(html, rootEl) {
+  if (!rootEl || !html) return false;
+  const ctx = selectionRangeIn(rootEl);
+  if (!ctx) return false;
+  const { sel, range } = ctx;
+  range.deleteContents();
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  const frag = tpl.content;
+  const last = frag.lastChild;
+  range.insertNode(frag);
+  if (last) {
+    range.setStartAfter(last);
+    range.collapse(true);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
+  return true;
+}
+
+/** 插入内联图片节点（最稳妥，专治签名/粘贴 Logo） */
+export function insertImageAtCursor(dataUrl, rootEl, { alt = '', maxWidth = 240 } = {}) {
+  if (!rootEl || !dataUrl) return false;
+  const img = document.createElement('img');
+  img.src = dataUrl;
+  img.alt = alt || '签名图片';
+  img.setAttribute('style', `max-width:${maxWidth}px;height:auto;display:inline-block;vertical-align:middle`);
+  const before = rootEl.querySelectorAll('img').length;
+  const ctx = selectionRangeIn(rootEl);
+  if (ctx) {
+    const { sel, range } = ctx;
+    range.deleteContents();
+    range.insertNode(img);
+    range.setStartAfter(img);
+    range.collapse(true);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  } else {
+    rootEl.appendChild(img);
+  }
+  // 兜底：若未进 DOM，直接挂到末尾
+  if (rootEl.querySelectorAll('img').length <= before) {
+    rootEl.appendChild(img);
+  }
+  return rootEl.querySelectorAll('img').length > before;
 }
 
 export function htmlToText(html = '') {
@@ -229,6 +375,8 @@ export const SIGNALS = {
   payment: '付款',
   inquiry: '询盘',
   sample: '样品',
+  fabric: '面料',
+  fit: '尺码',
   shipping: '物流',
 };
 export const TIERS = { vip: 'VIP', customer: '客户', new: '新联系人', colleague: '同事' };
@@ -269,33 +417,55 @@ export function waitText(hours) {
   return `${Math.floor(hours / 24)} 天`;
 }
 
-/** 按邮件意图准备的英文回复，点一下填入，发出前仍可改 */
-export function replyIdeas(signals = []) {
-  const s = new Set(signals);
+/** 按邮件意图 + 业务阶段准备的英文回复（服装外贸常用句） */
+export function replyIdeas(signals = [], stage = null) {
+  const s = new Set(signals || []);
   const ideas = [];
+  const stageIdeas = {
+    inquiry: ['补齐规格再报价', 'Thanks for reaching out. To prepare an accurate quote, could you share the tech pack (or photos), fabric/composition & GSM, colorways, size run, target qty, and preferred Incoterms?'],
+    quote: ['跟进报价确认', 'Just checking whether the quotation works for you — unit price, MOQ, and lead time. Happy to revise or arrange SMS / lab dips if helpful.'],
+    sample: ['跟进样品反馈', 'Hope the sample reached you safely. How is the fit and hand-feel? We can revise or move to PP / bulk whenever you are ready.'],
+    bulk: ['锁定大货细节', 'To lock production, please confirm final qty by color/size, approved sample, packing/assortment, and the ship window — then we will issue the PI.'],
+    payment: ['确认 PI / 定金', 'Friendly note on the PI / deposit. Production can start once payment is confirmed — happy to send any banking documents you need.'],
+    won: ['成交后跟进', 'Thanks again for the order. Are shipment docs and QC on track on your side? Happy to support a repeat order anytime.'],
+  };
+  if (stage && stageIdeas[stage] && !s.has('complaint')) {
+    ideas.push(stageIdeas[stage]);
+  }
   if (s.has('complaint')) {
-    ideas.push(['先致歉，今天给方案', 'Thank you for flagging this, and sorry for the trouble. We are checking the affected pieces with our QC team now and will send a handling plan within today.']);
+    ideas.push(['先致歉，今天给方案', 'Thank you for flagging this, and sorry for the trouble. We are checking the affected pieces with our QC team (AQL) now and will send a handling plan within today.']);
   }
-  if (s.has('payment')) {
-    ideas.push(['确认收款并安排生产', 'Thank you — we have received the payment notice and will confirm it with our finance team shortly. Production starts as soon as the receipt is verified.']);
+  if (s.has('payment') && stage !== 'payment') {
+    ideas.push(['确认收款并安排生产', 'Thank you — we have received the payment notice and will confirm it with our finance team shortly. Production starts as soon as the deposit is verified.']);
   }
-  if (s.has('order')) {
-    ideas.push(['确认订单，今天发 PI', 'Thank you for confirming the order. We will issue the proforma invoice today and prepare production once the deposit arrives. Could you also confirm the delivery date works for you?']);
+  if (s.has('order') && stage !== 'bulk') {
+    ideas.push(['确认订单，今天发 PI', 'Thank you for confirming the order. We will issue the proforma invoice today and prepare production once the deposit arrives. Please also confirm the size run and delivery window.']);
   }
-  if (s.has('inquiry')) {
-    ideas.push(['回复询盘与起订量', 'Thank you for your inquiry. Our quotation and MOQ are below — happy to adjust the details for your first order, and we can send samples right after you confirm the colors.']);
+  if (s.has('inquiry') && stage !== 'inquiry') {
+    ideas.push(['回复询盘并要规格', 'Thank you for your inquiry. To quote accurately, could you share the tech pack (or photos), fabric/composition, colorways, size run, target qty, and preferred Incoterms? MOQ and lead time will follow.']);
   }
-  if (s.has('sample')) {
-    ideas.push(['确认样品修改', 'Thank you for the fit comments. We will revise the sample accordingly and send the updated version for your approval.']);
+  if (s.has('fabric')) {
+    ideas.push(['确认面料方案', 'Thank you for the fabric notes. We will check composition, GSM, and hand-feel against your end use, then confirm availability and any wash-test lead time.']);
+  }
+  if (s.has('fit') || s.has('sample')) {
+    ideas.push(['确认样品/尺码修改', 'Thank you for the fit comments. We will revise measurements / construction accordingly and send the updated sample for your approval before bulk.']);
+  }
+  if (s.has('sample') && !s.has('fit') && stage !== 'sample') {
+    ideas.push(['样品进度回复', 'Thank you — we are preparing the sample (lab dip / SMS / fit as needed) and will share the courier tracking once shipped.']);
   }
   if (s.has('shipping')) {
-    ideas.push(['更新物流进度', 'Thank you for the update. We are checking the shipment now and will share the latest tracking and documents shortly.']);
+    ideas.push(['更新出货与文件', 'Thank you. We are checking ETD/ETA and will share tracking plus commercial invoice / packing list / B/L as soon as available.']);
   }
   if (s.has('urgent') && !ideas.length) {
     ideas.push(['优先处理并今天回复', 'Thank you for the note — we have marked this as urgent and will come back to you with a clear answer within today.']);
   }
   if (!ideas.length) ideas.push(['确认收到，稍后详复', 'Thank you for your email. We have received it and will get back to you shortly with the details.']);
-  return ideas.slice(0, 3).map(([label, body]) => ({ label, body }));
+  // 去重 label
+  const seen = new Set();
+  return ideas
+    .filter(([label]) => (seen.has(label) ? false : (seen.add(label), true)))
+    .slice(0, 3)
+    .map(([label, body]) => ({ label, body }));
 }
 
 export function greeting() {

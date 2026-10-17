@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   X, Minus, Maximize2, Minimize2, Send, Paperclip, Bold, Italic, Underline, List, ListOrdered, Link2, Eraser, Sparkles, Loader2,
-  Wand2, Scissors, Languages, Save, ChevronDown, Strikethrough, FileStack, Quote, Trash2, Clock,
+  Wand2, Scissors, Languages, Save, ChevronDown, Strikethrough, FileStack, Quote, Trash2, Clock, Image,
 } from 'lucide-react';
 import { api } from '../api.js';
-import { formatSize, htmlToText, relativeTime, schedulePresets, textToHtml } from '../utils.js';
-import { signatureHtml, toPayload } from '../compose.js';
+import {
+  fileToInlineDataUrl, formatSize, htmlToText, insertHtmlAtCursor, relativeTime, sanitizeHtml, schedulePresets, textToHtml,
+} from '../utils.js';
+import { signatureHtml, signaturePlain, toPayload } from '../compose.js';
 import TimeMenu from './TimeMenu.jsx';
 
 const TONES = [
@@ -123,6 +125,8 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
   const [lang, setLang] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [aiRoute, setAiRoute] = useState(null);
+  const [imgBusy, setImgBusy] = useState(false);
+  const inlineImgInput = useRef(null);
   const [menu, setMenu] = useState(null);
   const [templates, setTemplates] = useState(null);
   const [dragging, setDragging] = useState(false);
@@ -209,8 +213,16 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     return { payload: toPayload(s, s.body, fwdAtts), files, state: s };
   }
 
+  function bodyTextWithoutSig() {
+    const root = editor.current;
+    if (!root) return '';
+    const clone = root.cloneNode(true);
+    clone.querySelectorAll('.zm-sig').forEach((n) => n.remove());
+    return htmlToText(clone.innerHTML).trim();
+  }
+
   function hasContent() {
-    return !!(to.trim() || subject.trim() || htmlToText(editor.current?.innerHTML || '').replace(/^--[\s\S]*$/m, '').trim() || files.length);
+    return !!(to.trim() || subject.trim() || bodyTextWithoutSig() || files.length);
   }
 
   async function send(sendAt) {
@@ -256,18 +268,23 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     if (!instruction.trim() && !initial.sourceId) return notify('请描述你想写的邮件内容', 'error');
     setAiBusy(true);
     try {
-      const sig = mailbox?.signature || '';
+      const sig = signaturePlain(mailbox?.signature || '');
       const full = initial.aiContext && instruction === (initial.aiInstruction || aiPrompt)
         ? initial.aiContext
         : (initial.aiContext ? `${initial.aiContext}\n回复意图：${instruction}` : instruction);
+      const withSig = (bodyHtml) => {
+        const sigBlock = signatureHtml(mailbox?.signature);
+        // AI 正文用纯文本渲染；签名单独附加，避免盖掉 Logo
+        return `<div>${bodyHtml}</div>${sigBlock ? `<br>${sigBlock}` : ''}`;
+      };
       if (initial.sourceId && initial.mode !== 'forward') {
         const r = await api('/ai/reply', { method: 'POST', body: { id: initial.sourceId, instruction: full, tone, language: lang, signature: sig } });
-        editor.current.innerHTML = textToHtml(r.body);
+        editor.current.innerHTML = withSig(textToHtml(r.body));
         setAiRoute(r.aiRoute || null);
       } else {
         const r = await api('/ai/compose', { method: 'POST', body: { prompt: full, tone, language: lang, to, signature: sig } });
         if (r.subject && !subject.trim()) setSubject(r.subject);
-        editor.current.innerHTML = textToHtml(r.body || '');
+        editor.current.innerHTML = withSig(textToHtml(r.body || ''));
         setAiRoute(r.aiRoute || null);
       }
       touch();
@@ -329,7 +346,7 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     setMenu(null);
     const name = window.prompt('模板名称', subject || '新模板');
     if (!name) return;
-    const body = htmlToText(editor.current.innerHTML).replace(/\n--\n[\s\S]*$/, '').trim();
+    const body = bodyTextWithoutSig();
     try {
       await api('/templates', { method: 'POST', body: { name, subject, body } });
       setTemplates(null);
@@ -345,6 +362,47 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     if (total > MAX_TOTAL) return notify('附件总大小不能超过 25MB', 'error');
     setFiles((f) => [...f, ...arr]);
     touch();
+  }
+
+  async function insertInlineImage(file) {
+    if (!file || !editor.current) return;
+    setImgBusy(true);
+    try {
+      const dataUrl = await fileToInlineDataUrl(file, { maxW: 720, maxH: 720, maxBytes: 220_000 });
+      const html = `<img src="${dataUrl}" alt="" style="max-width:100%;height:auto" />`;
+      editor.current.focus();
+      insertHtmlAtCursor(html, editor.current);
+      touch();
+    } catch (e) {
+      notify(e.message || '插入图片失败', 'error');
+    } finally {
+      setImgBusy(false);
+    }
+  }
+
+  async function handleEditorPaste(e) {
+    const items = [...(e.clipboardData?.items || [])];
+    const imageItems = items.filter((i) => i.type.startsWith('image/'));
+    if (imageItems.length) {
+      e.preventDefault();
+      for (const item of imageItems) {
+        const f = item.getAsFile();
+        if (f) await insertInlineImage(f);
+      }
+      return;
+    }
+    const html = e.clipboardData?.getData('text/html');
+    if (html && /<img\b/i.test(html)) {
+      e.preventDefault();
+      insertHtmlAtCursor(sanitizeHtml(html), editor.current);
+      touch();
+      return;
+    }
+    const clipFiles = [...(e.clipboardData?.files || [])].filter((f) => !String(f.type || '').startsWith('image/'));
+    if (clipFiles.length) {
+      e.preventDefault();
+      addFiles(clipFiles);
+    }
   }
 
   const title = { new: '新邮件', reply: '回复', replyAll: '全部回复', forward: '转发', draft: '编辑草稿' }[initial.mode] || '新邮件';
@@ -461,12 +519,7 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
           contentEditable
           suppressContentEditableWarning
           onInput={touch}
-          onPaste={(e) => {
-            if (e.clipboardData.files?.length) {
-              e.preventDefault();
-              addFiles(e.clipboardData.files);
-            }
-          }}
+          onPaste={handleEditorPaste}
         />
         {initial.quoteHtml && (
           <div className="c-quote">
@@ -499,7 +552,7 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
       <div className="c-toolbar">
         <div className="send-group">
           <button className="btn-primary send" onClick={() => send()} title="发送 (Ctrl+Enter)">
-            <Send size={15} /> 发送
+            <Send size={15} strokeWidth={1.75} /> 发送
           </button>
           <div className="move-wrap">
             <button className="btn-primary send-more" onClick={() => setMenu(menu === 'schedule' ? null : 'schedule')} title="定时发送">
@@ -516,24 +569,46 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
             )}
           </div>
         </div>
-        <div className="fmt">
-          <button onClick={() => exec('bold')} title="加粗"><Bold size={15} /></button>
-          <button onClick={() => exec('italic')} title="斜体"><Italic size={15} /></button>
-          <button onClick={() => exec('underline')} title="下划线"><Underline size={15} /></button>
-          <button onClick={() => exec('strikeThrough')} title="删除线"><Strikethrough size={15} /></button>
-          <button onClick={() => exec('insertUnorderedList')} title="项目符号"><List size={15} /></button>
-          <button onClick={() => exec('insertOrderedList')} title="编号"><ListOrdered size={15} /></button>
+        <div className="fmt" role="toolbar" aria-label="正文格式">
+          <button type="button" onClick={() => exec('bold')} title="加粗"><Bold size={15} strokeWidth={1.75} /></button>
+          <button type="button" onClick={() => exec('italic')} title="斜体"><Italic size={15} strokeWidth={1.75} /></button>
+          <button type="button" onClick={() => exec('underline')} title="下划线"><Underline size={15} strokeWidth={1.75} /></button>
+          <button type="button" onClick={() => exec('strikeThrough')} title="删除线"><Strikethrough size={15} strokeWidth={1.75} /></button>
+          <span className="fmt-sep" aria-hidden />
+          <button type="button" onClick={() => exec('insertUnorderedList')} title="项目符号"><List size={15} strokeWidth={1.75} /></button>
+          <button type="button" onClick={() => exec('insertOrderedList')} title="编号"><ListOrdered size={15} strokeWidth={1.75} /></button>
           <button
+            type="button"
             onClick={() => {
               const url = window.prompt('链接地址', 'https://');
               if (url && /^(https?:\/\/|mailto:)/i.test(url)) exec('createLink', url);
             }}
             title="插入链接"
           >
-            <Link2 size={15} />
+            <Link2 size={15} strokeWidth={1.75} />
           </button>
-          <button onClick={() => exec('removeFormat')} title="清除格式"><Eraser size={15} /></button>
-          <button onClick={() => fileInput.current.click()} title="添加附件"><Paperclip size={15} /></button>
+          <button type="button" onClick={() => exec('removeFormat')} title="清除格式"><Eraser size={15} strokeWidth={1.75} /></button>
+          <span className="fmt-sep" aria-hidden />
+          <button
+            type="button"
+            onClick={() => inlineImgInput.current?.click()}
+            title="插入正文图片（非附件）"
+            disabled={imgBusy}
+          >
+            {imgBusy ? <Loader2 size={15} className="spin" /> : <Image size={15} strokeWidth={1.75} />}
+          </button>
+          <button type="button" onClick={() => fileInput.current.click()} title="添加附件"><Paperclip size={15} strokeWidth={1.75} /></button>
+          <input
+            ref={inlineImgInput}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) insertInlineImage(f);
+            }}
+          />
           <input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
           <div className="move-wrap">
             <button onClick={openTemplates} title="邮件模板"><FileStack size={15} /></button>

@@ -49,9 +49,14 @@ export default function Focus({
   const [autoOpened, setAutoOpened] = useState(false);
   const [claimFilter, setClaimFilter] = useState(() => loadClaimFilter());
   const [claimBusy, setClaimBusy] = useState(false);
+  const lastChecked = useRef(null);
 
   const filteredReply = useMemo(() => filterByClaim(reply, claimFilter), [reply, claimFilter]);
   const filteredFollow = useMemo(() => filterByClaim(follow, claimFilter), [follow, claimFilter]);
+  const visibleIds = useMemo(
+    () => [...filteredReply.map((m) => m.id), ...filteredFollow.map((m) => m.id)],
+    [filteredReply, filteredFollow]
+  );
 
   const unclaimedN = reply.filter((m) => !m.deal).length + follow.filter((m) => !m.deal).length;
   const mineN = reply.filter((m) => m.deal?.mine).length + follow.filter((m) => m.deal?.mine).length;
@@ -165,17 +170,17 @@ export default function Focus({
         return;
       }
       const next = new Set(checked);
-      if (range) {
-        const ids = messages.map((x) => x.id);
-        const a = ids.indexOf([...checked][checked.size - 1]);
-        const b = ids.indexOf(id);
+      if (range && lastChecked.current != null) {
+        const a = visibleIds.indexOf(lastChecked.current);
+        const b = visibleIds.indexOf(id);
         if (a >= 0 && b >= 0) {
-          for (let i = Math.min(a, b); i <= Math.max(a, b); i++) next.add(ids[i]);
+          for (let i = Math.min(a, b); i <= Math.max(a, b); i++) next.add(visibleIds[i]);
           setChecked(next);
           return;
         }
       }
       next.has(id) ? next.delete(id) : next.add(id);
+      lastChecked.current = id;
       setChecked(next);
     },
     onAction,

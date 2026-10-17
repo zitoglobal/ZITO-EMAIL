@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Hand, Unlock, Loader2, GitBranch, History, StickyNote, CalendarClock, Split } from 'lucide-react';
 import { api, qs } from '../api.js';
+import { stageChecklist } from '../apparelPresets.js';
 import { formatShortDateTime } from '../utils.js';
 
 const ACTION_LABEL = {
@@ -283,6 +284,12 @@ export default function DealBar({
               {s.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {deal?.mine && stageChecklist(deal.stage) && (
+        <div className="deal-stage-tip" title="服装外贸阶段核对清单">
+          {stageChecklist(deal.stage)}
         </div>
       )}
 

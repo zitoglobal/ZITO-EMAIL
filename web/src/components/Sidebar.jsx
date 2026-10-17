@@ -83,11 +83,11 @@ export default function Sidebar({
   };
 
   /**
-   * Counts (brief §2.3 + audit §7.3):
+   * Counts:
    * - today: needReply+followups; overdue → alert pill
-   * - waiting: independent — do NOT reuse today mix; no API field yet → 0 / hide
-   * - unread: unifiedUnread (sole home for that number in 工作)
-   * - inbox: no unifiedUnread badge (avoids dual same-number fight with 未读)
+   * - waiting: waitingMine + waitingThem
+   * - team: 公海 total；overdue → alert pill
+   * - unread: unifiedUnread；inbox 不挂未读角标
    */
   const smartCount = (box) => {
     if (box === 'today') return (counts.focus?.needReply || 0) + (counts.focus?.followups || 0);
@@ -97,6 +97,7 @@ export default function Sidebar({
       if (typeof mine === 'number' || typeof them === 'number') return (mine || 0) + (them || 0);
       return 0;
     }
+    if (box === 'team') return counts.team?.total || 0;
     if (box === 'unread') return counts.unifiedUnread || 0;
     if (box === 'inbox') return 0;
     if (box === 'snoozed') return counts.snoozed || 0;
@@ -117,12 +118,14 @@ export default function Sidebar({
     const v = { mailboxId: 'all', box: s.box };
     const active = isActive(v);
     const label = multi || s.box !== 'inbox' ? s.label : '收件箱';
-    const overdue = s.box === 'today' && counts.focus?.overdue > 0;
+    const overdue =
+      (s.box === 'today' && counts.focus?.overdue > 0) ||
+      (s.box === 'team' && counts.team?.overdue > 0);
     const waitingSplit =
       s.box === 'waiting' &&
       (typeof counts.focus?.waitingMine === 'number' || typeof counts.focus?.waitingThem === 'number');
     const countLabel = fmtCount(n);
-    const showPill = (s.box === 'today' || s.box === 'waiting') && n > 0;
+    const showPill = (s.box === 'today' || s.box === 'waiting' || s.box === 'team') && n > 0;
     const showCount = !showPill && countLabel != null;
 
     return (
@@ -133,7 +136,8 @@ export default function Sidebar({
           'folder' +
           (active ? ' active' : '') +
           (s.box === 'today' ? ' folder-today' : '') +
-          (s.box === 'waiting' ? ' folder-waiting' : '')
+          (s.box === 'waiting' ? ' folder-waiting' : '') +
+          (s.box === 'team' ? ' folder-team' : '')
         }
         onClick={() => go(v)}
         title={
@@ -141,7 +145,11 @@ export default function Sidebar({
             ? waitingSplit
               ? `等我 ${counts.focus.waitingMine || 0} · 等对方 ${counts.focus.waitingThem || 0}`
               : '等我回复 · 等对方回复'
-            : label
+            : s.box === 'team'
+              ? counts.team
+                ? `公海 ${counts.team.total || 0}${counts.team.overdue ? ` · 超时 ${counts.team.overdue}` : ''}${counts.team.vip ? ` · VIP ${counts.team.vip}` : ''}`
+                : '未认领客户来信'
+              : label
         }
         aria-label={label}
         aria-current={active ? 'page' : undefined}
@@ -149,7 +157,14 @@ export default function Sidebar({
         <Icon size={17} />
         <span className="folder-name">{label}</span>
         {overdue ? (
-          <span className="count-pill alert" title={`${counts.focus.overdue} 封已超过回复时限`}>
+          <span
+            className="count-pill alert"
+            title={
+              s.box === 'team'
+                ? `${counts.team.overdue} 条公海已超时未认领`
+                : `${counts.focus.overdue} 封已超过回复时限`
+            }
+          >
             {countLabel}
           </span>
         ) : showPill ? (
@@ -189,20 +204,20 @@ export default function Sidebar({
       </div>
 
       <button className="compose-btn" onClick={() => onCompose()} title="写邮件" aria-label="写邮件">
-        <PenSquare size={17} />{!iconRail && ' 写邮件'}
+        <PenSquare size={17} strokeWidth={1.75} />{!iconRail && ' 写邮件'}
       </button>
 
       {/* Search: secondary ghost; hide in icon-rail (⌘K still works) */}
       {!iconRail && (
         <button className="cmd-btn" onClick={onCommand} title="搜索与命令" aria-label="搜索与命令">
-          <Search size={14} /> 搜索与命令 <kbd>⌘K</kbd>
+          <Search size={14} strokeWidth={1.75} /> 搜索与命令 <kbd>⌘K</kbd>
         </button>
       )}
 
       {/* AI digest: link style, cyan sparkle — not in rail */}
       {!iconRail && (
         <button className="digest-link" onClick={onDigest} title="AI 今日简报" aria-label="AI 今日简报">
-          <Sparkles size={14} /> AI 今日简报
+          <Sparkles size={14} strokeWidth={1.6} /> AI 今日简报
         </button>
       )}
 

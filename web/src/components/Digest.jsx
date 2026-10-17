@@ -34,7 +34,7 @@ export default function Digest({ aiEnabled, mailboxMap, onOpen, onClose }) {
     <div className="modal-mask" onClick={onClose}>
       <div className="modal digest" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <div className="digest-title"><Sparkles size={18} /> AI 今日邮件简报</div>
+          <div className="digest-title"><Sparkles size={18} /> AI 今日待办简报</div>
           <div>
             <button className="icon-btn" onClick={load} disabled={loading || !aiEnabled} title="重新生成"><RefreshCw size={16} className={loading ? 'spin' : ''} /></button>
             <button className="icon-btn" onClick={onClose}><X size={18} /></button>
@@ -43,11 +43,19 @@ export default function Digest({ aiEnabled, mailboxMap, onOpen, onClose }) {
         <div className="modal-body">
           {!aiEnabled && <div className="form-error">AI 尚未配置，请管理员在服务器 .env 中设置 AI_API_KEY。</div>}
           {loading && !data && (
-            <div className="reader-loading"><Loader2 size={20} className="spin" /> AI 正在阅读所有邮箱的未读邮件…</div>
+            <div className="reader-loading"><Loader2 size={20} className="spin" /> AI 正在整理今日待办与等待线索…</div>
           )}
           {error && <div className="form-error">{error}</div>}
           {data && (
             <>
+              {data.stats && (
+                <p className="digest-stats muted">
+                  基于 Focus：待回 {data.stats.needReply || 0}
+                  {data.stats.overdue ? ` · 超时 ${data.stats.overdue}` : ''}
+                  {data.stats.waiting ? ` · 等对方 ${data.stats.waiting}` : ''}
+                  {data.stats.unreadExtra ? ` · 未读补漏 ${data.stats.unreadExtra}` : ''}
+                </p>
+              )}
               <p className="digest-overview">{data.overview}</p>
               {data.priorities?.length > 0 && (
                 <div className="digest-section">

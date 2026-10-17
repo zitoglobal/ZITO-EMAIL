@@ -70,15 +70,27 @@ function ConflictBanner({ conflict }) {
 
 function PresenceBanner({ viewers }) {
   if (!viewers?.length) return null;
-  const names = viewers.slice(0, 3).map((v) => v.name || '同事').join('、');
+  const shown = viewers.slice(0, 3);
   const more = viewers.length > 3 ? ` 等 ${viewers.length} 人` : '';
   return (
     <div className="presence-banner" role="status">
       <Eye size={14} />
+      <span className="presence-avatars">
+        {shown.map((v) => (
+          <span
+            key={v.userId || v.name}
+            className="presence-ava"
+            style={{ background: avatarColor(v.name || '同事') }}
+            title={v.name || '同事'}
+          >
+            {initials({ name: v.name || '同事' })}
+          </span>
+        ))}
+      </span>
       <span>
-        <b>{names}</b>
+        <b>{shown.map((v) => v.name || '同事').join('、')}</b>
         {more}
-        正在看这封邮件
+        正在看此会话
       </span>
     </div>
   );
@@ -390,8 +402,9 @@ export default function Reader({
         .catch(() => {});
     }
 
+    const threadId = listItem?.threadId || null;
     const beat = () => {
-      api('/presence/touch', { method: 'POST', body: { messageId: id, threadId: listItem?.threadId || null } })
+      api('/presence/touch', { method: 'POST', body: { messageId: id, threadId } })
         .then((r) => {
           if (token === alive.current) setViewers(r.viewers || []);
         })
@@ -401,17 +414,29 @@ export default function Reader({
     const iv = setInterval(beat, 40_000);
     const onPresence = (e) => {
       const d = e.detail;
-      if (!d || Number(d.messageId) !== Number(id)) return;
+      if (!d) return;
+      const sameMsg = Number(d.messageId) === Number(id);
+      const sameThread = threadId && d.threadId && String(d.threadId) === String(threadId);
+      if (!sameMsg && !sameThread) return;
       if (token === alive.current) setViewers(d.viewers || []);
     };
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        api('/presence/leave', { method: 'POST', body: { messageId: id } }).catch(() => {});
+      } else if (document.visibilityState === 'visible') {
+        beat();
+      }
+    };
     window.addEventListener('zm-presence', onPresence);
+    document.addEventListener('visibilitychange', onVis);
     return () => {
       clearInterval(iv);
       window.removeEventListener('zm-presence', onPresence);
+      document.removeEventListener('visibilitychange', onVis);
       api('/presence/leave', { method: 'POST', body: { messageId: id } }).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, listItem?.threadId]);
 
   const threadCount = listItem?.threadCount;
   useEffect(() => {
@@ -656,8 +681,8 @@ export default function Reader({
       <div className="reader-toolbar">
         <button type="button" className="icon-btn mobile-only" onClick={onBack} aria-label="返回列表"><ArrowLeft size={18} /></button>
         <div className="tb-group primary">
-          <button type="button" className="tb" onClick={() => onCompose('reply', msg)} disabled={!msg} title="回复 (R)" aria-label="回复"><Reply size={16} /><span>回复</span></button>
-          <button type="button" className="tb" onClick={() => onCompose('replyAll', msg)} disabled={!msg} title="全部回复 (A)" aria-label="全部回复"><ReplyAll size={16} /><span>全部回复</span></button>
+          <button type="button" className="tb" onClick={() => onCompose('reply', msg)} disabled={!msg} title="回复 (R)" aria-label="回复"><Reply size={16} strokeWidth={1.75} /><span>回复</span></button>
+          <button type="button" className="tb" onClick={() => onCompose('replyAll', msg)} disabled={!msg} title="全部回复 (A)" aria-label="全部回复"><ReplyAll size={16} strokeWidth={1.75} /><span>全部回复</span></button>
           <button type="button" className="tb" onClick={() => onCompose('forward', msg)} disabled={!msg} title="转发 (F)" aria-label="转发"><Forward size={16} /><span>转发</span></button>
         </div>
         <div className="tb-group">
@@ -1084,7 +1109,10 @@ export default function Reader({
                 <div className="avatar sm" style={{ background: mailbox?.color || 'var(--accent)' }}>{initials({ name: mailbox?.name, address: mailbox?.email })}</div>
                 <div className="qr-box">
                   <div className="reply-ideas">
-                    {replyIdeas(listItem?.priority?.signals || listItem?.follow?.signals || listItem?.signals).map((idea) => (
+                    {replyIdeas(
+                      listItem?.priority?.signals || listItem?.follow?.signals || listItem?.signals,
+                      listItem?.deal?.stage || msg?.deal?.stage,
+                    ).map((idea) => (
                       <button key={idea.label} className={quick.startsWith(idea.body.slice(0, 24)) ? 'on' : ''} onClick={() => setQuick(idea.body)} title={idea.body}>
                         {idea.label}
                       </button>

@@ -38,17 +38,17 @@ export const SHORTCUTS = [
 ];
 
 export const FOLLOW_UP_AI =
-  '礼貌地跟进这封邮件：询问对方是否已查看、有无疑问，并推动下一步（如确认订单细节或安排样品），保持简短';
+  '礼貌跟进（成衣外贸）：询问是否已查看，推动下一步（补规格 / 确认报价 / 样品反馈 / PO），保持简短专业，勿编造价格交期';
 
-/** 按业务阶段定制催单 AI 意图 */
+/** 按业务阶段定制催单 AI 意图（服装链路） */
 export const FOLLOW_UP_AI_BY_STAGE = {
-  inquiry: '礼貌跟进询盘：确认对方是否收到、是否需要补充规格/用量，邀请对方提出疑问，推动进入报价，保持简短专业',
-  quote: '礼貌跟进报价：询问对方是否已审阅报价、价格与交期是否合适，主动提出可调整，推动确认或样品，保持简短',
-  sample: '礼貌跟进样品：询问样品是否收到、是否合格，需要的话可安排修改或产前样，推动大货意向，保持简短',
-  bulk: '礼貌跟进大货：确认订单细节（数量/交期/包装）是否齐全，推动下单或 PO，保持简短专业',
-  payment: '礼貌跟进付款：提醒形式发票/定金事宜，确认付款进度，语气得体不施压，保持简短',
-  won: '礼貌跟进成交后事宜：确认交货/文件是否顺利，询问是否有加单需求，保持简短友好',
-  lost: '礼貌轻触：询问是否方便告知未推进原因，表示仍可协助，不强推，保持简短',
+  inquiry: '礼貌跟进询盘：确认是否收到；若缺 tech pack / 面料成分克重 / 颜色尺码 / 目标数量，温和补齐，推动进入报价',
+  quote: '礼貌跟进报价：询问单价、MOQ、交期是否合适，主动提出可调，推动确认或寄 SMS/色卡',
+  sample: '礼貌跟进样品：询问是否收到及 Fit/手感/做工反馈；可提修改或 PP 样，并试探大货意向数量',
+  bulk: '礼貌跟进大货：确认 PO 数量配码、批准样、包装唛头与船期是否齐全，推动出 PI / 下线',
+  payment: '礼貌跟进付款：提醒 PI/定金/水单，说明到账后排产，语气得体不施压',
+  won: '礼貌跟进成交后：确认出货文件或验货是否顺利，轻提返单或下一季开发',
+  lost: '礼貌轻触：询问是否方便告知未推进原因，表示仍可协助，不强推报价',
 };
 
 export function followUpAiForStage(stage) {
@@ -58,12 +58,12 @@ export function followUpAiForStage(stage) {
 export function followUpBodyForStage(person, signatureHtmlFn, stage) {
   const first = String(person?.name || '').split(/\s+/)[0] || 'there';
   const bodies = {
-    inquiry: `Just checking in on your inquiry — have you had a chance to review? Happy to clarify specs or prepare a quotation if helpful.`,
-    quote: `Just following up on the quotation I sent — does the pricing and lead time work for you? I'm happy to adjust if needed.`,
-    sample: `Hope the sample reached you safely. How does it look? We can revise or move to bulk whenever you're ready.`,
-    bulk: `Checking in on the bulk order details — shall we lock quantities and ship date, or do you need any changes first?`,
-    payment: `Friendly reminder regarding the payment / PI. Please let me know if you need any documents to proceed.`,
-    won: `Thanks again for the business. Everything on track on your side? Happy to help with the next order anytime.`,
+    inquiry: `Just checking in on your inquiry — do you have the tech pack / fabric details and target qty ready? Happy to quote as soon as we have them.`,
+    quote: `Just following up on our quotation — do the unit price, MOQ, and lead time work for you? I can revise or arrange SMS / lab dips if helpful.`,
+    sample: `Hope the sample reached you safely. How is the fit and hand-feel? We can revise or move to PP / bulk whenever you're ready.`,
+    bulk: `Checking in on bulk details — shall we lock the size run, packing, and ship window so we can issue the PI?`,
+    payment: `Friendly reminder on the PI / deposit. Production can start once the payment is confirmed — happy to send any banking docs you need.`,
+    won: `Thanks again for the order. Shipment docs on track on your side? Happy to support a repeat order or next season styles anytime.`,
     lost: `Just a quick note — if the project is still open or priorities change, I'm here to help. No pressure at all.`,
   };
   const line = bodies[stage] || `Just following up on my email below — have you had a chance to review it? I'm happy to answer any questions.`;

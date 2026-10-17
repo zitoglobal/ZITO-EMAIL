@@ -19,15 +19,17 @@ export function classify({ from, headers = {}, subject = '' }) {
   return 'people';
 }
 
-/** 外贸业务意图识别（中英文），按重要程度排列 */
+/** 外贸业务意图识别（中英文 + 服装链路词），按重要程度排列 */
 const SIGNALS = [
   ['urgent', /\b(urgent|asap|a\.s\.a\.p|immediately|rush|deadline|top priority)\b|as soon as possible|紧急|加急|尽快|马上|立即|立刻|截止/i],
-  ['complaint', /\b(complain(t|ts)?|defect(s|ive)?|damaged|claim|refund|disappointed|unacceptable|wrong (size|color|colour|item))\b|quality (issue|problem)|not satisfied|投诉|质量问题|次品|瑕疵|色差|退货|退款|索赔|不满意/i],
-  ['order', /\b(p\.?o\.?\s?#?\d+|purchase order|new order|repeat order|re-?order|bulk order|place (an |the |our )?order|order confirm(ation|ed)?|confirm(ed)? (the |our )?order)\b|下单|订单|返单|大货/i],
-  ['payment', /\b(payment|remittance|swift|t\/t|tt copy|deposit|balance payment|proforma|p\.?i\.?|invoice|bank slip|wire transfer|l\/c)\b|付款|汇款|水单|定金|订金|尾款|形式发票|发票|信用证/i],
-  ['inquiry', /\b(inquiry|enquiry|rfq|quotation|quote|price list|pricing|best price|fob|cif|exw|moq|catalog(ue)?|interested in)\b|询盘|询价|报价|价格|价目|起订量|目录/i],
-  ['sample', /\b(samples?|swatch(es)?|lab ?dips?|proto(type)?|fit sample|pp sample|strike.?off)\b|打样|样品|样衣|色卡|面料卡|确认样/i],
-  ['shipping', /\b(shipment|shipping|etd|eta|b\/l|bill of lading|container|vessel|tracking (no|number)|forwarder|customs|packing list)\b|出货|发货|船期|提单|货代|报关|物流|装箱单/i],
+  ['complaint', /\b(complain(t|ts)?|defect(s|ive)?|damaged|claim|refund|disappointed|unacceptable|wrong (size|color|colour|item))\b|quality (issue|problem)|not satisfied|aql fail|拒收|投诉|质量问题|次品|瑕疵|色差|退货|退款|索赔|不满意/i],
+  ['order', /\b(p\.?o\.?\s?#?\d+|purchase order|new order|repeat order|re-?order|bulk order|place (an |the |our )?order|order confirm(ation|ed)?|confirm(ed)? (the |our )?order)\b|下单|订单|返单|大货|订舱/i],
+  ['payment', /\b(payment|remittance|swift|t\/t|tt copy|deposit|balance payment|proforma|p\.?i\.?\b|invoice|bank slip|wire transfer|l\/c)\b|付款|汇款|水单|定金|订金|尾款|形式发票|发票|信用证/i],
+  ['inquiry', /\b(inquiry|enquiry|rfq|quotation|quote|price list|pricing|best price|fob|cif|exw|moq|catalog(ue)?|interested in|tech\s*pack|bom\b)\b|询盘|询价|报价|价格|价目|起订量|目录|工艺单|技术包/i],
+  ['sample', /\b(samples?|swatch(es)?|lab ?dips?|proto(type)?|fit sample|pp sample|size set|sms\b|strike.?off|counter sample)\b|打样|样品|样衣|色卡|面料卡|确认样|产前样|推销样|试穿样|全码样/i],
+  ['fabric', /\b(fabric|composition|gsm|grammage|yarn|knit|woven|spandex|elastane|cotton|polyester|nylon|wash test|hand[- ]?feel|shrinkage)\b|面料|成分|克重|纱线|针织|梭织|手感|缩水|洗水|氨纶|涤纶|棉质/i],
+  ['fit', /\b(fit (sample|comment|issue)|size run|size chart|grading|measurement|spec sheet|too (tight|loose)|length|sleeve)\b|尺码|配码|放码|尺寸表|试穿|合身|腰围|袖长|衣长/i],
+  ['shipping', /\b(shipment|shipping|etd|eta|b\/l|bill of lading|container|vessel|tracking (no|number)|forwarder|customs|packing list|carton|assortment)\b|出货|发货|船期|提单|货代|报关|物流|装箱单|外箱|配码装箱/i],
 ];
 
 export function signalsOf(subject = '', snippet = '') {
@@ -41,9 +43,9 @@ const THANKS_ONLY = /^(hi|hello|dear)?[\s\S]{0,40}(thanks?|thank you|noted|well 
 const SHORT_ACK = /^(ok|okay|got it|noted|thanks?|thank you|收到|好的|嗯|谢谢|已知晓|了解)[\s.!！。]*$/i;
 const FYI_ONLY = /^(fyi\b|for your (information|ref(erence)?)|仅供参考|请查收|通知[:：]?)/i;
 const NO_REPLY_NEEDED = /\b(no (need to )?reply|do not reply|please do not reply|无需回复|不用回复|请勿回复)\b/i;
-/** 仍值得跟进：报价/样品/等确认 */
-const KEEP_FOLLOW = /\b(quot(e|ation)|price|sample|swatch|lab ?dip|confirm|confirmation|await(ing)?|looking forward|please (reply|confirm|advise|check|review)|kindly (confirm|advise|reply))\b|报价|样品|色卡|确认样|请确认|请回复|请惠复|等您|敬请|候复|盼复/i;
-const KEEP_SIGNALS = new Set(['inquiry', 'sample', 'order', 'payment', 'question', 'urgent', 'complaint']);
+/** 仍值得跟进：报价/样品/面料确认/等确认 */
+const KEEP_FOLLOW = /\b(quot(e|ation)|price|sample|swatch|lab ?dip|tech\s*pack|pp sample|fit sample|confirm|confirmation|await(ing)?|looking forward|please (reply|confirm|advise|check|review)|kindly (confirm|advise|reply))\b|报价|样品|色卡|确认样|工艺单|产前样|请确认|请回复|请惠复|等您|敬请|候复|盼复/i;
+const KEEP_SIGNALS = new Set(['inquiry', 'sample', 'fabric', 'fit', 'order', 'payment', 'question', 'urgent', 'complaint']);
 
 /**
  * 我方发出的邮件是否值得跟进。

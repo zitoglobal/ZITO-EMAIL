@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { api } from '../api.js';
 import { displayName } from '../utils.js';
 
 /**
- * SSE：同步 / 新邮件 / 逾期提醒 / 发件箱。
+ * SSE：同步 / 新邮件 / 逾期提醒 / 发件箱 / 标签·联系人。
  * openMessage(id, { box }) 用于通知点达（不丢失选中）。
  */
 export function useRealtimeMail({
@@ -13,6 +14,8 @@ export function useRealtimeMail({
   mbRef,
   setMailboxes,
   setOutboxVersion,
+  setLabels,
+  setSavedSearches,
   openMessage,
   goToday,
   goBox,
@@ -25,6 +28,10 @@ export function useRealtimeMail({
   goTodayRef.current = goToday;
   const goBoxRef = useRef(goBox);
   goBoxRef.current = goBox;
+  const setLabelsRef = useRef(setLabels);
+  setLabelsRef.current = setLabels;
+  const setSavedRef = useRef(setSavedSearches);
+  setSavedRef.current = setSavedSearches;
 
   useEffect(() => {
     if (boot !== 'ready') return;
@@ -182,6 +189,19 @@ export function useRealtimeMail({
       if (d?.messageId != null) {
         window.dispatchEvent(new CustomEvent('zm-presence', { detail: d }));
       }
+    });
+    es.addEventListener('labels', () => {
+      api('/labels')
+        .then((d) => setLabelsRef.current?.(d.labels || []))
+        .catch(() => {});
+    });
+    es.addEventListener('contacts', (e) => {
+      window.dispatchEvent(new CustomEvent('zm-contacts', { detail: parse(e) }));
+    });
+    es.addEventListener('saved-searches', () => {
+      api('/saved-searches')
+        .then((d) => setSavedRef.current?.(d.savedSearches || []))
+        .catch(() => {});
     });
     return () => {
       clearTimeout(fastTimer);

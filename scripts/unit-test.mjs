@@ -53,6 +53,9 @@ for (const [subj, snip, want] of replyCases) {
 
 assert('signals inquiry', signalsOf('RFQ for jackets', 'Please quote FOB').includes('inquiry'));
 assert('signals sample', signalsOf('Sample', 'Need lab dips').includes('sample'));
+assert('signals fabric', signalsOf('Fabric', 'Need 180gsm cotton composition').includes('fabric'));
+assert('signals fit', signalsOf('Fit comments', 'Size run S-XL too tight at waist').includes('fit'));
+assert('signals tech pack as inquiry', signalsOf('Tech pack attached', 'Please review BOM').includes('inquiry'));
 assert('signals urgent', signalsOf('URGENT', 'ASAP please').includes('urgent'));
 assert('classify newsletter list', classify({ from: { address: 'news@brand.com' }, headers: { 'list-id': '<x>' }, subject: 'Weekly' }) === 'newsletter');
 assert('classify noreply', classify({ from: { address: 'noreply@shop.com' }, subject: 'Order shipped' }) === 'notification');
@@ -206,6 +209,11 @@ assert('strip script', !sanitizeMailHtml('<p>Hi</p><script>alert(1)</script>').i
 assert('strip onerror', !/<img[^>]+onerror/i.test(sanitizeMailHtml('<img src=x onerror=alert(1)>')));
 assert('keep mailto', sanitizeMailHtml('<a href="mailto:a@b.com">x</a>').includes('mailto:a@b.com'));
 assert('block javascript href', !sanitizeMailHtml('<a href="javascript:alert(1)">x</a>').includes('javascript:'));
+assert(
+  'keep data image in signature',
+  sanitizeMailHtml('<p>Alice</p><img src="data:image/png;base64,iVBORw0KGgo=" alt="logo">').includes('data:image/png')
+);
+assert('block data:text scheme', !sanitizeMailHtml('<a href="data:text/html,hi">x</a>').includes('data:text'));
 
 // ---------- password + totp ----------
 assert('pwd too short fails', (() => { try { assertPasswordStrength('Ab1'); return false; } catch { return true; } })());
@@ -222,6 +230,8 @@ assert('stage map sample', STAGE_TO_LABEL.sample === '样品');
 assert('stage map won', STAGE_TO_LABEL.won === '成交');
 assert('suggest stage quote', suggestStageAfterSend('inquiry', 'Quotation for cotton tees', '')?.stage === 'quote');
 assert('suggest stage sample', suggestStageAfterSend('quote', 'Sample shipment', '')?.stage === 'sample');
+assert('suggest stage pp sample', suggestStageAfterSend('quote', 'PP sample for approval', '')?.stage === 'sample');
+assert('suggest stage tech pack inquiry', suggestStageAfterSend(null, 'Please send tech pack', '')?.stage === 'inquiry');
 assert('suggest no regress', suggestStageAfterSend('payment', 'Re: inquiry', '') == null);
 
 // ---------- conversationKey ----------

@@ -53,7 +53,7 @@ export function queueScore(item) {
   const sig = item.signals || [];
   if (sig.includes('urgent') || sig.includes('complaint')) s += 22;
   if (sig.includes('order') || sig.includes('payment')) s += 16;
-  if (sig.includes('inquiry') || sig.includes('sample')) s += 10;
+  if (sig.includes('inquiry') || sig.includes('sample') || sig.includes('fabric') || sig.includes('fit')) s += 10;
   return Math.round(s);
 }
 
@@ -210,4 +210,29 @@ export function listQueue(viewerId, { limit = 60 } = {}) {
     canAssign: viewer?.role === 'admin',
     generatedAt: at,
   };
+}
+
+/** 侧栏角标：带短缓存，避免每次 /state 全量扫公海 */
+const statsCache = new Map();
+const STATS_TTL = 45_000;
+
+export function invalidateQueueStatsCache() {
+  statsCache.clear();
+}
+
+export function queueStats(viewerId) {
+  const id = Number(viewerId) || 0;
+  const hit = statsCache.get(id);
+  const t = Date.now();
+  if (hit && t - hit.at < STATS_TTL) return hit.stats;
+  const data = listQueue(id, { limit: 80 });
+  const stats = {
+    total: data.stats.total,
+    overdue: data.stats.overdue,
+    vip: data.stats.vip,
+    mine: data.stats.mine,
+    others: data.stats.others,
+  };
+  statsCache.set(id, { at: t, stats });
+  return stats;
 }

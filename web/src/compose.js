@@ -1,9 +1,24 @@
-import { addrString, escapeHtml, formatFullDate, htmlToText, prefixSubject, sanitizeHtml, textToHtml } from './utils.js';
+import {
+  addrString, escapeHtml, formatFullDate, htmlToText, looksLikeHtml, prefixSubject, sanitizeHtml, textToHtml,
+} from './utils.js';
 
 export const BODY_STYLE = "font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;line-height:1.6";
 
+/** 签名 → 写信区 HTML；支持纯文本与含 data:image 的富文本 */
 export function signatureHtml(sig) {
-  return sig ? `<div class="zm-sig">--<br>${textToHtml(sig)}</div>` : '';
+  const raw = String(sig || '').trim();
+  if (!raw) return '';
+  const inner = looksLikeHtml(raw) ? sanitizeHtml(raw) : textToHtml(raw);
+  if (!inner.trim()) return '';
+  return `<div class="zm-sig">${inner}</div>`;
+}
+
+/** 给 AI 用的签名纯文本（去掉 base64 噪声） */
+export function signaturePlain(sig) {
+  const raw = String(sig || '').trim();
+  if (!raw) return '';
+  if (!looksLikeHtml(raw)) return raw.slice(0, 400);
+  return htmlToText(raw.replace(/<img\b[^>]*>/gi, ' [图片] ')).slice(0, 400);
 }
 
 const uniqBy = (list) => {

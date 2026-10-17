@@ -169,10 +169,18 @@ function folderPublic(f) {
 function stateFor(user, dayStart) {
   const mbs = repo.listMailboxes(user.id);
   const settings = users.publicUser(user).settings;
+  const focusStats = mbs.length ? priority.focus(user.id, settings, { dayStart }).stats : null;
+  // 公海角标：短缓存；无邮箱的管理员也能看团队公海
+  let teamStats = null;
+  try {
+    teamStats = teamQueue.queueStats(user.id);
+  } catch (_) {
+    teamStats = null;
+  }
   return {
     mailboxes: mbs.map(repo.publicMailbox),
     folders: Object.fromEntries(mbs.map((m) => [m.id, repo.listFolders(m.id).map(folderPublic)])),
-    counts: { ...repo.counts(user.id), focus: mbs.length ? priority.focus(user.id, settings, { dayStart }).stats : null },
+    counts: { ...repo.counts(user.id), focus: focusStats, team: teamStats },
     labels: labels.listLabels(user.id),
     mailRulesCount: mailRules.listRules(user.id).filter((r) => r.enabled).length,
     savedSearches: savedSearches.listSavedSearches(user.id),
@@ -382,7 +390,7 @@ app.get(
 registerFocusRoutes(app, { auth, wrap, httpError, mailboxOf, priority, labels, users, emit });
 
 /** 团队认领 + 业务阶段（邮箱内，不对接已下线 CRM） */
-registerDealsRoutes(app, { auth, wrap, rateLimit, deals, labels, emit, users, push, db });
+registerDealsRoutes(app, { auth, wrap, rateLimit, deals, labels, emit, users, push, db, teamQueue });
 
 app.patch(
   '/api/me',
@@ -552,7 +560,13 @@ app.patch(
     const patch = {};
     if (b.name !== undefined) patch.name = String(b.name).trim();
     if (b.color !== undefined && /^#[0-9a-f]{6}$/i.test(b.color)) patch.color = b.color;
-    if (b.signature !== undefined) patch.signature = String(b.signature).slice(0, 5000);
+    if (b.signature !== undefined) {
+      // 富文本签名可含压缩后的 data:image Logo；上限约 400KB 字符
+      const sig = String(b.signature);
+      if (sig.length > 400_000) throw httpError(400, '签名过大：请压缩 Logo 后再保存（建议宽 < 480px）');
+      // 轻量消毒：去掉 script；保留 img data: / https
+      patch.signature = sanitizeMailHtml(sig).slice(0, 400_000);
+    }
 
     let reconnect = false;
     if (b.password || b.advanced) {
@@ -1675,10 +1689,35 @@ app.post(
   wrap(async (req, res) => {
     requireAiCloud(req);
     aiLimit(req);
-    const { messages } = repo.queryMessages(req.user.id, { mailboxId: req.body.mailboxId || 'all', box: 'unread', limit: 40 });
-    if (!messages.length) return res.json({ overview: '所有收件箱都没有未读邮件，一切都处理完了 🎉', priorities: [], groups: [] });
-    const result = await ai.digest(messages.map((m) => ({ ...m, uid: m.id })));
-    const byId = new Map(messages.map((m) => [m.id, m]));
+    const settings = users.settingsOf(req.user.id);
+    const focus = priority.focus(req.user.id, settings, { dayStart: req.body.dayStart });
+    const reply = (focus.reply || []).slice(0, 22);
+    const follow = (focus.followups || []).slice(0, 10);
+    const seen = new Set([...reply, ...follow].map((m) => m.id));
+    // 少量未读补漏（跳过通知/订阅噪音），避免简报完全错过「未进 Focus 的 VIP」
+    const { messages: unreadRaw } = repo.queryMessages(req.user.id, {
+      mailboxId: req.body.mailboxId || 'all',
+      box: 'unread',
+      limit: 30,
+    });
+    const unreadExtra = unreadRaw
+      .filter((m) => !seen.has(m.id) && (m.category === 'people' || m.tier === 'vip' || m.flagged))
+      .slice(0, 8);
+    const items = [
+      ...reply.map((m) => ({ ...m, uid: m.id, digestKind: 'need_reply' })),
+      ...follow.map((m) => ({ ...m, uid: m.id, digestKind: 'waiting' })),
+      ...unreadExtra.map((m) => ({ ...m, uid: m.id, digestKind: 'unread' })),
+    ];
+    if (!items.length) {
+      return res.json({
+        overview: '今日待办与等待都空着，也没有需要优先看的未读客户信。',
+        priorities: [],
+        groups: [],
+        source: 'focus',
+      });
+    }
+    const result = await ai.digest(items);
+    const byId = new Map(items.map((m) => [m.id, m]));
     const pick = (id) => {
       const m = byId.get(Number(id));
       return m ? { id: m.id, subject: m.subject, from: m.from, mailboxId: m.mailboxId } : null;
@@ -1687,6 +1726,13 @@ app.post(
       overview: result.overview,
       priorities: (result.priorities || []).map((p) => ({ ...p, mail: pick(p.uid) })).filter((p) => p.mail),
       groups: (result.groups || []).map((g) => ({ ...g, mails: (g.uids || []).map(pick).filter(Boolean) })),
+      source: 'focus',
+      stats: {
+        needReply: reply.length,
+        waiting: follow.length,
+        unreadExtra: unreadExtra.length,
+        overdue: focus.stats?.overdue || 0,
+      },
     });
   })
 );

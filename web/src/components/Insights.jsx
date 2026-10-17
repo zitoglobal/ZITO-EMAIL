@@ -3,7 +3,7 @@ import { Menu, RefreshCw, BarChart3, Crown, AlertTriangle, Activity, Wifi } from
 import { api, qs } from '../api.js';
 import { dayStart, relativeTime } from '../utils.js';
 
-export default function Insights({ onMenu, isAdmin, onGo }) {
+export default function Insights({ onMenu, isAdmin, onGo, onOpenMessage, onOpenSettings }) {
   const [data, setData] = useState(null);
   const [ops, setOps] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -28,6 +28,16 @@ export default function Insights({ onMenu, isAdmin, onGo }) {
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    const onBump = () => load(true);
+    window.addEventListener('zm-deal', onBump);
+    window.addEventListener('zm-collab', onBump);
+    return () => {
+      window.removeEventListener('zm-deal', onBump);
+      window.removeEventListener('zm-collab', onBump);
+    };
   }, [load]);
 
   const f = data?.focus || {};
@@ -89,7 +99,12 @@ export default function Insights({ onMenu, isAdmin, onGo }) {
                 {(ops.errorMailboxes || []).length > 0 && (
                   <ul className="ops-errors">
                     {ops.errorMailboxes.slice(0, 6).map((e) => (
-                      <li key={e.id}>
+                      <li
+                        key={e.id}
+                        className={onOpenSettings ? 'clickable-row' : ''}
+                        onClick={() => onOpenSettings?.('mailboxes')}
+                        title="去设置修复邮箱"
+                      >
                         <b>{e.email}</b>
                         <small>{e.user} · {e.error || '同步失败'}</small>
                       </li>
@@ -101,7 +116,12 @@ export default function Insights({ onMenu, isAdmin, onGo }) {
                     <h3 className="insights-h">Focus 抽样（我的）</h3>
                     <ul className="ops-sample">
                       {ops.focusSample.map((s) => (
-                        <li key={s.section + s.id}>
+                        <li
+                          key={s.section + s.id}
+                          className={onOpenMessage ? 'clickable-row' : ''}
+                          onClick={() => onOpenMessage?.(s.id)}
+                          title="打开该邮件"
+                        >
                           <em>{s.section === 'reply' ? '待回' : '等待'}</em>
                           <span className="ops-subj">{s.subject || '(无主题)'}</span>
                           <small>{s.why || '—'}</small>
