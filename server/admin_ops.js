@@ -86,7 +86,16 @@ export function snapshot(viewerId) {
       oauth: mailboxStats.oauth || 0,
     },
     errorMailboxes: errorMailboxes.slice(0, 20),
-    oauthProviders: oauth.status(),
+    oauthProviders: (() => {
+      const st = oauth.status();
+      return {
+        gmail: st.gmail,
+        microsoft: st.microsoft,
+        ready: st.ready,
+        publicBase: st.publicBase,
+        missing: st.missing,
+      };
+    })(),
     aiConfigured: ai.aiConfigured(),
     mailSecretConfigured: !!(mailSecret && mailSecret !== 'change-me-to-a-long-random-string'),
     lastBackupAt: backup.lastBackupAt(),

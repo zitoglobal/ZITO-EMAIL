@@ -35,6 +35,7 @@ import * as adminOps from './admin_ops.js';
 import * as teamQueue from './team_queue.js';
 import { registerCollabRoutes } from './routes_collab.js';
 import { registerDealsRoutes } from './routes_deals.js';
+import { registerFocusRoutes } from './routes_focus.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3310);
@@ -342,61 +343,10 @@ app.get(
 );
 
 // ---------- 今日待办 / 智能分拣 ----------
-app.get(
-  '/api/focus',
-  auth,
-  wrap(async (req, res) => {
-    const mailboxId = req.query.mailboxId || 'all';
-    if (mailboxId !== 'all') mailboxOf(req, mailboxId);
-    const data = priority.focus(req.user.id, users.publicUser(req.user).settings, { mailboxId, dayStart: req.query.dayStart });
-    data.reply = labels.attachLabels(req.user.id, data.reply || []);
-    data.followups = labels.attachLabels(req.user.id, data.followups || []);
-    res.json(data);
-  })
-);
-
-/** 单封：为何进/出今日待办或等待 */
-app.get(
-  '/api/focus/explain',
-  auth,
-  wrap(async (req, res) => {
-    const id = Number(req.query.id || req.query.messageId);
-    if (!Number.isInteger(id)) throw httpError(400, '请提供邮件 id');
-    res.json(priority.explainMessage(req.user.id, id, users.publicUser(req.user).settings));
-  })
-);
-
-app.get('/api/sender-rules', auth, (req, res) => res.json({ rules: priority.listRules(req.user.id) }));
-app.post(
-  '/api/sender-rules',
-  auth,
-  wrap(async (req, res) => {
-    const key = priority.saveRule(req.user.id, req.body || {});
-    emit(req.user.id, 'sync', { local: true });
-    res.json({ ok: true, key });
-  })
-);
-app.delete(
-  '/api/sender-rules',
-  auth,
-  wrap(async (req, res) => {
-    priority.deleteRule(req.user.id, req.query.key);
-    emit(req.user.id, 'sync', { local: true });
-    res.json({ ok: true });
-  })
-);
-
-/** VIP 建议：往来频次 + 业务信号，不自动写入规则 */
-app.get(
-  '/api/vip-suggestions',
-  auth,
-  wrap(async (req, res) => {
-    res.json({ suggestions: priority.vipSuggestions(req.user.id) });
-  })
-);
+registerFocusRoutes(app, { auth, wrap, httpError, mailboxOf, priority, labels, users, emit });
 
 /** 团队认领 + 业务阶段（邮箱内，不对接已下线 CRM） */
-registerDealsRoutes(app, { auth, wrap, rateLimit, deals, labels, emit, users });
+registerDealsRoutes(app, { auth, wrap, rateLimit, deals, labels, emit, users, push, db });
 
 app.patch(
   '/api/me',
@@ -1813,12 +1763,22 @@ function remindUser(u) {
     console.error('[remind]', e.message);
   }
 }
-const remindOverdue = () => db.prepare('SELECT * FROM users').all().forEach(remindUser);
+const remindOverdue = () => {
+  db.prepare('SELECT * FROM users').all().forEach(remindUser);
+  try {
+    teamQueue.remindAdmins({ emit, push, isOnline });
+  } catch (e) {
+    console.error('[remind-queue]', e.message);
+  }
+};
 setTimeout(remindOverdue, 60_000).unref();
 setInterval(remindOverdue, 10 * 60_000).unref();
-const server = app.listen(PORT, BIND_HOST, () =>
-  console.log(`[zito-mail] 服务已启动 http://${BIND_HOST === '0.0.0.0' ? 'localhost' : BIND_HOST}:${PORT} (bind ${BIND_HOST})`)
-);
+const server = app.listen(PORT, BIND_HOST, () => {
+  console.log(`[zito-mail] 服务已启动 http://${BIND_HOST === '0.0.0.0' ? 'localhost' : BIND_HOST}:${PORT} (bind ${BIND_HOST})`);
+  try {
+    oauth.logStartupHints();
+  } catch (_) {}
+});
 
 function shutdown(signal) {
   console.log(`[zito-mail] 收到 ${signal}，正在关闭…`);

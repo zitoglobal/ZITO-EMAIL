@@ -409,6 +409,7 @@ export default function App() {
     setOutboxVersion,
     openMessage,
     goToday,
+    goBox: (box) => setView({ mailboxId: 'all', box }),
   });
 
   // ---------- 邮件操作 ----------
@@ -1287,6 +1288,7 @@ export default function App() {
           isAdmin={user.role === 'admin'}
           onOpenMessage={(id) => openMessage(id, { box: 'inbox' })}
           onGoToday={() => setView({ mailboxId: 'all', box: 'today' })}
+          onOpenInToday={(id) => openMessage(id, { box: 'today' })}
         />
       ) : view.box === 'deals' ? (
         <Deals

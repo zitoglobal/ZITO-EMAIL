@@ -6,7 +6,7 @@ import { displayName, relativeTime, waitText } from '../utils.js';
 /**
  * 团队公海：跨成员未认领客户来信（认领/指派；仅自己邮箱可打开原文）
  */
-export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, isAdmin }) {
+export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, onOpenInToday, isAdmin }) {
   const [data, setData] = useState(null);
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -50,18 +50,13 @@ export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, is
     return true;
   });
 
-  function afterClaim(label, { assigned } = {}) {
-    notify?.(
-      assigned ? `已指派 ${label}` : `已认领 ${label}`,
-      'success',
-      onGoToday
-        ? {
-            label: '去今日待办',
-            fn: () => onGoToday(),
-          }
-        : null,
-      10_000
-    );
+  function afterClaim(label, { assigned, focusHint, mine } = {}) {
+    const goFocus = focusHint?.canOpen && focusHint.messageId && onOpenInToday
+      ? { label: '打开待办', fn: () => onOpenInToday(focusHint.messageId) }
+      : onGoToday
+        ? { label: mine || !assigned ? '去今日待办' : '查看客户', fn: () => onGoToday() }
+        : null;
+    notify?.(assigned ? `已指派 ${label}` : `已认领 ${label}${focusHint?.canOpen ? ' · 已置顶待办' : ''}`, 'success', goFocus, 10_000);
   }
 
   async function claim(it) {
@@ -69,9 +64,15 @@ export default function TeamQueue({ onMenu, notify, onOpenMessage, onGoToday, is
     if (!addr) return;
     setBusy(it.scopeKey);
     try {
-      await api('/deals/claim', { method: 'POST', body: { address: addr, threadId: it.threadId } });
-      afterClaim(it.scopeLabel);
+      const res = await api('/deals/claim', {
+        method: 'POST',
+        body: { address: addr, threadId: it.threadId, messageId: it.mine ? it.id : undefined },
+      });
+      afterClaim(it.scopeLabel, { focusHint: res.focusHint, mine: it.mine });
       setData((d) => (d ? { ...d, items: d.items.filter((x) => x.scopeKey !== it.scopeKey) } : d));
+      if (res.focusHint?.canOpen && res.focusHint.messageId && onOpenInToday) {
+        setTimeout(() => onOpenInToday(res.focusHint.messageId), 200);
+      }
     } catch (e) {
       if (e.status === 409) notify?.(e.message || '同事已认领', 'error');
       else notify?.(e.message, 'error');

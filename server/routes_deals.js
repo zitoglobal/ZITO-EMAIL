@@ -5,8 +5,21 @@ function broadcastDeal(emit, users) {
   for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
 }
 
+function focusHint(db, userId, body = {}) {
+  const mid = Number(body.messageId);
+  if (!Number.isInteger(mid)) return { openToday: true, messageId: null, canOpen: false };
+  const row = db
+    .prepare(
+      `SELECT m.id FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id WHERE m.id = ? AND b.user_id = ?`
+    )
+    .get(mid, userId);
+  return row
+    ? { openToday: true, messageId: row.id, canOpen: true }
+    : { openToday: true, messageId: null, canOpen: false };
+}
+
 export function registerDealsRoutes(app, ctx) {
-  const { auth, wrap, rateLimit, deals, labels, emit, users } = ctx;
+  const { auth, wrap, rateLimit, deals, labels, emit, users, push, db } = ctx;
 
   app.get(
     '/api/deals/lookup',
@@ -49,7 +62,8 @@ export function registerDealsRoutes(app, ctx) {
     wrap(async (req, res) => {
       const deal = deals.claim(req.user.id, req.body || {});
       broadcastDeal(emit, users);
-      res.json({ deal });
+      const hint = db ? focusHint(db, req.user.id, req.body || {}) : { openToday: true };
+      res.json({ deal, focusHint: hint });
     })
   );
   app.post(
@@ -58,8 +72,22 @@ export function registerDealsRoutes(app, ctx) {
     wrap(async (req, res) => {
       const deal = deals.assign(req.user.id, req.body || {});
       broadcastDeal(emit, users);
-      // 额外提醒被指派人
-      if (deal?.owner?.id) emit(deal.owner.id, 'sync', { local: true, deal: true, assigned: true });
+      if (deal?.owner?.id) {
+        emit(deal.owner.id, 'sync', { local: true, deal: true, assigned: true });
+        emit(deal.owner.id, 'deal-assigned', {
+          scopeLabel: deal.scopeLabel,
+          stageLabel: deal.stageLabel,
+          from: req.user.name || req.user.email,
+        });
+        push
+          ?.notifyUser?.(deal.owner.id, {
+            title: '新客户已指派给你',
+            body: `${deal.scopeLabel} · ${req.user.name || '管理员'} 指派`,
+            url: '/?box=today',
+            tag: 'zm-deal-assign',
+          })
+          .catch?.(() => {});
+      }
       res.json({ deal });
     })
   );

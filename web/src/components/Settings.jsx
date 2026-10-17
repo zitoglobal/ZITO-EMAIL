@@ -801,6 +801,39 @@ function Account({ user, onUserChange, onLogout, notify }) {
   );
 }
 
+function OauthOps({ notify }) {
+  const [st, setSt] = useState(null);
+  useEffect(() => {
+    api('/oauth/status')
+      .then(setSt)
+      .catch((e) => notify?.(e.message, 'error'));
+  }, [notify]);
+  if (!st) return null;
+  return (
+    <div className="oauth-ops">
+      <h3 className="set-h">Gmail / Microsoft OAuth</h3>
+      <p className="set-desc">
+        配置生产环境变量后绑定页出现一键授权。步骤见仓库 <code>docs/oauth-setup.md</code>。
+      </p>
+      <div className="ops-flags">
+        <span className={st.ready ? 'ok' : 'warn'}>{st.ready ? '已就绪' : '未就绪'}</span>
+        <span className={st.gmail ? 'ok' : 'mute'}>Gmail {st.gmail ? '开' : '关'}</span>
+        <span className={st.microsoft ? 'ok' : 'mute'}>M365 {st.microsoft ? '开' : '关'}</span>
+        <span className={st.publicBase ? 'ok' : 'warn'}>回调根 {st.publicBase || '未设 PUBLIC_BASE_URL'}</span>
+      </div>
+      {(st.missing || []).length > 0 && (
+        <div className="form-error">缺少：{st.missing.join('、')}</div>
+      )}
+      {(st.redirects?.gmail || st.redirects?.microsoft) && (
+        <ul className="oauth-redirects">
+          {st.redirects.gmail && <li><b>Gmail 回调</b> <code>{st.redirects.gmail}</code></li>}
+          {st.redirects.microsoft && <li><b>M365 回调</b> <code>{st.redirects.microsoft}</code></li>}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function Team({ me, notify }) {
   const [list, setList] = useState(null);
   const [form, setForm] = useState(null);
@@ -860,6 +893,7 @@ function Team({ me, notify }) {
 
   return (
     <>
+      <OauthOps notify={notify} />
       <p className="set-desc">为同事开通平台账号。每位成员登录后各自绑定、管理自己的邮箱，彼此数据隔离。</p>
       {form ? (
         <form className="set-account" onSubmit={create}>

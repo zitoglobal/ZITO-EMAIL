@@ -337,7 +337,19 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       if (m.priority?.overdue) m.remindStage = stages.get(m.id) || 0;
     }
   }
-  const replyWithDeals = attachDeals(userId, reply);
+  let replyWithDeals = attachDeals(userId, reply);
+  // 我已认领：抬分置顶，减少「认了却找不到」
+  replyWithDeals = replyWithDeals
+    .map((m) => {
+      if (!m.deal?.mine || !m.priority) return m;
+      const score = (m.priority.score || 0) + 28;
+      const why = ['我已认领', m.priority.why].filter(Boolean).join(' · ');
+      return {
+        ...m,
+        priority: { ...m.priority, score, why, claimedBoost: true },
+      };
+    })
+    .sort((a, b) => (b.priority?.score || 0) - (a.priority?.score || 0) || b.date - a.date);
   let followWithDeals = attachDeals(userId, followups);
 
   // 跟进日闭环：到期认领客户必出现在待跟进（即使未满全局 followDays）

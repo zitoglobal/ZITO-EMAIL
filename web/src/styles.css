@@ -2026,6 +2026,10 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .oauth-btn { flex: 1; min-width: 140px; justify-content: center; }
 .oauth-bind-or { font-size: 11.5px; color: var(--muted); text-align: center; margin: 2px 0 4px; }
 .oauth-hint { display: block; margin: -4px 0 8px; font-size: 12px; }
+.oauth-ops { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.oauth-ops .set-h { margin: 0 0 6px; font-size: 14px; }
+.oauth-redirects { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.oauth-redirects code { font-size: 11px; word-break: break-all; color: var(--text); }
 
 .team-queue-list { list-style: none; margin: 0; padding: 8px 12px 24px; display: flex; flex-direction: column; gap: 8px; }
 .team-queue-row {

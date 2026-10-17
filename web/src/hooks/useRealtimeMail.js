@@ -15,6 +15,7 @@ export function useRealtimeMail({
   setOutboxVersion,
   openMessage,
   goToday,
+  goBox,
 }) {
   const scheduleRef = useRef(scheduleRefresh);
   scheduleRef.current = scheduleRefresh;
@@ -22,6 +23,8 @@ export function useRealtimeMail({
   openRef.current = openMessage;
   const goTodayRef = useRef(goToday);
   goTodayRef.current = goToday;
+  const goBoxRef = useRef(goBox);
+  goBoxRef.current = goBox;
 
   useEffect(() => {
     if (boot !== 'ready') return;
@@ -120,6 +123,32 @@ export function useRealtimeMail({
         };
       }
       scheduleRef.current();
+    });
+    es.addEventListener('remind-queue', (e) => {
+      const d = parse(e);
+      const text = `公海有 ${d.count || 0} 条超时未认领${d.vip ? `（含 ${d.vip} VIP）` : ''}，最早已等 ${d.oldestHours || 0}h`;
+      notify(
+        text,
+        'important',
+        { label: '去公海', fn: () => (goBoxRef.current ? goBoxRef.current('team') : goTodayRef.current?.()) },
+        15_000
+      );
+      if (settingsRef.current.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        const n = new Notification('团队公海待认领', { body: text, tag: 'zm-team-queue', icon: '/favicon-180.png' });
+        n.onclick = () => {
+          window.focus();
+          goBoxRef.current?.('team');
+        };
+      }
+    });
+    es.addEventListener('deal-assigned', (e) => {
+      const d = parse(e);
+      notify(
+        `${d.from || '管理员'} 把 ${d.scopeLabel || '客户'} 指派给你`,
+        'important',
+        { label: '去今日待办', fn: () => goTodayRef.current?.() },
+        12_000
+      );
     });
     es.addEventListener('outbox', (e) => {
       const d = parse(e);

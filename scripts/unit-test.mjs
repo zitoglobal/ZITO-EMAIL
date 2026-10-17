@@ -11,6 +11,8 @@ import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
 import { conversationKey } from '../server/repo.js';
 import { threadIdOf } from '../server/imap.js';
+import { queueScore } from '../server/team_queue.js';
+import { status as oauthStatus } from '../server/oauth.js';
 import { generateSecret, generateSync, verifySync } from 'otplib';
 
 let fail = 0;
@@ -208,6 +210,10 @@ assert('conv key id fallback', conversationKey({ id: 42 }) === '#42');
 assert('threadIdOf prefers first References', threadIdOf('<m3>', '<m2>', '<m1> <m2>') === 'm1');
 assert('threadIdOf falls to In-Reply-To', threadIdOf('<m3>', '<m2>', '') === 'm2');
 assert('threadIdOf falls to self', threadIdOf('<m3>', '', '') === 'm3');
+
+assert('queueScore vip+overdue high', queueScore({ vip: true, overdue: true, waitingHours: 30, signals: ['inquiry'] }) >= 150);
+assert('queueScore plain lower', queueScore({ vip: false, overdue: false, waitingHours: 2, signals: [] }) < 50);
+assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.isArray(oauthStatus().missing));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

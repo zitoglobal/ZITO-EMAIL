@@ -81,8 +81,9 @@ export default function Insights({ onMenu, isAdmin }) {
                 <div className="ops-flags">
                   <span className={ops.aiConfigured ? 'ok' : 'warn'}>AI {ops.aiConfigured ? '已配' : '未配'}</span>
                   <span className={ops.mailSecretConfigured ? 'ok' : 'warn'}>密钥 {ops.mailSecretConfigured ? '正常' : '弱'}</span>
-                  <span className={ops.oauthProviders?.gmail ? 'ok' : 'mute'}>Gmail OAuth {ops.oauthProviders?.gmail ? '开' : '关'}</span>
-                  <span className={ops.oauthProviders?.microsoft ? 'ok' : 'mute'}>M365 OAuth {ops.oauthProviders?.microsoft ? '开' : '关'}</span>
+                  <span className={ops.oauthProviders?.ready ? 'ok' : 'warn'}>OAuth {ops.oauthProviders?.ready ? '就绪' : '未就绪'}</span>
+                  <span className={ops.oauthProviders?.gmail ? 'ok' : 'mute'}>Gmail {ops.oauthProviders?.gmail ? '开' : '关'}</span>
+                  <span className={ops.oauthProviders?.microsoft ? 'ok' : 'mute'}>M365 {ops.oauthProviders?.microsoft ? '开' : '关'}</span>
                   {ops.lastBackupAt && <span className="mute">备份 {relativeTime(ops.lastBackupAt)}</span>}
                 </div>
                 {(ops.errorMailboxes || []).length > 0 && (

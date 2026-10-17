@@ -33,7 +33,7 @@ function isTeamVip(addr, vipKeys) {
   return !!(d && (vipKeys.has('@' + d) || vipKeys.has(d)));
 }
 
-function queueScore(item) {
+export function queueScore(item) {
   let s = 0;
   if (item.vip) s += 100;
   if (item.overdue) s += 55;
@@ -43,6 +43,59 @@ function queueScore(item) {
   if (sig.includes('order') || sig.includes('payment')) s += 16;
   if (sig.includes('inquiry') || sig.includes('sample')) s += 10;
   return Math.round(s);
+}
+
+/** 公海超时未认领摘要（催办用） */
+export function overdueSummary() {
+  const data = listQueue(0, { limit: 120 });
+  const overdue = data.items.filter((x) => x.overdue);
+  if (!overdue.length) return null;
+  const oldest = overdue.reduce((a, b) => (a.waitingHours >= b.waitingHours ? a : b));
+  return {
+    count: overdue.length,
+    vip: overdue.filter((x) => x.vip).length,
+    oldestHours: oldest.waitingHours,
+    sample: overdue.slice(0, 3).map((x) => ({
+      scopeLabel: x.scopeLabel,
+      from: x.from,
+      subject: x.subject,
+      waitingHours: x.waitingHours,
+      vip: x.vip,
+    })),
+  };
+}
+
+/** 管理员催办冷却（内存） */
+const adminRemindAt = new Map();
+const ADMIN_REMIND_COOLDOWN = 2 * 3600_000;
+
+export function remindAdmins({ emit, push, isOnline }) {
+  const snap = overdueSummary();
+  if (!snap) return;
+  const admins = db.prepare(`SELECT id, name, email FROM users WHERE role = 'admin'`).all();
+  const t = Date.now();
+  for (const a of admins) {
+    const last = adminRemindAt.get(a.id) || 0;
+    if (t - last < ADMIN_REMIND_COOLDOWN) continue;
+    adminRemindAt.set(a.id, t);
+    const payload = {
+      type: 'team-queue',
+      count: snap.count,
+      vip: snap.vip,
+      oldestHours: snap.oldestHours,
+      sample: snap.sample,
+      subject: `公海 ${snap.count} 条超时未认领`,
+    };
+    if (isOnline?.(a.id)) emit(a.id, 'remind-queue', payload);
+    push
+      ?.notifyUser?.(a.id, {
+        title: '团队公海待认领',
+        body: `${snap.count} 条已超时${snap.vip ? `（含 ${snap.vip} VIP）` : ''}，最早已等 ${snap.oldestHours}h`,
+        url: '/?box=team',
+        tag: 'zm-team-queue',
+      })
+      .catch?.(() => {});
+  }
 }
 
 /**

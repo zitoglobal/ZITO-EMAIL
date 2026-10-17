@@ -9,11 +9,42 @@ import crypto from 'node:crypto';
 const BASE = () => String(process.env.PUBLIC_BASE_URL || process.env.OAUTH_PUBLIC_BASE || '').replace(/\/+$/, '');
 
 export function status() {
+  const gmail = !!(process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET);
+  const microsoft = !!(process.env.MS_OAUTH_CLIENT_ID && process.env.MS_OAUTH_CLIENT_SECRET);
+  const publicBase = BASE() || null;
+  const missing = [];
+  if (!publicBase && (gmail || microsoft || process.env.GOOGLE_OAUTH_CLIENT_ID || process.env.MS_OAUTH_CLIENT_ID)) {
+    missing.push('PUBLIC_BASE_URL');
+  }
+  if (process.env.GOOGLE_OAUTH_CLIENT_ID && !process.env.GOOGLE_OAUTH_CLIENT_SECRET) missing.push('GOOGLE_OAUTH_CLIENT_SECRET');
+  if (process.env.MS_OAUTH_CLIENT_ID && !process.env.MS_OAUTH_CLIENT_SECRET) missing.push('MS_OAUTH_CLIENT_SECRET');
   return {
-    gmail: !!(process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET),
-    microsoft: !!(process.env.MS_OAUTH_CLIENT_ID && process.env.MS_OAUTH_CLIENT_SECRET),
-    publicBase: BASE() || null,
+    gmail,
+    microsoft,
+    publicBase,
+    ready: (gmail || microsoft) && !!publicBase && missing.length === 0,
+    missing,
+    redirects: {
+      gmail: gmail || process.env.GOOGLE_OAUTH_CLIENT_ID ? (process.env.GOOGLE_OAUTH_REDIRECT || (publicBase ? `${publicBase}/api/oauth/gmail/callback` : null)) : null,
+      microsoft:
+        microsoft || process.env.MS_OAUTH_CLIENT_ID
+          ? process.env.MS_OAUTH_REDIRECT || (publicBase ? `${publicBase}/api/oauth/microsoft/callback` : null)
+          : null,
+    },
+    docs: '/docs/oauth-setup.md',
   };
+}
+
+/** 启动时打印一次配置缺口（不抛错，密码绑定仍可用） */
+export function logStartupHints() {
+  const st = status();
+  if (st.ready) {
+    console.log(`[oauth] 已就绪：Gmail=${st.gmail} Microsoft=${st.microsoft} base=${st.publicBase}`);
+    return;
+  }
+  if (st.gmail || st.microsoft || st.missing.length) {
+    console.warn(`[oauth] 未完全就绪：${st.missing.length ? `缺少 ${st.missing.join(', ')}` : '需 PUBLIC_BASE_URL + Client ID/Secret'}；详见 docs/oauth-setup.md`);
+  }
 }
 
 function redirectUri(provider) {
