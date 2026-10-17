@@ -15,6 +15,8 @@ const FULL_INTERVAL = 5 * 60_000;
 const INBOX_INTERVAL = 90_000;
 /** Sent 无 IDLE 时的近实时轮询；有 Sent IDLE 时作兜底 */
 const SENT_INTERVAL = 45_000;
+/** Drafts 无 IDLE，短轮询改善多端草稿 */
+const DRAFTS_INTERVAL = 45_000;
 
 /** @type {Map<string, Engine>} */
 const engines = new Map();
@@ -44,6 +46,10 @@ class Engine {
     return repo.specialFolder(this.id, '\\Sent')?.path || null;
   }
 
+  draftsPath() {
+    return repo.specialFolder(this.id, '\\Drafts')?.path || null;
+  }
+
   start() {
     this.full();
     this.timers.push(setInterval(() => this.full(), FULL_INTERVAL));
@@ -54,8 +60,26 @@ class Engine {
         if (p) this.syncFolder(p).catch(() => {});
       }, SENT_INTERVAL)
     );
+    this.timers.push(
+      setInterval(() => {
+        const p = this.draftsPath();
+        if (p) this.syncFolder(p).catch(() => {});
+      }, DRAFTS_INTERVAL)
+    );
     this.connectWatcher();
     this.connectSentWatcher();
+    // 未识别 Sent 时「已回仍待办」会偏慢，打日志并给前端一次提示
+    if (!this.sentPath()) {
+      const mb = this.mb;
+      if (mb) {
+        console.warn(`[sync] ${mb.email} 未识别「已发送」文件夹，今日待办消待办可能延迟`);
+        emit(mb.user_id, 'mailbox', {
+          id: mb.id,
+          status: mb.status || 'ok',
+          hint: '未识别已发送文件夹：回信后「今日待办」更新可能变慢，请在邮箱设置里确认 Sent 文件夹映射',
+        });
+      }
+    }
   }
 
   stop() {

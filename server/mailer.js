@@ -125,7 +125,8 @@ async function tick() {
   busy = true;
   try {
     for (const job of repo.dueOutbox()) {
-      repo.setOutboxStatus(job.id, 'sending');
+      // 与 DELETE 条件删除互斥：抢不到说明用户已撤销
+      if (!repo.claimOutboxSending(job.id)) continue;
       const mb = repo.getMailboxById(job.mailbox_id);
       try {
         const payload = JSON.parse(job.payload);
@@ -171,6 +172,7 @@ async function tick() {
 
 export function startScheduler() {
   db.prepare("UPDATE outbox SET status = 'scheduled' WHERE status = 'sending'").run();
-  setInterval(() => tick().catch((e) => console.error('[scheduler]', e)), 5_000).unref();
+  // 1.5s：缩短撤销窗口与真正发出的竞态
+  setInterval(() => tick().catch((e) => console.error('[scheduler]', e)), 1_500).unref();
   setInterval(() => repo.pruneBodies(), 3600_000).unref();
 }

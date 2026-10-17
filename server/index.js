@@ -31,6 +31,7 @@ import * as analytics from './analytics.js';
 import * as push from './push.js';
 import * as oauth from './oauth.js';
 import * as presence from './presence.js';
+import * as flagRetry from './flag_retry.js';
 import * as adminOps from './admin_ops.js';
 import * as teamQueue from './team_queue.js';
 import { registerCollabRoutes } from './routes_collab.js';
@@ -90,18 +91,29 @@ const wrap = (fn) => (req, res, next) =>
     res.status(e.status || 400).json(body);
   });
 
-/** IMAP 副作用失败时：本地状态已改则不回滚，只标邮箱错误（避免整页操作失败） */
-function softImapFail(mb, e) {
+/**
+ * IMAP 旗标写回失败：
+ * - 瞬时/可重试 → 入队，不标邮箱 error
+ * - 认证失败 → 标 error，需用户重绑
+ */
+function softImapFail(mb, e, { folder, uids, flags } = {}) {
   const msg = imap.friendlyImapError(e);
   console.warn('[imap-soft]', mb?.email || mb?.id, msg);
-  if (mb?.id) {
-    try {
-      repo.setMailboxStatus(mb.id, 'error', msg);
-      emit(mb.user_id, 'mailbox', { id: mb.id, status: 'error', error: msg });
-      emit(mb.user_id, 'sync', { mailboxId: mb.id, local: true });
-    } catch {
-      /* ignore */
+  if (flagRetry.isAuthImapError(e)) {
+    if (mb?.id) {
+      try {
+        repo.setMailboxStatus(mb.id, 'error', msg);
+        emit(mb.user_id, 'mailbox', { id: mb.id, status: 'error', error: msg });
+        emit(mb.user_id, 'sync', { mailboxId: mb.id, local: true });
+      } catch {
+        /* ignore */
+      }
     }
+    return msg;
+  }
+  if (folder && uids?.length && flags) {
+    flagRetry.enqueueFlagRetry(mb, folder, uids, flags);
+    return msg;
   }
   return msg;
 }
@@ -902,11 +914,12 @@ app.post(
         const seen = action === 'read';
         repo.patchMessages(ids, { seen: seen ? 1 : 0 });
         await each(async (g) => {
+          const uids = g.rows.map((r) => r.uid);
           try {
-            await imap.setFlags(g.mb, g.folder, g.rows.map((r) => r.uid), { seen });
+            await imap.setFlags(g.mb, g.folder, uids, { seen });
             sync.touch(g.mb.id, g.folder);
           } catch (e) {
-            softImapFail(g.mb, e);
+            softImapFail(g.mb, e, { folder: g.folder, uids, flags: { seen } });
           }
         });
         break;
@@ -916,10 +929,11 @@ app.post(
         const flagged = action === 'flag';
         repo.patchMessages(ids, { flagged: flagged ? 1 : 0 });
         await each(async (g) => {
+          const uids = g.rows.map((r) => r.uid);
           try {
-            await imap.setFlags(g.mb, g.folder, g.rows.map((r) => r.uid), { flagged });
+            await imap.setFlags(g.mb, g.folder, uids, { flagged });
           } catch (e) {
-            softImapFail(g.mb, e);
+            softImapFail(g.mb, e, { folder: g.folder, uids, flags: { flagged } });
           }
         });
         break;
@@ -1079,12 +1093,13 @@ app.post(
     }
     const dir = mailer.saveOutboxFiles(files);
     const id = repo.addOutbox(req.user.id, mb.id, payload, dir, sendAt);
-    // 延迟发送：入队时先认领，避免撤回前同事撞单；真正发出时 mailer 再确认一次
-    const dealMeta = outboundClaimMeta(req.user.id, payload);
+    // 撤销窗口（delaySeconds）内不预认领，避免撤销后脏认领；长定时仍入队时认领防撞单
+    const undoWindow = !payload.sendAt && delay > 0;
+    const dealMeta = undoWindow ? null : outboundClaimMeta(req.user.id, payload);
     if (dealMeta?.claimed || dealMeta?.conflict) {
       for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
     }
-    res.json({ outboxId: id, sendAt, scheduled: !!payload.sendAt, dealMeta });
+    res.json({ outboxId: id, sendAt, scheduled: !!payload.sendAt, dealMeta, undoWindow: !!undoWindow });
   })
 );
 
@@ -1105,10 +1120,17 @@ app.delete(
   '/api/outbox/:id',
   auth,
   wrap(async (req, res) => {
-    const o = repo.getOutbox(req.user.id, Number(req.params.id));
+    const id = Number(req.params.id);
+    const o = repo.getOutbox(req.user.id, id);
     if (!o) throw httpError(404, '邮件已发出，无法撤销');
     if (o.status === 'sending') throw httpError(409, '邮件正在发送，无法撤销');
-    repo.deleteOutbox(o.id);
+    // 条件删除：仅 scheduled，与调度器 claim 互斥，消灭「点了撤销仍发出」
+    if (!repo.deleteOutboxIfScheduled(id)) {
+      const again = repo.getOutbox(req.user.id, id);
+      if (!again) throw httpError(404, '邮件已发出，无法撤销');
+      if (again.status === 'sending') throw httpError(409, '邮件正在发送，无法撤销');
+      throw httpError(409, '无法撤销，请刷新发件箱');
+    }
     mailer.removeOutboxFiles(o.files_dir);
     res.json({ ok: true, payload: JSON.parse(o.payload) });
   })
@@ -1140,7 +1162,8 @@ app.post(
     if (payload.draftUid && Number(payload.draftUid) !== result?.uid) {
       await imap.expungeMessages(mb, drafts.path, [Number(payload.draftUid)]).catch(() => {});
     }
-    sync.touch(mb.id, drafts.path);
+    sync.forceSync(mb.id, drafts.path).catch(() => {});
+    sync.touch(mb.id, drafts.path, 800);
     res.json({ ok: true, uid: result?.uid || null });
   })
 );
@@ -1154,7 +1177,7 @@ app.post(
     const uid = Number(req.body.uid);
     if (drafts && uid) {
       await imap.expungeMessages(mb, drafts.path, [uid]);
-      db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?').run(mb.id, drafts.path, uid);
+      repo.deleteUids(mb.id, drafts.path, [uid]);
       sync.touch(mb.id, drafts.path);
     }
     res.json({ ok: true });
@@ -1821,6 +1844,7 @@ try {
   console.warn('[fts]', e.message);
 }
 mailer.startScheduler();
+flagRetry.startFlagRetryScheduler();
 sync.startAll();
 backup.startBackupScheduler();
 

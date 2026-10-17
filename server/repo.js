@@ -727,6 +727,18 @@ export const dueOutbox = () => db.prepare("SELECT * FROM outbox WHERE status = '
 export const setOutboxStatus = (id, status, error = null) => db.prepare('UPDATE outbox SET status = ?, error = ? WHERE id = ?').run(status, error, id);
 export const updateOutboxTime = (id, sendAt) => db.prepare("UPDATE outbox SET send_at = ?, status = 'scheduled', error = NULL WHERE id = ?").run(sendAt, id);
 export const deleteOutbox = (id) => db.prepare('DELETE FROM outbox WHERE id = ?').run(id);
+/** 仅删除仍为 scheduled 的任务（与 sending claim 互斥） */
+export function deleteOutboxIfScheduled(id) {
+  return db.prepare("DELETE FROM outbox WHERE id = ? AND status = 'scheduled'").run(id).changes > 0;
+}
+/** 原子抢占发送权；失败表示已被撤销或他进程抢走 */
+export function claimOutboxSending(id) {
+  return (
+    db
+      .prepare("UPDATE outbox SET status = 'sending' WHERE id = ? AND status = 'scheduled' AND send_at <= ?")
+      .run(id, Date.now() + 100).changes > 0
+  );
+}
 
 // ---------- 稍后处理 ----------
 export const dueSnoozes = () =>

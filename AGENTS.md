@@ -12,6 +12,8 @@
 - Nginx：`deploy/nginx-zm-limit.conf` 登录/API 边缘限流；部署用 `python deploy/deploy.py nginx`
 - 业务阶段变更会同步外贸标签；今日待办 / 等待默认「跟进中」（未认领+我跟），可筛全部/未认领/我跟/同事跟；两边均支持单封/批量认领
 - 公海认领同事箱：不打开原信（隐私），自动引导「写首封跟进」草稿；FTS 删信同步清理，启动差量 backfill
+- 可靠发信：outbox 条件删除 + claim sending 互斥；撤销窗口不预认领；调度 1.5s
+- IMAP 旗标：瞬时失败入 `flag_retry` 队列，认证失败才标邮箱 error；Drafts 45s 轮询；无 Sent 映射时提示
 - 发信默认自动认领客户（设置可关）；发信后可软提示推进阶段；侧栏「我的客户」按阶段扫管线
 - 认领/接管/改阶段/释放写入 `deal_events`；DealBar 可改备注、下次跟进日、看记录；催单模板按阶段区分
 - 读信后按正文重算意图 signals；搜索走 FTS5（正文）；侧栏「销售洞察」轻报表；PWA + Web Push（设置 → 偏好）

@@ -10,7 +10,7 @@ import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
 import { conversationKey } from '../server/repo.js';
-import { threadIdOf, inlineCidImages, resolveCidPlaceholders } from '../server/imap.js';
+import { threadIdOf, inlineCidImages, resolveCidPlaceholders, isAuthFailure, isTransientFailure } from '../server/imap.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
@@ -287,6 +287,10 @@ assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.i
   assert('placeholder → attachment url', resolved.includes('/api/messages/42/attachments/0?inline=1'));
   assert('sanitize keeps relative api img', sanitizeMailHtml('<img src="/api/messages/1/attachments/0?inline=1">').includes('/api/messages/1/attachments/0'));
 }
+
+assert('isAuthFailure login', isAuthFailure({ authenticationFailed: true }));
+assert('isTransient timeout', isTransientFailure({ message: 'Connection timed out' }));
+assert('auth not transient', !isTransientFailure({ authenticationFailed: true, message: 'auth' }));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

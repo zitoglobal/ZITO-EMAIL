@@ -25,6 +25,19 @@ export function friendlyImapError(e) {
   return raw || '邮件服务器出现未知错误';
 }
 
+export function isAuthFailure(e) {
+  if (e?.authenticationFailed || e?.auth) return true;
+  const msg = friendlyImapError(e);
+  return /登录失败|OAuth 授权已失效|authenticat|invalid credentials|invalid_grant/i.test(msg);
+}
+
+/** 瞬时网络类错误：可排队重试，勿立刻标邮箱 error */
+export function isTransientFailure(e) {
+  if (isAuthFailure(e)) return false;
+  const s = [e?.code, e?.message, e?.responseText].filter(Boolean).join(' ').toLowerCase();
+  return /timeout|timed out|etimedout|econnreset|econnrefused|enotfound|socket|network|temporar|unavailable|try again|eai_again|rate.?limit|too many/i.test(s);
+}
+
 export async function buildClient(mb, password) {
   // 连接前复检 DNS，缩小绑定时校验与实际连接之间的重绑定窗口
   await assertSafeMailHost(mb.imap_host, 'IMAP');
