@@ -93,7 +93,14 @@ class Engine {
     if (this.stopped) return;
     const mb = this.mb;
     if (!mb) return this.stop();
-    const client = imap.buildClient(mb);
+    let client;
+    try {
+      client = await imap.buildClient(mb);
+    } catch (e) {
+      this.markError(imap.friendlyImapError(e));
+      this.reconnectTimer = setTimeout(() => this.connectWatcher(), 30_000);
+      return;
+    }
     client.on('exists', () => this.later(this.inboxPath()));
     client.on('expunge', () => this.later(this.inboxPath(), 1500));
     client.on('flags', (ev) => {
@@ -134,7 +141,13 @@ class Engine {
       this.sentReconnectTimer = setTimeout(() => this.connectSentWatcher(), 30_000);
       return;
     }
-    const client = imap.buildClient(mb);
+    let client;
+    try {
+      client = await imap.buildClient(mb);
+    } catch {
+      this.sentReconnectTimer = setTimeout(() => this.connectSentWatcher(), 30_000);
+      return;
+    }
     client.on('exists', () => this.later(path, 400));
     client.on('expunge', () => this.later(path, 1200));
     client.on('close', () => {

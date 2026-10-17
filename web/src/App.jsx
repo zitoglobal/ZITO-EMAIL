@@ -243,6 +243,18 @@ export default function App() {
           }
         } catch { /* ignore */ }
         setBoot('ready');
+        // OAuth 回调落地提示
+        try {
+          const sp = new URLSearchParams(window.location.search);
+          if (sp.get('oauth') === 'ok') {
+            const email = sp.get('email') || '';
+            notify(email ? `已绑定 ${email}，正在同步…` : '邮箱已通过 OAuth 绑定，正在同步…', 'success');
+            window.history.replaceState({}, '', window.location.pathname);
+          } else if (sp.get('oauth_error')) {
+            notify(`OAuth 绑定失败：${sp.get('oauth_error')}`, 'error', null, 12_000);
+            window.history.replaceState({}, '', window.location.pathname);
+          }
+        } catch { /* ignore */ }
       })
       .catch(() => setBoot('auth'));
   }, [applyState]);
@@ -1306,7 +1318,7 @@ export default function App() {
           }}
         />
       ) : view.box === 'insights' ? (
-        <Insights onMenu={() => setSidebarOpen(true)} />
+        <Insights onMenu={() => setSidebarOpen(true)} isAdmin={user.role === 'admin'} />
       ) : (
         <MailList
           title={title}

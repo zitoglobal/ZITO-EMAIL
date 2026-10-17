@@ -24,7 +24,8 @@ export default function AdminEmpty({ user, onAddMailbox, onOpenTeam, onOpenSetti
         </div>
         <ul className="admin-empty-hints">
           <li>成员登录后各自绑定邮箱，数据相互隔离</li>
-          <li>你可随时在「设置 → 邮箱账号」补绑自己的邮箱</li>
+          <li>Gmail / Microsoft 365 可在绑定页一键 OAuth（需管理员配置应用凭证）</li>
+          <li>「销售洞察」可查看同步失败、在线人数与 Focus 抽样</li>
           <li>今日待办 / 等待会在有邮件同步后自动出现</li>
         </ul>
       </div>

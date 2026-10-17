@@ -6,8 +6,8 @@ import { MAILBOX_COLORS } from '../utils.js';
 const PROVIDER_TIPS = [
   ['网易企业邮 / 163', '设置 → 客户端设置 → 开启 IMAP/SMTP，使用授权码'],
   ['QQ / 腾讯企业邮', '设置 → 账户 → 开启 IMAP/SMTP 服务，生成授权码'],
-  ['Gmail', 'Google 账号 → 安全性 → 两步验证 → 应用专用密码'],
-  ['Outlook', '需允许 IMAP 与 SMTP AUTH，个人账户使用应用密码'],
+  ['Gmail', '优先用下方「Google 一键绑定」；或应用专用密码'],
+  ['Outlook / M365', '优先用下方「Microsoft 一键绑定」；或应用密码'],
 ];
 
 /**
@@ -31,9 +31,31 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
     smtpSecure: mailbox?.smtp.secure ?? true,
   });
   const [loading, setLoading] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState('');
+  const [oauth, setOauth] = useState({ gmail: false, microsoft: false });
   const [error, setError] = useState('');
   const advTouched = useRef(false);
   const timer = useRef();
+
+  useEffect(() => {
+    if (editing) return;
+    api('/oauth/status')
+      .then(setOauth)
+      .catch(() => {});
+  }, [editing]);
+
+  async function startOauth(provider) {
+    setError('');
+    setOauthBusy(provider);
+    try {
+      const { url } = await api(`/oauth/${provider}/start`);
+      if (!url) throw new Error('未返回授权地址');
+      window.location.href = url;
+    } catch (err) {
+      setError(err.message || '无法启动 OAuth');
+      setOauthBusy('');
+    }
+  }
 
   useEffect(() => {
     if (editing) return;
@@ -93,9 +115,34 @@ export default function MailboxForm({ mailbox, onDone, onCancel, title, compact 
         <div className="logo-mark"><Mail size={20} /></div>
         <div>
           <div className="login-title">{title || (editing ? '更新邮箱连接' : '绑定邮箱')}</div>
-          <div className="login-sub">{editing ? mailbox.email : '支持企业邮箱、Gmail、QQ、163、Outlook 等，可绑定多个'}</div>
+          <div className="login-sub">
+            {editing
+              ? `${mailbox.email}${mailbox.authType === 'oauth' ? ' · OAuth' : ''}`
+              : '支持企业邮箱、Gmail、QQ、163、Outlook 等，可绑定多个'}
+          </div>
         </div>
       </div>
+
+      {!editing && (oauth.gmail || oauth.microsoft) && (
+        <div className="oauth-bind">
+          <div className="oauth-bind-label">一键授权（推荐）</div>
+          <div className="oauth-bind-row">
+            {oauth.gmail && (
+              <button type="button" className="btn-ghost oauth-btn" disabled={!!oauthBusy} onClick={() => startOauth('gmail')}>
+                {oauthBusy === 'gmail' ? <Loader2 size={15} className="spin" /> : null}
+                Google / Gmail
+              </button>
+            )}
+            {oauth.microsoft && (
+              <button type="button" className="btn-ghost oauth-btn" disabled={!!oauthBusy} onClick={() => startOauth('microsoft')}>
+                {oauthBusy === 'microsoft' ? <Loader2 size={15} className="spin" /> : null}
+                Microsoft 365
+              </button>
+            )}
+          </div>
+          <div className="oauth-bind-or">或使用授权码绑定</div>
+        </div>
+      )}
 
       {!editing && (
         <label className="field">

@@ -41,6 +41,22 @@ function ConflictBanner({ conflict }) {
   );
 }
 
+function PresenceBanner({ viewers }) {
+  if (!viewers?.length) return null;
+  const names = viewers.slice(0, 3).map((v) => v.name || '同事').join('、');
+  const more = viewers.length > 3 ? ` 等 ${viewers.length} 人` : '';
+  return (
+    <div className="presence-banner" role="status">
+      <Eye size={14} />
+      <span>
+        <b>{names}</b>
+        {more}
+        正在看这封邮件
+      </span>
+    </div>
+  );
+}
+
 function RelationCard({ info, onRule, slaHours, onOpenCustomer }) {
   if (!info || info.tier === 'self' || info.tier === 'bulk') return null;
   const vip = info.rule?.kind === 'vip';
@@ -192,6 +208,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
           {mailbox && <div className="meta-mb"><span className="mb-dot" style={{ background: mailbox.color }} />{mailbox.email}</div>}
         </div>
       </div>
+      {m && primary && <PresenceBanner viewers={viewers} />}
       {m && primary && <ConflictBanner conflict={m.conflict} />}
       {m && primary && (
         <DealBar
@@ -261,6 +278,7 @@ export default function Reader({
   const [intel, setIntel] = useState(null); // 'summary' | 'translate' | null
   const [translateLayout, setTranslateLayout] = useState(() => localStorage.getItem('zm_translate_layout') || 'split');
   const [focusExplain, setFocusExplain] = useState(null);
+  const [viewers, setViewers] = useState([]);
   const alive = useRef(0);
   const scroller = useRef();
 
@@ -300,10 +318,12 @@ export default function Reader({
     setPinning(false);
     setIntel(null);
     setFocusExplain(null);
+    setViewers([]);
     setExpanded(new Set([id]));
     scroller.current?.scrollTo(0, 0);
 
     loadDetail(id, token, { markSeen: true });
+
     // 读信验真：已在今日待办/等待则用列表 why；否则问后端为何未进
     if (listItem?._section === 'reply' || listItem?._section === 'follow') {
       setFocusExplain({
@@ -330,6 +350,27 @@ export default function Reader({
         })
         .catch(() => {});
     }
+
+    const beat = () => {
+      api('/presence/touch', { method: 'POST', body: { messageId: id, threadId: listItem?.threadId || null } })
+        .then((r) => {
+          if (token === alive.current) setViewers(r.viewers || []);
+        })
+        .catch(() => {});
+    };
+    beat();
+    const iv = setInterval(beat, 40_000);
+    const onPresence = (e) => {
+      const d = e.detail;
+      if (!d || Number(d.messageId) !== Number(id)) return;
+      if (token === alive.current) setViewers(d.viewers || []);
+    };
+    window.addEventListener('zm-presence', onPresence);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener('zm-presence', onPresence);
+      api('/presence/leave', { method: 'POST', body: { messageId: id } }).catch(() => {});
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 

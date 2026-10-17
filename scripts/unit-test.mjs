@@ -97,6 +97,28 @@ const scored = scoreRow(
   { slaHours: 4, at: Date.now() }
 );
 assert('score overdue vip-ish customer', scored.overdue === true && scored.score >= 50, JSON.stringify(scored));
+assert('score why has tier', /老客户|VIP/.test(scored.why), scored.why);
+assert('score why has overdue', scored.why.includes('已超时未回'), scored.why);
+assert('score why has sla', scored.why.includes('时限'), scored.why);
+
+const fresh = scoreRow(
+  idx,
+  {
+    from_addr: 'buyer@acme.com',
+    category: 'people',
+    subject: 'Hello',
+    snippet: 'Just saying hi',
+    signals: '',
+    date: Date.now() - 2 * 3600_000,
+    to_json: JSON.stringify([{ address: 'me@zito.test' }]),
+    flagged: 0,
+    has_att: 0,
+    seen: 1,
+  },
+  { slaHours: 24, at: Date.now() }
+);
+assert('score why waiting hours', fresh.why.includes('已等') && !fresh.why.includes('已超时未回'), fresh.why);
+assert('score why not overdue under sla', fresh.overdue === false);
 
 // ---------- mail rules match ----------
 const ctx = {

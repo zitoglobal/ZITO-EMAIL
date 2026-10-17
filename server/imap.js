@@ -4,14 +4,18 @@ import libqp from 'libqp';
 import iconv from 'iconv-lite';
 import { decrypt } from './security.js';
 import { classify } from './classify.js';
+import * as oauth from './oauth.js';
 
 const IDLE_CLOSE_MS = 10 * 60 * 1000;
 
 export function friendlyImapError(e) {
   const raw = [e?.responseText, e?.message, e?.code].filter(Boolean).join(' ');
   const s = raw.toLowerCase();
-  if (e?.authenticationFailed || /authenticat|login fail|invalid credentials|password|auth fail/.test(s)) {
-    return '登录失败：账号或密码错误。多数邮箱需要开启 IMAP 并使用「授权码 / 应用专用密码」而不是网页登录密码。';
+  if (/oauth|token|invalid_grant|expired/.test(s) && /oauth|授权|令牌/.test(raw + s)) {
+    return 'OAuth 授权已失效，请重新用 Google / Microsoft 一键绑定。';
+  }
+  if (e?.authenticationFailed || /authenticat|login fail|invalid credentials|password|auth fail|oauth/.test(s)) {
+    return '登录失败：账号或密码错误。多数邮箱需要开启 IMAP 并使用「授权码 / 应用专用密码」；Gmail/Outlook 也可改用 OAuth 一键绑定。';
   }
   if (/enotfound|getaddrinfo/.test(s)) return '无法解析邮件服务器地址，请检查 IMAP 主机设置。';
   if (/timeout|timed out/.test(s)) return '连接邮件服务器超时，请稍后重试或检查端口设置。';
@@ -20,12 +24,22 @@ export function friendlyImapError(e) {
   return raw || '邮件服务器出现未知错误';
 }
 
-export function buildClient(mb, password) {
+export async function buildClient(mb, password) {
+  let auth;
+  if (mb.oauth_refresh_enc || mb.oauth_access_enc) {
+    const accessToken = await oauth.ensureAccessToken(mb);
+    auth = { user: mb.login_user || mb.email, accessToken };
+  } else {
+    auth = {
+      user: mb.login_user || mb.email,
+      pass: password ?? (mb.pass_enc === 'demo' ? '' : decrypt(mb.pass_enc)),
+    };
+  }
   const client = new ImapFlow({
     host: mb.imap_host,
     port: Number(mb.imap_port),
     secure: !!mb.imap_secure,
-    auth: { user: mb.login_user || mb.email, pass: password ?? (mb.pass_enc === 'demo' ? '' : decrypt(mb.pass_enc)) },
+    auth,
     logger: false,
     socketTimeout: 5 * 60_000,
     greetingTimeout: 20_000,
@@ -38,7 +52,7 @@ export function buildClient(mb, password) {
 }
 
 export async function verifyLogin(mb, password) {
-  const client = buildClient(mb, password);
+  const client = await buildClient(mb, password);
   try {
     await client.connect();
   } catch (e) {
@@ -68,25 +82,25 @@ export async function getClient(mb) {
   }
   if (existing?.connecting) return existing.connecting;
 
-  const client = buildClient(mb);
   const entry = { client: null, connecting: null, timer: null };
-  entry.connecting = client
-    .connect()
-    .then(() => {
+  entry.connecting = (async () => {
+    const client = await buildClient(mb);
+    try {
+      await client.connect();
       entry.client = client;
       entry.connecting = null;
       scheduleClose(mb.id, entry);
+      client.on('close', () => {
+        if (pool.get(mb.id) === entry) pool.delete(mb.id);
+      });
       return client;
-    })
-    .catch((e) => {
+    } catch (e) {
       if (pool.get(mb.id) === entry) pool.delete(mb.id);
       const err = new Error(friendlyImapError(e));
       err.auth = !!e?.authenticationFailed;
       throw err;
-    });
-  client.on('close', () => {
-    if (pool.get(mb.id) === entry) pool.delete(mb.id);
-  });
+    }
+  })();
   pool.set(mb.id, entry);
   return entry.connecting;
 }

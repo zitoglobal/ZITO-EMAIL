@@ -127,6 +127,12 @@ export function useRealtimeMail({
       setOutboxVersion((v) => v + 1);
       scheduleRef.current();
     });
+    es.addEventListener('presence', (e) => {
+      const d = parse(e);
+      if (d?.messageId != null) {
+        window.dispatchEvent(new CustomEvent('zm-presence', { detail: d }));
+      }
+    });
     return () => {
       clearTimeout(fastTimer);
       es.close();

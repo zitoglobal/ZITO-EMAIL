@@ -23,6 +23,8 @@ export function publicMailbox(m) {
     imap: { host: m.imap_host, port: m.imap_port, secure: !!m.imap_secure },
     smtp: { host: m.smtp_host, port: m.smtp_port, secure: !!m.smtp_secure },
     loginUser: m.login_user,
+    authType: m.oauth_refresh_enc || m.oauth_access_enc ? 'oauth' : 'password',
+    oauthProvider: m.oauth_provider || null,
   };
 }
 

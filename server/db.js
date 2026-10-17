@@ -182,6 +182,17 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_msg_mb_from_date ON messages(mailbox_id,
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_thread_date ON messages(thread_id, date DESC) WHERE thread_id IS NOT NULL');
 db.exec('CREATE INDEX IF NOT EXISTS idx_folders_special ON folders(special_use, mailbox_id)');
 
+// OAuth 绑定（Gmail / M365）
+const mbCols = new Set(db.prepare('PRAGMA table_info(mailboxes)').all().map((c) => c.name));
+for (const [name, def] of [
+  ['oauth_provider', 'TEXT'],
+  ['oauth_access_enc', 'TEXT'],
+  ['oauth_refresh_enc', 'TEXT'],
+  ['oauth_expiry', 'INTEGER'],
+]) {
+  if (!mbCols.has(name)) db.exec(`ALTER TABLE mailboxes ADD COLUMN ${name} ${def}`);
+}
+
 export const now = () => Date.now();
 
 export function tx(fn) {
