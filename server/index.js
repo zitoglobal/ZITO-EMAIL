@@ -818,11 +818,22 @@ async function deepSearch(userId, opts) {
 // ---------- 邮件详情 ----------
 async function loadBody(row, { force = false } = {}) {
   const cached = !force ? repo.getBody(row.id) : null;
-  // 旧缓存若仍含未解析 cid:，强制重拉并重写内联图（修复 Content-ID 匹配缺陷）
-  if (cached && !/cid:/i.test(cached.html || '') && !/__ZM_CID_\d+__/.test(cached.html || '')) {
-    const signals = repo.refreshSignals(row.id, row.subject, cached.text || row.snippet || '');
-    const html = imap.resolveCidPlaceholders(cached.html, row.id);
-    return { html, text: cached.text, meta: JSON.parse(cached.meta), signals };
+  if (cached) {
+    let meta = {};
+    try {
+      meta = JSON.parse(cached.meta || '{}');
+    } catch {
+      meta = {};
+    }
+    const stale =
+      meta.mediaVer !== imap.MEDIA_BODY_VER ||
+      /cid:/i.test(cached.html || '') ||
+      /__ZM_CID_\d+__/.test(cached.html || '');
+    if (!stale) {
+      const signals = repo.refreshSignals(row.id, row.subject, cached.text || row.snippet || '');
+      const html = imap.resolveCidPlaceholders(cached.html, row.id);
+      return { html, text: cached.text, meta, signals };
+    }
   }
   const mb = repo.getMailboxById(row.mailbox_id);
   const parsed = await imap.fetchParsed(mb, row.folder, row.uid);
@@ -919,13 +930,22 @@ app.get(
     const a = await imap.getAttachment(repo.getMailboxById(row.mailbox_id), row.folder, row.uid, req.params.index);
     const name = a.filename || 'attachment';
     const type = String(a.contentType || 'application/octet-stream').toLowerCase();
-    const safeInline = /^(image\/(png|jpe?g|gif|webp|bmp)|application\/pdf|text\/plain)$/.test(type);
-    const inline = req.query.inline && safeInline;
-    res.setHeader('Content-Type', inline || !type.startsWith('text/') ? type : 'application/octet-stream');
+    const baseType = type.split(';')[0].trim();
+    // SVG 不当 inline（防 XSS）；图/PDF/纯文本/CSV 可预览
+    const allowInline = /^(image\/(png|jpe?g|gif|webp|bmp)|application\/pdf|text\/(plain|csv))$/i.test(baseType);
+    const inline = !!(req.query.inline && allowInline);
+    const isPdf = baseType === 'application/pdf';
+    const isText = /^text\//i.test(baseType);
+    let contentType = type;
+    if (inline && isText && !/charset=/i.test(type)) contentType = `${baseType}; charset=utf-8`;
+    if (!inline && isText) contentType = 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`);
-    if (!(inline && type === 'application/pdf')) {
-      res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'");
+    // PDF 不设 sandbox CSP，便于浏览器内置阅读器；其它 inline 收紧
+    if (!(inline && isPdf)) {
+      res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'");
     }
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.send(a.content);
   })

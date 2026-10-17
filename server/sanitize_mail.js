@@ -1,6 +1,6 @@
 import sanitizeHtml from 'sanitize-html';
 
-/** 读信侧服务端消毒：去掉脚本/表单/危险 URL，保留常见邮件排版 */
+/** 读信侧服务端消毒：去掉脚本/表单/危险 URL，保留常见邮件排版（图/表/字体） */
 const MAIL_OPTIONS = {
   allowedTags: sanitizeHtml.defaults.allowedTags.concat([
     'img',
@@ -11,6 +11,7 @@ const MAIL_OPTIONS = {
     'tr',
     'td',
     'th',
+    'caption',
     'colgroup',
     'col',
     'span',
@@ -44,14 +45,15 @@ const MAIL_OPTIONS = {
   ]),
   allowedAttributes: {
     a: ['href', 'name', 'target', 'rel', 'title'],
-    img: ['src', 'alt', 'title', 'width', 'height'],
-    td: ['colspan', 'rowspan', 'width', 'height', 'align', 'valign', 'bgcolor', 'style'],
-    th: ['colspan', 'rowspan', 'width', 'height', 'align', 'valign', 'bgcolor', 'style'],
-    table: ['width', 'height', 'border', 'cellpadding', 'cellspacing', 'align', 'bgcolor', 'style'],
-    tr: ['align', 'valign', 'bgcolor', 'style'],
-    col: ['width', 'span'],
-    colgroup: ['span', 'width'],
-    '*': ['style', 'class', 'align', 'color', 'bgcolor', 'width', 'height', 'dir'],
+    img: ['src', 'alt', 'title', 'width', 'height', 'border', 'align', 'hspace', 'vspace', 'style', 'class'],
+    td: ['colspan', 'rowspan', 'width', 'height', 'align', 'valign', 'bgcolor', 'background', 'style', 'class'],
+    th: ['colspan', 'rowspan', 'width', 'height', 'align', 'valign', 'bgcolor', 'background', 'style', 'class'],
+    table: ['width', 'height', 'border', 'cellpadding', 'cellspacing', 'align', 'bgcolor', 'background', 'style', 'class', 'bordercolor'],
+    tr: ['align', 'valign', 'bgcolor', 'style', 'class'],
+    caption: ['align', 'style', 'class'],
+    col: ['width', 'span', 'align', 'valign'],
+    colgroup: ['span', 'width', 'align', 'valign'],
+    '*': ['style', 'class', 'align', 'color', 'bgcolor', 'width', 'height', 'dir', 'title'],
     font: ['color', 'size', 'face'],
   },
   allowedSchemes: ['http', 'https', 'mailto', 'cid', 'data'],
@@ -59,6 +61,8 @@ const MAIL_OPTIONS = {
     img: ['http', 'https', 'cid', 'data'],
     a: ['http', 'https', 'mailto'],
   },
+  /** background 属性也走 scheme 校验（表格背景图常见） */
+  allowedSchemesAppliedToAttributes: ['href', 'src', 'cite', 'action', 'formaction', 'background'],
   allowProtocolRelative: false,
   disallowedTagsMode: 'discard',
   transformTags: {

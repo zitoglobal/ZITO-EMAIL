@@ -1,8 +1,9 @@
-import React, { Component, useEffect, useRef, useState } from 'react';
+import React, { Component, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Star, Mail, Sparkles, Languages, Paperclip, Download, ArrowLeft, Loader2,
   AlertTriangle, CheckCircle2, ListChecks, FolderInput, Eye, Clock, Pin, ShieldAlert, ShieldCheck, MoreHorizontal, ImageOff,
-  BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass, Tag, Users,
+  BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass, Tag, Users, X, FileSpreadsheet, FileImage, File,
+  ExternalLink,
 } from 'lucide-react';
 import { api, qs } from '../api.js';
 import {
@@ -170,26 +171,245 @@ function RelationCard({ info, onRule, slaHours, onOpenCustomer }) {
   );
 }
 
-function Attachments({ msg }) {
+function attKind(a) {
+  const type = String(a.contentType || '').toLowerCase().split(';')[0].trim();
+  const ext = String(a.filename || '').split('.').pop()?.toLowerCase() || '';
+  if (/^image\//.test(type) || /^(png|jpe?g|gif|webp|bmp|heic)$/.test(ext)) return 'image';
+  if (type === 'application/pdf' || ext === 'pdf') return 'pdf';
+  if (type === 'text/csv' || ext === 'csv') return 'csv';
+  if (/^text\/plain/.test(type) || /^(txt|log|md)$/.test(ext)) return 'text';
+  if (/word|msword|officedocument\.wordprocessing/i.test(type) || /^(doc|docx|rtf)$/.test(ext)) return 'word';
+  if (/excel|spreadsheet|ms-excel/i.test(type) || /^(xls|xlsx)$/.test(ext)) return 'sheet';
+  if (/powerpoint|presentation|ms-powerpoint/i.test(type) || /^(ppt|pptx)$/.test(ext)) return 'slides';
+  return 'file';
+}
+
+function attMeta(kind) {
+  const map = {
+    image: { label: '图片', Icon: FileImage, cls: 'img', preview: true },
+    pdf: { label: 'PDF', Icon: FileText, cls: 'pdf', preview: true },
+    csv: { label: 'CSV 表格', Icon: FileSpreadsheet, cls: 'xls', preview: true },
+    text: { label: '文本', Icon: FileText, cls: 'txt', preview: true },
+    word: { label: 'Word', Icon: FileText, cls: 'doc', preview: false },
+    sheet: { label: 'Excel', Icon: FileSpreadsheet, cls: 'xls', preview: false },
+    slides: { label: '演示', Icon: File, cls: 'ppt', preview: false },
+    file: { label: '文件', Icon: File, cls: 'bin', preview: false },
+  };
+  return map[kind] || map.file;
+}
+
+/** 简易 CSV → 行列（够外贸报价表预览） */
+function parseCsvPreview(raw, maxRows = 80, maxCols = 20) {
+  const text = String(raw || '').replace(/^\uFEFF/, '');
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let q = false;
+  for (let i = 0; i < text.length && rows.length < maxRows; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (q) {
+      if (ch === '"' && next === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') q = false;
+      else cell += ch;
+      continue;
+    }
+    if (ch === '"') {
+      q = true;
+      continue;
+    }
+    if (ch === ',' || ch === '\t') {
+      row.push(cell);
+      cell = '';
+      continue;
+    }
+    if (ch === '\n' || (ch === '\r' && next === '\n')) {
+      row.push(cell);
+      rows.push(row.slice(0, maxCols));
+      row = [];
+      cell = '';
+      if (ch === '\r') i++;
+      continue;
+    }
+    if (ch === '\r') {
+      row.push(cell);
+      rows.push(row.slice(0, maxCols));
+      row = [];
+      cell = '';
+      continue;
+    }
+    cell += ch;
+  }
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row.slice(0, maxCols));
+  }
+  return rows;
+}
+
+function MediaLightbox({ items, index, onClose, onIndex, msgId }) {
+  const cur = items[index];
+  if (!cur) return null;
+  const kind = cur.kind || attKind(cur);
+  const meta = attMeta(kind);
+  const url = cur.url || `/api/messages/${msgId}/attachments/${cur.index}?inline=1`;
+  const [textBody, setTextBody] = useState('');
+  const [table, setTable] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [imgErr, setImgErr] = useState(false);
+
+  useEffect(() => {
+    setImgErr(false);
+    setTable(null);
+    setTextBody('');
+    if (kind !== 'text' && kind !== 'csv') return undefined;
+    let dead = false;
+    setBusy(true);
+    fetch(url, { credentials: 'same-origin' })
+      .then((r) => {
+        if (!r.ok) throw new Error('无法加载');
+        return r.text();
+      })
+      .then((t) => {
+        if (dead) return;
+        if (kind === 'csv') setTable(parseCsvPreview(t));
+        else setTextBody(t.length > 200_000 ? `${t.slice(0, 200_000)}\n…（已截断）` : t);
+      })
+      .catch((e) => {
+        if (!dead) setTextBody(e.message || '加载失败');
+      })
+      .finally(() => {
+        if (!dead) setBusy(false);
+      });
+    return () => {
+      dead = true;
+    };
+  }, [url, kind]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowRight' && index < items.length - 1) onIndex(index + 1);
+      if (e.key === 'ArrowLeft' && index > 0) onIndex(index - 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [index, items.length, onClose, onIndex]);
+
+  return (
+    <div className="att-preview-overlay" role="dialog" aria-modal="true" aria-label="媒体预览" onClick={onClose}>
+      <div className="att-preview-panel" onClick={(e) => e.stopPropagation()}>
+        <header className="att-preview-head">
+          <div>
+            <b>{cur.filename || cur.alt || '预览'}</b>
+            <small>
+              {cur.size != null ? `${formatSize(cur.size)} · ` : ''}
+              {meta.label}
+              {items.length > 1 ? ` · ${index + 1}/${items.length}` : ''}
+            </small>
+          </div>
+          <div className="att-preview-actions">
+            {items.length > 1 && (
+              <>
+                <button type="button" className="btn-ghost sm" disabled={index <= 0} onClick={() => onIndex(index - 1)}>上一张</button>
+                <button type="button" className="btn-ghost sm" disabled={index >= items.length - 1} onClick={() => onIndex(index + 1)}>下一张</button>
+              </>
+            )}
+            <a className="btn-ghost sm" href={url} target="_blank" rel="noreferrer"><ExternalLink size={14} /> 新窗口</a>
+            {cur.index != null && (
+              <a className="btn-ghost sm" href={`/api/messages/${msgId}/attachments/${cur.index}`} download={cur.filename}><Download size={14} /> 下载</a>
+            )}
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button>
+          </div>
+        </header>
+        <div className={'att-preview-body kind-' + kind}>
+          {kind === 'image' && !imgErr && <img src={url} alt={cur.filename || cur.alt || ''} onError={() => setImgErr(true)} />}
+          {kind === 'image' && imgErr && <div className="att-preview-loading">图片无法显示，请下载查看</div>}
+          {kind === 'pdf' && <iframe title={cur.filename || 'pdf'} src={url} />}
+          {(kind === 'text' || kind === 'csv') && busy && (
+            <div className="att-preview-loading"><Loader2 size={18} className="spin" /> 加载中…</div>
+          )}
+          {kind === 'text' && !busy && <pre className="att-preview-text">{textBody}</pre>}
+          {kind === 'csv' && !busy && table && (
+            <div className="att-preview-table-wrap">
+              <table className="att-preview-table">
+                <tbody>
+                  {table.map((r, ri) => (
+                    <tr key={ri}>
+                      {r.map((c, ci) => (ri === 0 ? <th key={ci}>{c}</th> : <td key={ci}>{c}</td>))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {kind === 'csv' && !busy && !table && <pre className="att-preview-text">{textBody || '空表格'}</pre>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Attachments({ msg, setLightbox }) {
   if (!msg.attachments?.length) return null;
+
+  const openPreview = (a) => {
+    const kind = attKind(a);
+    if (!attMeta(kind).preview) return;
+    const list = msg.attachments
+      .filter((x) => attMeta(attKind(x)).preview)
+      .map((x) => ({
+        ...x,
+        kind: attKind(x),
+        url: `/api/messages/${msg.id}/attachments/${x.index}?inline=1`,
+      }));
+    const idx = list.findIndex((x) => x.index === a.index);
+    setLightbox({ items: list, index: Math.max(0, idx), msgId: msg.id });
+  };
+
   return (
     <div className="attachments">
       <div className="att-title"><Paperclip size={14} /> {msg.attachments.length} 个附件</div>
       <div className="att-list">
         {msg.attachments.map((a) => {
           const base = `/api/messages/${msg.id}/attachments/${a.index}`;
-          const previewable = /^(image\/(png|jpe?g|gif|webp|bmp)|application\/pdf|text\/plain)$/i.test(a.contentType || '');
+          const kind = attKind(a);
+          const meta = attMeta(kind);
+          const Icon = meta.Icon;
+          const ext = (String(a.filename || '').split('.').pop() || 'file').slice(0, 4).toUpperCase();
           return (
-            <div key={a.index} className="att">
-              <div className="att-icon">{(a.filename.split('.').pop() || 'file').slice(0, 4).toUpperCase()}</div>
+            <div
+              key={a.index}
+              className={'att kind-' + meta.cls + (a.orphanInline ? ' orphan' : '') + (meta.preview ? ' clickable' : '')}
+              onClick={meta.preview ? () => openPreview(a) : undefined}
+              onKeyDown={meta.preview ? (e) => { if (e.key === 'Enter') openPreview(a); } : undefined}
+              role={meta.preview ? 'button' : undefined}
+              tabIndex={meta.preview ? 0 : undefined}
+            >
+              {kind === 'image' ? (
+                <div className="att-thumb" style={{ backgroundImage: `url(${base}?inline=1)` }} title={meta.label} />
+              ) : (
+                <div className={'att-icon kind-' + meta.cls} title={meta.label}>
+                  <Icon size={16} />
+                  <span>{ext}</span>
+                </div>
+              )}
               <div className="att-info">
                 <div className="att-name" title={a.filename}>{a.filename}</div>
-                <div className="att-size">{formatSize(a.size)}</div>
+                <div className="att-size">
+                  {formatSize(a.size)} · {meta.label}
+                  {a.orphanInline ? ' · 正文未嵌入' : ''}
+                  {!meta.preview && (kind === 'word' || kind === 'sheet' || kind === 'slides') ? ' · 下载后用 Office 打开' : ''}
+                </div>
               </div>
-              {previewable && (
-                <a className="icon-btn" href={base + '?inline=1'} target="_blank" rel="noreferrer" title="预览"><Eye size={15} /></a>
+              {meta.preview && (
+                <button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); openPreview(a); }} title="预览" aria-label={`预览 ${a.filename}`}>
+                  <Eye size={15} />
+                </button>
               )}
-              <a className="icon-btn" href={base} title="下载"><Download size={15} /></a>
+              <a className="icon-btn" href={base} title="下载" download={a.filename} onClick={(e) => e.stopPropagation()}><Download size={15} /></a>
             </div>
           );
         })}
@@ -198,10 +418,23 @@ function Attachments({ msg }) {
   );
 }
 
-function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer, onNotify, onDealChange, viewers }) {
+function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer, onNotify, onDealChange, viewers, onReloadBody, reloadBusy }) {
   const [allowImages, setAllowImages] = useState(false);
+  const [brokenN, setBrokenN] = useState(0);
+  const [lightbox, setLightbox] = useState(null);
   const loading = expanded && !detail;
   const isDraft = item.specialUse === '\\Drafts';
+
+  const onImageClick = useCallback((info) => {
+    if (!info?.src) return;
+    setLightbox({
+      items: [{ kind: 'image', url: info.src, filename: info.alt || '正文图片', alt: info.alt || '' }],
+      index: 0,
+      msgId: item.id,
+    });
+  }, [item.id]);
+
+  const onBrokenChange = useCallback((n) => setBrokenN(n), []);
 
   if (!expanded) {
     return (
@@ -219,6 +452,8 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
   const images = m && hasRemoteImages(m.html);
   const autoAllow = settings.remoteImages === 'always' || (settings.remoteImages === 'contacts' && m?.knownSender);
   const showImages = autoAllow || allowImages;
+  const mediaParts = m?.mediaParts || [];
+  const imageParts = mediaParts.filter((p) => /^image\//i.test(p.contentType || ''));
 
   return (
     <div className="thread-card">
@@ -275,26 +510,72 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
             <div className="img-bar img-bar-risk">
               <ImageOff size={14} />
               <span className="img-bar-copy">
-                外部图片已拦截：加载后发件人可能得知你已读（追踪像素）。确认安全后再显示。
+                外部图片已拦截（追踪像素风险）。邮件内嵌产品图仍会显示；确认安全后再加载外链图。
               </span>
-              <button className="link-btn" onClick={() => setAllowImages(true)}>显示图片</button>
+              <button type="button" className="link-btn" onClick={() => setAllowImages(true)}>显示外部图片</button>
+            </div>
+          )}
+          {brokenN > 0 && (
+            <div className="img-bar img-bar-fix">
+              <ImageOff size={14} />
+              <span className="img-bar-copy">有 {brokenN} 张图片未能显示（可能是旧缓存或链接失效）。</span>
+              <button type="button" className="link-btn" disabled={reloadBusy} onClick={() => onReloadBody?.(item.id)}>
+                {reloadBusy ? '重载中…' : '重新解析正文'}
+              </button>
+            </div>
+          )}
+          {imageParts.length > 0 && (
+            <div className="media-strip" aria-label="本信图片">
+              <span className="media-strip-label"><FileImage size={13} /> 本信图片 {imageParts.length}</span>
+              <div className="media-strip-thumbs">
+                {imageParts.slice(0, 12).map((p) => {
+                  const url = `/api/messages/${m.id}/attachments/${p.index}?inline=1`;
+                  return (
+                    <button
+                      key={p.index}
+                      type="button"
+                      className="media-thumb"
+                      title={p.filename}
+                      style={{ backgroundImage: `url(${url})` }}
+                      onClick={() => setLightbox({
+                        items: imageParts.map((x) => ({
+                          ...x,
+                          kind: 'image',
+                          url: `/api/messages/${m.id}/attachments/${x.index}?inline=1`,
+                        })),
+                        index: imageParts.findIndex((x) => x.index === p.index),
+                        msgId: m.id,
+                      })}
+                    />
+                  );
+                })}
+              </div>
             </div>
           )}
           <BodyGuard>
             {isDraft ? (
               <div className="draft-box">
-                <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} />
-                <button className="btn-ghost sm" onClick={() => onCompose('draft', m)}><FileText size={14} /> 继续编辑草稿</button>
+                <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} onImageClick={onImageClick} onBrokenChange={onBrokenChange} />
+                <button type="button" className="btn-ghost sm" onClick={() => onCompose('draft', m)}><FileText size={14} /> 继续编辑草稿</button>
               </div>
             ) : (
-              <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} collapseQuotes />
+              <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} collapseQuotes onImageClick={onImageClick} onBrokenChange={onBrokenChange} />
             )}
           </BodyGuard>
-          <Attachments msg={m} />
+          <Attachments msg={m} setLightbox={setLightbox} />
+          {lightbox && lightbox.msgId === m.id && (
+            <MediaLightbox
+              items={lightbox.items}
+              index={lightbox.index}
+              msgId={m.id}
+              onClose={() => setLightbox(null)}
+              onIndex={(i) => setLightbox((s) => (s ? { ...s, index: i } : s))}
+            />
+          )}
           {!isLast && !isDraft && (
             <div className="card-actions">
-              <button onClick={() => onCompose('reply', m)}><Reply size={14} /> 回复</button>
-              <button onClick={() => onCompose('forward', m)}><Forward size={14} /> 转发</button>
+              <button type="button" onClick={() => onCompose('reply', m)}><Reply size={14} /> 回复</button>
+              <button type="button" onClick={() => onCompose('forward', m)}><Forward size={14} /> 转发</button>
             </div>
           )}
         </>
@@ -327,6 +608,7 @@ export default function Reader({
   const [focusExplain, setFocusExplain] = useState(null);
   const [whyHitsOpen, setWhyHitsOpen] = useState(false);
   const [viewers, setViewers] = useState([]);
+  const [reloadBusy, setReloadBusy] = useState(false);
   const alive = useRef(0);
   const scroller = useRef();
 
@@ -334,8 +616,8 @@ export default function Reader({
   const base = msg || listItem;
   const displayLabels = (listItem?.labels || base?.labels || []);
 
-  function loadDetail(mid, token, { markSeen = false } = {}) {
-    return api(`/messages/${mid}`)
+  function loadDetail(mid, token, { markSeen = false, refresh = false } = {}) {
+    return api(`/messages/${mid}` + (refresh ? '?refresh=1' : ''))
       .then((d) => {
         if (token !== alive.current) return;
         setDetails((s) => ({ ...s, [mid]: d }));
@@ -350,6 +632,19 @@ export default function Reader({
         }
       })
       .catch((e) => token === alive.current && setDetails((s) => ({ ...s, [mid]: { error: e.message } })));
+  }
+
+  async function reloadBody(mid) {
+    if (reloadBusy) return;
+    setReloadBusy(true);
+    try {
+      await loadDetail(mid, alive.current, { refresh: true });
+      notify?.('正文已重新解析，图片与附件已刷新', 'success');
+    } catch (e) {
+      notify?.(e.message || '重载失败', 'error');
+    } finally {
+      setReloadBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -1134,6 +1429,8 @@ export default function Reader({
                       setDetails((s) => (s[mid] ? { ...s, [mid]: { ...s[mid], deal } } : s));
                     }}
                     viewers={it.id === id ? viewers : undefined}
+                    onReloadBody={reloadBody}
+                    reloadBusy={reloadBusy}
                   />
                 </div>
               ))}

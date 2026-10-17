@@ -772,30 +772,51 @@ export function counts(userId) {
 
 // ---------- 正文缓存 ----------
 export const getBody = (pk) => db.prepare('SELECT * FROM bodies WHERE message_pk = ?').get(pk);
+const BODY_MAX = 3 * 1024 * 1024;
+
+/** 超限时剥掉 data:image base64，保留 /api 附件图与文字，避免静默丢整封缓存 */
+function fitBodyForCache(html, text) {
+  let h = html == null ? null : String(html);
+  let t = text == null ? '' : String(text);
+  const size = () => (h?.length || 0) + (t?.length || 0);
+  if (size() <= BODY_MAX) return { html: h, text: t, trimmed: false };
+  if (h) {
+    h = h.replace(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+/gi, '');
+  }
+  if (size() > BODY_MAX && t.length > 200_000) t = t.slice(0, 200_000) + '\n…';
+  if (size() > BODY_MAX && h && h.length > BODY_MAX - Math.min(t.length, 50_000)) {
+    h = h.slice(0, Math.max(100_000, BODY_MAX - Math.min(t.length, 50_000))) + '<!-- zm-trim -->';
+  }
+  return { html: h, text: t, trimmed: true };
+}
+
 export function saveBody(pk, { html, text, meta }) {
-  if ((html?.length || 0) + (text?.length || 0) > 3 * 1024 * 1024) return;
+  const fitted = fitBodyForCache(html, text);
+  if ((fitted.html?.length || 0) + (fitted.text?.length || 0) > BODY_MAX) return false;
+  const metaOut = { ...(meta || {}), bodyTrimmed: !!fitted.trimmed };
   db.prepare('INSERT OR REPLACE INTO bodies (message_pk, html, text, meta, fetched_at) VALUES (?, ?, ?, ?, ?)').run(
     pk,
-    html,
-    text,
-    JSON.stringify(meta),
+    fitted.html,
+    fitted.text,
+    JSON.stringify(metaOut),
     now()
   );
   const row = db.prepare('SELECT subject, snippet, from_name, from_addr FROM messages WHERE id = ?').get(pk);
   if (row) {
-    refreshSignals(pk, row.subject, text || row.snippet || '');
+    refreshSignals(pk, row.subject, fitted.text || row.snippet || '');
     try {
       upsertFts(pk, {
         subject: row.subject,
         snippet: row.snippet,
         fromName: row.from_name,
         fromAddr: row.from_addr,
-        body: text || '',
+        body: fitted.text || '',
       });
     } catch {
       /* ignore */
     }
   }
+  return true;
 }
 export function pruneBodies(keep = 3000) {
   db.prepare('DELETE FROM bodies WHERE message_pk NOT IN (SELECT message_pk FROM bodies ORDER BY fetched_at DESC LIMIT ?)').run(keep);

@@ -381,9 +381,9 @@ export function forgetParsed(mb, folder, uid) {
   parsedCache.delete(cacheKey(mb, folder, uid));
 }
 
-/** 规范化 cid（去 <>、urldecode、去空白） */
-function cleanCid(s) {
-  let t = cleanId(s);
+/** 规范化 cid（去 <>、urldecode、去空白；比较时再 toLowerCase） */
+export function cleanCid(s) {
+  let t = cleanMessageId(s);
   try {
     t = decodeURIComponent(t);
   } catch {
@@ -392,23 +392,67 @@ function cleanCid(s) {
   return t.replace(/\s+/g, '');
 }
 
+/** 按 Content-ID / 文件名弱匹配定位内联附件（忽略大小写） */
+export function findAttachmentByCid(attachments, cid) {
+  const want = cleanCid(cid).toLowerCase();
+  if (!want || !attachments?.length) return -1;
+  let idx = attachments.findIndex((x) => x.contentId && cleanCid(x.contentId).toLowerCase() === want);
+  if (idx >= 0) return idx;
+  // 部分客户端 cid 与 Content-Location / filename 一致，如 image001.png@01D…
+  const base = want.split('@')[0];
+  if (base.length >= 3) {
+    idx = attachments.findIndex((x) => {
+      const loc = cleanCid(x.contentLocation || x.cid || '').toLowerCase();
+      if (loc && (loc === want || loc === base || loc.split('@')[0] === base)) return true;
+      const fn = String(x.filename || '')
+        .toLowerCase()
+        .replace(/\s+/g, '');
+      return !!fn && (fn === base || fn === want || base.endsWith(fn) || fn.endsWith(base));
+    });
+  }
+  return idx;
+}
+
+/**
+ * 替换 html 中所有 cid: 引用（含引号、url()、无引号 src=cid:…）
+ * replacer(cid) → 替换后的 URL/data，返回 null 则保留原文
+ */
+function mapCidRefs(html, replacer) {
+  let out = String(html).replace(/(["'(])cid:([^"')\s>]+)/gi, (m, q, cid) => {
+    const r = replacer(cid);
+    return r == null ? m : `${q}${r}`;
+  });
+  // Outlook 等偶发无引号：src=cid:xxx
+  out = out.replace(/((?:src|href|background)\s*=\s*)cid:([^"'\s>]+)/gi, (m, pre, cid) => {
+    const r = replacer(cid);
+    return r == null ? m : `${pre}"${r}"`;
+  });
+  return out;
+}
+
+/** 小于此尺寸才内联 data:（签名/小图标）；产品大图一律走附件 URL，避免 bodies 超 3MB 静默丢缓存 */
+export const CID_DATA_MAX = 48 * 1024;
+
 /**
  * 把 cid: 内联图换成 data: 或占位符 __ZM_CID_{index}__（由 API 再换成附件 URL）。
  * 注意：Content-ID 常带 <>，而 html 里 cid: 没有，必须两侧都 clean。
+ * @param {{ resolvedIndexes?: Set<number> }} [opts] 成功匹配的附件下标（供附件列表去重）
  */
-export function inlineCidImages(html, attachments) {
+export function inlineCidImages(html, attachments, opts = {}) {
   if (!html) return html;
-  return html.replace(/(["'(])cid:([^"')\s]+)/gi, (m, q, cid) => {
-    const want = cleanCid(cid);
-    const idx = attachments.findIndex((x) => x.contentId && cleanCid(x.contentId) === want);
-    if (idx < 0) return m;
+  const resolved = opts.resolvedIndexes || new Set();
+  const dataMax = opts.dataMax ?? CID_DATA_MAX;
+  return mapCidRefs(html, (cid) => {
+    const idx = findAttachmentByCid(attachments, cid);
+    if (idx < 0) return null;
+    resolved.add(idx);
     const a = attachments[idx];
-    // 大图不塞 base64（否则 bodies 表 3MB 上限直接放弃缓存）
-    if (!a.content || a.size > 512 * 1024) return `${q}__ZM_CID_${idx}__`;
+    // 大图 / 无字节 → 占位符，resolve 后变 /api/.../attachments/n
+    if (!a.content || a.size > dataMax) return `__ZM_CID_${idx}__`;
     try {
-      return `${q}data:${a.contentType || 'image/png'};base64,${a.content.toString('base64')}`;
+      return `data:${a.contentType || 'image/png'};base64,${a.content.toString('base64')}`;
     } catch {
-      return `${q}__ZM_CID_${idx}__`;
+      return `__ZM_CID_${idx}__`;
     }
   });
 }
@@ -418,11 +462,10 @@ export function resolveCidPlaceholders(html, messageId, attachments = []) {
   if (!html || !messageId) return html;
   let out = String(html).replace(/__ZM_CID_(\d+)__/g, (_, i) => `/api/messages/${messageId}/attachments/${i}?inline=1`);
   if (!/cid:/i.test(out) || !attachments.length) return out;
-  out = out.replace(/(["'(])cid:([^"')\s]+)/gi, (m, q, cid) => {
-    const want = cleanCid(cid);
-    const idx = attachments.findIndex((x) => x.contentId && cleanCid(x.contentId) === want);
-    if (idx < 0) return m;
-    return `${q}/api/messages/${messageId}/attachments/${idx}?inline=1`;
+  out = mapCidRefs(out, (cid) => {
+    const idx = findAttachmentByCid(attachments, cid);
+    if (idx < 0) return null;
+    return `/api/messages/${messageId}/attachments/${idx}?inline=1`;
   });
   return out;
 }
@@ -440,18 +483,38 @@ function unsubscribeOf(p) {
   return null;
 }
 
+/** 正文缓存媒体管线版本：升版后强制重拉 IMAP 并重写 CID（修历史裂图） */
+export const MEDIA_BODY_VER = 2;
+
 export function serializeParsed(p) {
   const attachments = p.attachments || [];
+  const resolvedIndexes = new Set();
   const html = p.html
     ? inlineCidImages(
         p.html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<(iframe|object|embed)[\s\S]*?(<\/\1>|\/>)/gi, ''),
-        attachments
+        attachments,
+        { resolvedIndexes }
       )
     : null;
+  const attMeta = attachments.map((a, i) => {
+    const isImg = /^image\//i.test(a.contentType || '');
+    const inline = a.contentDisposition === 'inline' && !!a.contentId && isImg;
+    return {
+      index: i,
+      filename: a.filename || `附件${i + 1}`,
+      contentType: a.contentType || 'application/octet-stream',
+      size: a.size || a.content?.length || 0,
+      inline,
+      /** 正文已成功嵌入则不进附件列表；匹配失败的 orphan 仍展示以便下载 */
+      orphanInline: inline && !resolvedIndexes.has(i),
+      contentId: a.contentId ? cleanCid(a.contentId) : '',
+    };
+  });
   return {
     html,
     text: p.text || '',
     meta: {
+      mediaVer: MEDIA_BODY_VER,
       replyTo: addr(p.replyTo?.value),
       to: addr(p.to?.value),
       cc: addr(p.cc?.value),
@@ -459,15 +522,18 @@ export function serializeParsed(p) {
       references: Array.isArray(p.references) ? p.references : p.references ? [p.references] : [],
       messageId: p.messageId || '',
       unsubscribe: unsubscribeOf(p),
-      attachments: attachments
-        .map((a, i) => ({
-          index: i,
-          filename: a.filename || `附件${i + 1}`,
-          contentType: a.contentType,
-          size: a.size,
-          inline: a.contentDisposition === 'inline' && !!a.contentId && /^image\//.test(a.contentType || ''),
-        }))
-        .filter((a) => !a.inline),
+      attachments: attMeta.filter((a) => !a.inline || a.orphanInline),
+      /** 全部 parts（含已内联），供前端「本信图片」画廊；不含二进制 */
+      mediaParts: attMeta
+        .filter((a) => /^image\//i.test(a.contentType) || a.contentType === 'application/pdf')
+        .map(({ index, filename, contentType, size, inline, orphanInline }) => ({
+          index,
+          filename,
+          contentType,
+          size,
+          inline,
+          orphanInline,
+        })),
     },
   };
 }
