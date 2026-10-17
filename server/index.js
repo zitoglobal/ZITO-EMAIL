@@ -717,14 +717,18 @@ async function deepSearch(userId, opts) {
 }
 
 // ---------- 邮件详情 ----------
-async function loadBody(row) {
-  const cached = repo.getBody(row.id);
-  if (cached) {
+async function loadBody(row, { force = false } = {}) {
+  const cached = !force ? repo.getBody(row.id) : null;
+  // 旧缓存若仍含未解析 cid:，强制重拉并重写内联图（修复 Content-ID 匹配缺陷）
+  if (cached && !/cid:/i.test(cached.html || '') && !/__ZM_CID_\d+__/.test(cached.html || '')) {
     const signals = repo.refreshSignals(row.id, row.subject, cached.text || row.snippet || '');
-    return { html: cached.html, text: cached.text, meta: JSON.parse(cached.meta), signals };
+    const html = imap.resolveCidPlaceholders(cached.html, row.id);
+    return { html, text: cached.text, meta: JSON.parse(cached.meta), signals };
   }
   const mb = repo.getMailboxById(row.mailbox_id);
-  const body = imap.serializeParsed(await imap.fetchParsed(mb, row.folder, row.uid));
+  const parsed = await imap.fetchParsed(mb, row.folder, row.uid);
+  const body = imap.serializeParsed(parsed);
+  body.html = imap.resolveCidPlaceholders(body.html, row.id, parsed.attachments || []);
   repo.saveBody(row.id, body);
   const signals = repo.refreshSignals(row.id, row.subject, body.text || row.snippet || '');
   return { ...body, signals };
@@ -744,7 +748,7 @@ app.get(
     const row = messageOf(req);
     let body;
     try {
-      body = await loadBody(row);
+      body = await loadBody(row, { force: req.query.refresh === '1' });
     } catch (e) {
       if (e.status === 404) {
         repo.deleteMessageRows([row.id]);
@@ -758,7 +762,13 @@ app.get(
     const seen = shouldMark ? 1 : row.seen;
     const base = repo.rowToMessage({ ...row, seen, signals: body.signals != null ? body.signals.join(',') : row.signals });
     const [withLabels] = labels.attachLabels(req.user.id, [base]);
-    const safeHtml = body.html ? sanitizeMailHtml(body.html) : body.html;
+    // 允许同源 /api/... 内联图（cid 回退 URL）
+    const safeHtml = body.html
+      ? sanitizeMailHtml(body.html).replace(
+          /src="__ZM_CID_(\d+)__"/g,
+          (_, i) => `src="/api/messages/${row.id}/attachments/${i}?inline=1"`
+        )
+      : body.html;
     res.json({
       ...withLabels,
       ...body.meta,

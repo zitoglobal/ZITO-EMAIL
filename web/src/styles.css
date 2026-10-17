@@ -1867,7 +1867,7 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
   }
   .zm-mob-nav {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     position: fixed;
     left: 0;
     right: 0;

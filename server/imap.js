@@ -363,13 +363,50 @@ export function forgetParsed(mb, folder, uid) {
   parsedCache.delete(cacheKey(mb, folder, uid));
 }
 
-function inlineCidImages(html, attachments) {
+/** 规范化 cid（去 <>、urldecode、去空白） */
+function cleanCid(s) {
+  let t = cleanId(s);
+  try {
+    t = decodeURIComponent(t);
+  } catch {
+    /* keep */
+  }
+  return t.replace(/\s+/g, '');
+}
+
+/**
+ * 把 cid: 内联图换成 data: 或占位符 __ZM_CID_{index}__（由 API 再换成附件 URL）。
+ * 注意：Content-ID 常带 <>，而 html 里 cid: 没有，必须两侧都 clean。
+ */
+export function inlineCidImages(html, attachments) {
   if (!html) return html;
   return html.replace(/(["'(])cid:([^"')\s]+)/gi, (m, q, cid) => {
-    const a = attachments.find((x) => x.contentId && cleanId(x.contentId) === cid);
-    if (!a || a.size > 3 * 1024 * 1024) return m;
-    return `${q}data:${a.contentType};base64,${a.content.toString('base64')}`;
+    const want = cleanCid(cid);
+    const idx = attachments.findIndex((x) => x.contentId && cleanCid(x.contentId) === want);
+    if (idx < 0) return m;
+    const a = attachments[idx];
+    // 大图不塞 base64（否则 bodies 表 3MB 上限直接放弃缓存）
+    if (!a.content || a.size > 512 * 1024) return `${q}__ZM_CID_${idx}__`;
+    try {
+      return `${q}data:${a.contentType || 'image/png'};base64,${a.content.toString('base64')}`;
+    } catch {
+      return `${q}__ZM_CID_${idx}__`;
+    }
   });
+}
+
+/** 把占位符 / 残留 cid 换成可读的附件 inline URL */
+export function resolveCidPlaceholders(html, messageId, attachments = []) {
+  if (!html || !messageId) return html;
+  let out = String(html).replace(/__ZM_CID_(\d+)__/g, (_, i) => `/api/messages/${messageId}/attachments/${i}?inline=1`);
+  if (!/cid:/i.test(out) || !attachments.length) return out;
+  out = out.replace(/(["'(])cid:([^"')\s]+)/gi, (m, q, cid) => {
+    const want = cleanCid(cid);
+    const idx = attachments.findIndex((x) => x.contentId && cleanCid(x.contentId) === want);
+    if (idx < 0) return m;
+    return `${q}/api/messages/${messageId}/attachments/${idx}?inline=1`;
+  });
+  return out;
 }
 
 function unsubscribeOf(p) {

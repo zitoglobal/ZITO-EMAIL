@@ -10,7 +10,7 @@ import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
 import { conversationKey } from '../server/repo.js';
-import { threadIdOf } from '../server/imap.js';
+import { threadIdOf, inlineCidImages, resolveCidPlaceholders } from '../server/imap.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
@@ -271,6 +271,21 @@ assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.i
   const blob = encryptBuffer(Buffer.from('sqlite-bytes'));
   assert('backup magic ZMB1', blob.subarray(0, 4).toString() === 'ZMB1');
   assert('backup decrypt', decryptBuffer(blob).toString() === 'sqlite-bytes');
+}
+
+// ---------- cid inline (Content-ID 带 <> vs cid: 无 <>) ----------
+{
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const html = inlineCidImages('<img src="cid:pic@mail">', [
+    { contentId: '<pic@mail>', contentType: 'image/png', size: png.length, content: png },
+  ]);
+  assert('cid matches angle-bracket Content-ID', html.includes('data:image/png;base64,'));
+  const big = { contentId: 'big@x', contentType: 'image/jpeg', size: 900_000, content: Buffer.alloc(10) };
+  const ph = inlineCidImages('url(cid:big@x)', [big]);
+  assert('large cid becomes placeholder', ph.includes('__ZM_CID_0__'));
+  const resolved = resolveCidPlaceholders(ph, 42, [big]);
+  assert('placeholder → attachment url', resolved.includes('/api/messages/42/attachments/0?inline=1'));
+  assert('sanitize keeps relative api img', sanitizeMailHtml('<img src="/api/messages/1/attachments/0?inline=1">').includes('/api/messages/1/attachments/0'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

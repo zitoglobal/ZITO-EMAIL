@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, PenSquare, AlertCircle, RefreshCw, Hourglass, Clock, Menu } from 'lucide-react';
+import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, Menu } from 'lucide-react';
 import { api, qs } from './api.js';
 import Auth, { HeroBrand } from './components/Auth.jsx';
 import { BrandIcon } from './components/Brand.jsx';
@@ -1632,44 +1632,25 @@ export default function App() {
           type="button"
           className={view.box === 'today' ? 'on' : ''}
           aria-current={view.box === 'today' ? 'page' : undefined}
-          aria-label="今日待办"
+          aria-label="工作台"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'today' }); setSidebarOpen(false); }}
         >
           <ListTodo size={20} strokeWidth={1.75} aria-hidden />
-          <span>待办</span>
+          <span>工作台</span>
         </button>
         <button
           type="button"
-          className={view.box === 'inbox' ? 'on' : ''}
+          className={view.box === 'inbox' || view.box === 'unread' || view.box === 'flagged' || view.box === 'sent' ? 'on' : ''}
           aria-current={view.box === 'inbox' ? 'page' : undefined}
-          aria-label="收件箱"
+          aria-label="邮箱"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'inbox' }); setSidebarOpen(false); }}
         >
           <Inbox size={20} strokeWidth={1.75} aria-hidden />
-          <span>收件</span>
+          <span>邮箱</span>
         </button>
         <button
           type="button"
-          className={view.box === 'waiting' ? 'on' : ''}
-          aria-current={view.box === 'waiting' ? 'page' : undefined}
-          aria-label="等待"
-          onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'waiting' }); setSidebarOpen(false); }}
-        >
-          <Hourglass size={20} strokeWidth={1.75} aria-hidden />
-          <span>等待</span>
-        </button>
-        <button
-          type="button"
-          className="zm-mob-compose"
-          aria-label="写邮件"
-          onClick={() => { setSidebarOpen(false); openCompose(); }}
-        >
-          <PenSquare size={20} strokeWidth={1.75} aria-hidden />
-          <span>写信</span>
-        </button>
-        <button
-          type="button"
-          className={sidebarOpen || !['today', 'inbox', 'waiting'].includes(view.box) ? 'on' : ''}
+          className={sidebarOpen || !['today', 'inbox', 'unread', 'flagged', 'sent'].includes(view.box) ? 'on' : ''}
           aria-label="更多"
           aria-expanded={sidebarOpen}
           onClick={() => setSidebarOpen((o) => !o)}
