@@ -171,7 +171,11 @@ async function tick() {
 }
 
 export function startScheduler() {
-  db.prepare("UPDATE outbox SET status = 'scheduled' WHERE status = 'sending'").run();
+  // 崩溃时 sending 可能已 SMTP 成功：勿自动重发，标 failed 让用户核对已发送
+  db.prepare(
+    `UPDATE outbox SET status = 'failed', error = ?
+     WHERE status = 'sending'`
+  ).run('上次发送中断，请到「已发送」确认是否已发出后再重试');
   // 1.5s：缩短撤销窗口与真正发出的竞态
   setInterval(() => tick().catch((e) => console.error('[scheduler]', e)), 1_500).unref();
   setInterval(() => repo.pruneBodies(), 3600_000).unref();

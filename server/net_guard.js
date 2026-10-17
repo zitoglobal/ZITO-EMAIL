@@ -15,7 +15,10 @@ const BLOCKED_HOSTNAMES = new Set([
 
 function ipBlocked(ip) {
   if (!ip || !net.isIP(ip)) return false;
-  const v = ip.toLowerCase();
+  let v = ip.toLowerCase();
+  // IPv4-mapped IPv6（::ffff:10.0.0.1）按内嵌 IPv4 判断，避免绕过私网拦截
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(v);
+  if (mapped) v = mapped[1];
   if (v === '0.0.0.0' || v === '::' || v === '::1') return true;
   if (v.startsWith('127.')) return true;
   if (v.startsWith('10.')) return true;

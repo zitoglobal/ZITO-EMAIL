@@ -827,6 +827,10 @@ export const deleteOutbox = (id) => db.prepare('DELETE FROM outbox WHERE id = ?'
 export function deleteOutboxIfScheduled(id) {
   return db.prepare("DELETE FROM outbox WHERE id = ? AND status = 'scheduled'").run(id).changes > 0;
 }
+/** 取消定时/失败任务（sending 不可删，防与发送竞态） */
+export function deleteOutboxIfCancellable(id) {
+  return db.prepare("DELETE FROM outbox WHERE id = ? AND status IN ('scheduled', 'failed')").run(id).changes > 0;
+}
 /** 原子抢占发送权；失败表示已被撤销或他进程抢走 */
 export function claimOutboxSending(id) {
   return (
@@ -861,5 +865,6 @@ export function setTranslateCache(messagePk, target, gHash, { subject, body, sou
 }
 
 export function errorMailboxCount() {
-  return db.prepare("SELECT COUNT(*) n FROM mailboxes WHERE status = 'error'").get().n;
+  // 演示邮箱无真实 IMAP，不计入健康告警
+  return db.prepare("SELECT COUNT(*) n FROM mailboxes WHERE status = 'error' AND IFNULL(provider,'') != 'demo'").get().n;
 }

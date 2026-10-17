@@ -408,6 +408,13 @@ export default function App() {
       if (!silent) notify('AI 已给出建议与可执行动作', 'success');
     } catch (e) {
       if (!silent) notify(e.message, 'error');
+      else if (/未配置|关闭云端|超时|AI/.test(e.message || '')) {
+        // 自动分诊失败只提示一次，避免刷屏
+        if (!window.__zmTriageSilentTold) {
+          window.__zmTriageSilentTold = true;
+          notify(e.message, 'error');
+        }
+      }
     } finally {
       setAiBusy(false);
     }

@@ -201,6 +201,9 @@ assert('block 127.0.0.1', isBlockedHostname('127.0.0.1'));
 assert('block 10.x', isBlockedHostname('10.1.2.3'));
 assert('block 192.168', isBlockedHostname('192.168.1.1'));
 assert('block metadata link-local', isBlockedHostname('169.254.169.254'));
+assert('block ipv4-mapped private', isBlockedHostname('::ffff:10.1.2.3'));
+assert('block ipv4-mapped loopback', isBlockedHostname('::ffff:127.0.0.1'));
+assert('allow ipv4-mapped public', !isBlockedHostname('::ffff:8.8.8.8'));
 assert('allow public host name', !isBlockedHostname('imap.gmail.com'));
 assert('allow public ip', !isBlockedHostname('8.8.8.8'));
 

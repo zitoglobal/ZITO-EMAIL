@@ -930,9 +930,12 @@ async function moveRows(mb, folder, rows, dest) {
       if (nu) {
         db.prepare('UPDATE messages SET folder = ?, uid = ?, snooze_until = NULL WHERE id = ?').run(dest, nu, r.id);
         mapped++;
-      } else repo.deleteMessageRows([r.id]);
-    } catch {
-      repo.deleteMessageRows([r.id]);
+      } else {
+        // 无 uidMap（部分服务商）：只改文件夹，UID 待目标夹 sync 对齐，勿删本地行
+        db.prepare('UPDATE messages SET folder = ?, snooze_until = NULL WHERE id = ?').run(dest, r.id);
+      }
+    } catch (e) {
+      console.warn('[moveRows]', mb.email, e.message);
     }
   }
   sync.touch(mb.id, folder);
@@ -1052,10 +1055,7 @@ app.post(
             return;
           }
           if (action === 'trash' && !target) {
-            await imap.expungeMessages(g.mb, g.folder, g.rows.map((r) => r.uid));
-            repo.deleteMessageRows(g.rows.map((r) => r.id));
-            all = false;
-            return;
+            throw httpError(400, '无法定位「已删除」文件夹，请刷新邮箱文件夹后再试；勿静默永久删除');
           }
           if (!target) throw httpError(400, action === 'spam' ? '该邮箱没有垃圾邮件文件夹' : '目标文件夹不存在');
           if (target === g.folder) return;
@@ -1182,8 +1182,8 @@ app.delete(
     const o = repo.getOutbox(req.user.id, id);
     if (!o) throw httpError(404, '邮件已发出，无法撤销');
     if (o.status === 'sending') throw httpError(409, '邮件正在发送，无法撤销');
-    // 条件删除：仅 scheduled，与调度器 claim 互斥，消灭「点了撤销仍发出」
-    if (!repo.deleteOutboxIfScheduled(id)) {
+    // scheduled / failed 可取消；sending 与调度器 claim 互斥
+    if (!repo.deleteOutboxIfCancellable(id)) {
       const again = repo.getOutbox(req.user.id, id);
       if (!again) throw httpError(404, '邮件已发出，无法撤销');
       if (again.status === 'sending') throw httpError(409, '邮件正在发送，无法撤销');

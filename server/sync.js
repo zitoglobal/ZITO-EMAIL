@@ -433,10 +433,9 @@ async function flushRuleDeferred(mb, deferred = []) {
         lock.release();
       }
       const nu = result?.uidMap?.get?.(m.uid);
-      if (nu && m.messageId) {
-        repo.patchMessages([m.messageId], { folder: m.dest, uid: nu, snooze_until: null });
-      } else if (m.messageId) {
-        repo.deleteMessageRows([m.messageId]);
+      if (m.messageId) {
+        if (nu) repo.patchMessages([m.messageId], { folder: m.dest, uid: nu, snooze_until: null });
+        else repo.patchMessages([m.messageId], { folder: m.dest, snooze_until: null });
       }
     } catch (_) {}
   }

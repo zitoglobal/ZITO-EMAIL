@@ -97,13 +97,49 @@ function logEvent(dealId, scopeKey, actorUserId, action, detail = '') {
   ).run(dealId || null, scopeKey, actorUserId, action, String(detail || '').slice(0, 200), now());
 }
 
-/** 最近认领/阶段变更（按 scope 或 deal） */
+function canViewDealEvents(viewerId, scopeKeys, dealRow) {
+  const viewer = userRow(viewerId);
+  if (!viewer) return false;
+  if (viewer.role === 'admin') return true;
+  if (dealRow?.owner_user_id === viewerId) return true;
+  if (scopeKeys.length) {
+    const ph = scopeKeys.map(() => '?').join(',');
+    const owns = db
+      .prepare(`SELECT 1 AS ok FROM deals WHERE owner_user_id = ? AND scope_key IN (${ph}) LIMIT 1`)
+      .get(viewerId, ...scopeKeys);
+    if (owns) return true;
+  }
+  for (const sk of scopeKeys) {
+    if (sk.startsWith('p:')) {
+      const addr = sk.slice(2).toLowerCase();
+      const hit = db
+        .prepare(
+          `SELECT 1 AS ok FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
+           WHERE b.user_id = ? AND lower(m.from_addr) = ? LIMIT 1`
+        )
+        .get(viewerId, addr);
+      if (hit) return true;
+    } else if (sk.startsWith('c:')) {
+      const dom = sk.slice(2).toLowerCase();
+      const hit = db
+        .prepare(
+          `SELECT 1 AS ok FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
+           WHERE b.user_id = ? AND lower(m.from_addr) LIKE ? LIMIT 1`
+        )
+        .get(viewerId, `%@${dom}`);
+      if (hit) return true;
+    }
+  }
+  return false;
+}
+
+/** 最近认领/阶段变更（按 scope 或 deal；需有权查看） */
 export function listEvents(viewerId, { dealId, address, limit = 12 } = {}) {
-  void viewerId;
+  let dealRow = null;
   let scopeKey = null;
   if (dealId) {
-    const row = getDealById(dealId);
-    if (row) scopeKey = row.scope_key;
+    dealRow = getDealById(dealId);
+    if (dealRow) scopeKey = dealRow.scope_key;
   }
   let scopeKeys = scopeKey ? [scopeKey] : [];
   if (!scopeKeys.length && address) {
@@ -114,6 +150,7 @@ export function listEvents(viewerId, { dealId, address, limit = 12 } = {}) {
     }
   }
   if (!scopeKeys.length) return [];
+  if (!canViewDealEvents(viewerId, scopeKeys, dealRow)) return [];
   const lim = Math.min(40, Math.max(1, Number(limit) || 12));
   const ph = scopeKeys.map(() => '?').join(',');
   const rows = db
