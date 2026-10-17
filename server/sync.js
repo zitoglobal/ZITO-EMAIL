@@ -196,6 +196,7 @@ class Engine {
   markError(message) {
     const mb = this.mb;
     if (!mb) return;
+    console.error('[sync] mailbox error', mb.email, message);
     repo.setMailboxStatus(mb.id, 'error', message);
     emit(mb.user_id, 'mailbox', { id: mb.id, status: 'error', error: message });
   }
@@ -218,7 +219,20 @@ class Engine {
         if (!this.watcher && !this.reconnectTimer) this.connectWatcher();
         if (!this.sentWatcher && !this.sentReconnectTimer) this.connectSentWatcher();
       } catch (e) {
-        this.markError(e.message || String(e));
+        const msg = e.message || String(e);
+        // FTS 索引问题不应把整箱打成 error（收信仍可用）
+        if (/messages_fts|fts5|contentless/i.test(msg) || repo.isSqliteCorrupt(e)) {
+          console.warn('[sync] FTS/索引异常，尝试重建且不标邮箱 error:', msg);
+          try {
+            repo.rebuildFtsIndex();
+          } catch (e2) {
+            console.warn('[sync] fts rebuild', e2.message);
+          }
+          repo.setMailboxStatus(mb.id, 'ok');
+          emit(mb.user_id, 'mailbox', { id: mb.id, status: 'ok' });
+          return;
+        }
+        this.markError(msg);
       }
     });
   }
