@@ -1451,6 +1451,7 @@ export default function App() {
           listItem={selectedItem}
           settings={settings}
           aiEnabled={ai}
+          aiMeta={aiMeta}
           dark={dark}
           mailboxMap={mailboxMap}
           folders={folders}
@@ -1537,6 +1538,7 @@ export default function App() {
             initial={c.initial}
             mailboxes={mailboxes}
             aiEnabled={ai}
+            aiMeta={aiMeta}
             stacked={composers.length > 1 && i < composers.length - 1}
             onSend={(payload, files, state) => sendMail(payload, files, state, c.key)}
             onSaveDraft={saveDraft}

@@ -1149,6 +1149,19 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
   background: var(--panel-2); border: 1px solid var(--hairline); color: var(--muted); font-size: 12.5px;
 }
 .ai-off-strip button { margin-left: auto; color: var(--accent); font-weight: 600; font-size: 12.5px; }
+.ai-fail-strip {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 16px 8px; padding: 8px 12px; border-radius: 8px;
+  background: color-mix(in srgb, var(--danger, #b42318) 8%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--danger, #b42318) 28%, transparent);
+  font-size: 12.5px; color: var(--text);
+}
+.ai-fail-strip span { flex: 1; min-width: 140px; color: var(--muted); }
+.ai-fail-strip button {
+  margin-left: auto; color: var(--accent); font-weight: 600; font-size: 12.5px;
+  background: none; border: none; cursor: pointer; padding: 0;
+}
+.ai-fail-strip button:disabled { opacity: 0.6; cursor: default; }
 .ai-pin-strip {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px; margin-bottom: 12px; border-radius: var(--r);
   background: color-mix(in srgb, var(--ai-soft) 70%, var(--panel)); border: 1px solid var(--hairline); font-size: 13px;

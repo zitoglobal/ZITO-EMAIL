@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Hand, Unlock, Loader2, GitBranch, History, StickyNote, CalendarClock } from 'lucide-react';
+import { Hand, Unlock, Loader2, GitBranch, History, StickyNote, CalendarClock, Split } from 'lucide-react';
 import { api, qs } from '../api.js';
 import { formatShortDateTime } from '../utils.js';
 
@@ -8,18 +8,34 @@ const ACTION_LABEL = {
   release: '释放',
   stage: '改阶段',
   takeover: '接管',
+  assign: '指派',
+  follow: '跟进日',
+  split: '拆到个人',
 };
 
 /**
  * 团队认领 + 业务阶段条（邮箱内销售台）
  */
-export default function DealBar({ deal, scope, stages = [], address, threadId, messageId, notify, onChange }) {
+export default function DealBar({
+  deal,
+  scope,
+  scopes,
+  stages = [],
+  address,
+  threadId,
+  messageId,
+  canSplitDeal,
+  canClaimPerson,
+  notify,
+  onChange,
+}) {
   const [busy, setBusy] = useState('');
   const [events, setEvents] = useState([]);
   const [showLog, setShowLog] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
-  const visible = !!(scope || deal);
+  const hasCompany = !!(scopes?.company || scope?.kind === 'company' || deal?.scopeKind === 'company');
+  const visible = !!(scope || deal || scopes?.person);
 
   useEffect(() => {
     setNoteDraft(deal?.note || '');
@@ -55,20 +71,47 @@ export default function DealBar({ deal, scope, stages = [], address, threadId, m
 
   if (!visible) return null;
 
-  async function claim(force = false) {
-    setBusy('claim');
+  async function claim(force = false, scopeKind) {
+    setBusy(scopeKind === 'address' ? 'claim-person' : 'claim');
     try {
       const d = await api('/deals/claim', {
         method: 'POST',
-        body: { address, threadId, force },
+        body: { address, threadId, force, scopeKind },
       });
       onChange?.(d.deal);
-      notify(force ? '已接管认领' : `已认领 ${d.deal.scopeLabel}`, 'success');
+      const label =
+        scopeKind === 'address'
+          ? `已认领联系人 ${d.deal.scopeLabel}`
+          : force
+            ? '已接管认领'
+            : `已认领 ${d.deal.scopeLabel}`;
+      notify(label, 'success');
     } catch (e) {
       if (e.status === 409 && e.deal) {
         onChange?.(e.deal);
         notify(e.message, 'error');
       } else notify(e.message, 'error');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function split() {
+    if (!deal?.id) return;
+    if (
+      !window.confirm(
+        `将「${deal.scopeLabel}」拆到个人「${address}」？\n公司域认领会释放，同事可跟同域其它采购。`
+      )
+    ) {
+      return;
+    }
+    setBusy('split');
+    try {
+      const d = await api(`/deals/${deal.id}/split`, { method: 'POST', body: {} });
+      onChange?.(d.deal);
+      notify(`已拆到个人 ${d.deal.scopeLabel}`, 'success');
+    } catch (e) {
+      notify(e.message, 'error');
     } finally {
       setBusy('');
     }
@@ -158,6 +201,10 @@ export default function DealBar({ deal, scope, stages = [], address, threadId, m
 
   const list = stages.length ? stages : deal ? [{ id: deal.stage, label: deal.stageLabel, color: deal.stageColor }] : [];
   const canEdit = deal && (deal.mine || deal.canRelease);
+  const showSplit = !!(canSplitDeal || (deal?.mine && deal.scopeKind === 'company'));
+  const showClaimPerson =
+    !!(canClaimPerson || (hasCompany && (!deal || (deal && !deal.mine && deal.scopeKind === 'company')))) &&
+    !!address;
 
   return (
     <div className={'deal-bar' + (deal && !deal.mine ? ' taken' : '') + (deal?.mine ? ' mine' : '')}>
@@ -167,12 +214,19 @@ export default function DealBar({ deal, scope, stages = [], address, threadId, m
           {!deal && (
             <>
               <b>未认领</b>
-              <span>客户 {scope?.label || address} — 认领后同事可见归属，减少撞单报价</span>
+              <span>
+                {hasCompany
+                  ? `默认可认领公司 ${scopes?.company?.label || scope?.label}；同域多采购可改为「仅此人」`
+                  : `客户 ${scope?.label || address} — 认领后同事可见归属，减少撞单报价`}
+              </span>
             </>
           )}
           {deal?.mine && (
             <>
-              <b>我已认领 · {deal.scopeLabel}</b>
+              <b>
+                我已认领 · {deal.scopeLabel}
+                {deal.scopeKind === 'address' ? '（个人）' : deal.scopeKind === 'company' ? '（公司）' : ''}
+              </b>
               <span>
                 当前阶段：{deal.stageLabel}
                 {deal.note && !editingNote ? ` · ${deal.note}` : ''}
@@ -182,8 +236,17 @@ export default function DealBar({ deal, scope, stages = [], address, threadId, m
           )}
           {deal && !deal.mine && (
             <>
-              <b>{deal.owner.name} 已认领 · {deal.scopeLabel}</b>
-              <span>阶段 {deal.stageLabel}{deal.note ? ` · ${deal.note}` : ''} — 请先确认再回复，避免重复报价</span>
+              <b>
+                {deal.owner.name} 已认领 · {deal.scopeLabel}
+                {deal.scopeKind === 'company' ? '（公司）' : ''}
+              </b>
+              <span>
+                阶段 {deal.stageLabel}
+                {deal.note ? ` · ${deal.note}` : ''}
+                {deal.scopeKind === 'company'
+                  ? ' — 可「仅认领此人」跟当前采购，不抢公司锁'
+                  : ' — 请先确认再回复，避免重复报价'}
+              </span>
             </>
           )}
         </div>
@@ -276,9 +339,35 @@ export default function DealBar({ deal, scope, stages = [], address, threadId, m
             <History size={12} /> 记录
           </button>
         )}
-        {!deal && (
+        {!deal && hasCompany && (
+          <>
+            <button type="button" className="sl-btn vip" disabled={!!busy} onClick={() => claim(false, 'company')} title="认领整个公司域名">
+              {busy === 'claim' ? <Loader2 size={12} className="spin" /> : <Hand size={12} />} 我来跟 · 公司
+            </button>
+            <button type="button" className="sl-btn" disabled={!!busy} onClick={() => claim(false, 'address')} title="只认领当前联系人">
+              {busy === 'claim-person' ? <Loader2 size={12} className="spin" /> : <Hand size={12} />} 仅此人
+            </button>
+          </>
+        )}
+        {!deal && !hasCompany && (
           <button type="button" className="sl-btn vip" disabled={!!busy} onClick={() => claim(false)}>
             {busy === 'claim' ? <Loader2 size={12} className="spin" /> : <Hand size={12} />} 我来跟
+          </button>
+        )}
+        {showClaimPerson && deal && !deal.mine && (
+          <button
+            type="button"
+            className="sl-btn vip"
+            disabled={!!busy}
+            title="同事已认领公司域时，可只认领当前采购邮箱"
+            onClick={() => claim(false, 'address')}
+          >
+            {busy === 'claim-person' ? <Loader2 size={12} className="spin" /> : <Hand size={12} />} 仅认领此人
+          </button>
+        )}
+        {showSplit && (
+          <button type="button" className="sl-btn" disabled={!!busy} onClick={split} title="释放公司锁，改为只跟当前联系人">
+            {busy === 'split' ? <Loader2 size={12} className="spin" /> : <Split size={12} />} 拆到个人
           </button>
         )}
         {deal?.mine && (
@@ -292,7 +381,7 @@ export default function DealBar({ deal, scope, stages = [], address, threadId, m
             className="sl-btn"
             disabled={!!busy}
             title="仅管理员可强制接管"
-            onClick={() => claim(true)}
+            onClick={() => claim(true, deal.scopeKind === 'address' ? 'address' : 'company')}
           >
             {busy === 'claim' ? <Loader2 size={12} className="spin" /> : <Hand size={12} />} 接管
           </button>

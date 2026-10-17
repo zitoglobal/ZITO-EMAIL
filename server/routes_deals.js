@@ -80,6 +80,15 @@ export function registerDealsRoutes(app, ctx) {
     })
   );
   app.post(
+    '/api/deals/:id/split',
+    auth,
+    wrap(async (req, res) => {
+      const deal = deals.splitToPerson(req.user.id, Number(req.params.id));
+      broadcastDeal(emit, users);
+      res.json({ deal });
+    })
+  );
+  app.post(
     '/api/deals/assign',
     auth,
     wrap(async (req, res) => {
@@ -114,7 +123,8 @@ export function registerDealsRoutes(app, ctx) {
       const skipped = [];
       const seenScope = new Set();
       for (const it of items) {
-        const scope = deals.scopeFromAddress(it.address);
+        const scopeKind = it.scopeKind === 'address' || it.scopeKind === 'person' ? 'address' : undefined;
+        const scope = deals.scopeFromAddress(it.address, scopeKind);
         if (!scope) {
           skipped.push({ address: it.address, error: '发件人地址无效', deal: null });
           continue;
@@ -126,6 +136,7 @@ export function registerDealsRoutes(app, ctx) {
             address: it.address,
             threadId: it.threadId,
             force: false,
+            scopeKind,
           });
           claimed.push(deal);
         } catch (e) {

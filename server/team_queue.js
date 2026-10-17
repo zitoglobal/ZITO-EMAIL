@@ -2,7 +2,7 @@
  * 团队公海：跨成员未认领的客户来信（元数据 + 认领/指派，不跨账号读正文）。
  */
 import { db } from './db.js';
-import { scopeFromAddress } from './deals.js';
+import { resolveScopes } from './deals.js';
 import { isFreeDomain, domainOf, slaFor } from './priority.js';
 import { signalsOf } from './classify.js';
 import * as users from './users.js';
@@ -132,9 +132,12 @@ export function listQueue(viewerId, { limit = 60 } = {}) {
 
   const byScope = new Map();
   for (const r of rows) {
-    const scope = scopeFromAddress(r.from_addr);
-    if (!scope) continue;
-    if (claimed.has(scope.key)) continue;
+    const scopes = resolveScopes(r.from_addr);
+    if (!scopes) continue;
+    // 个人认领或公司域认领任一命中则不再进公海
+    if (claimed.has(scopes.person.key)) continue;
+    if (scopes.company && claimed.has(scopes.company.key)) continue;
+    const scope = scopes.default;
     const d = domainOf(r.from_addr);
     if (d && !isFreeDomain(d)) {
       const ownerDomain = domainOf(r.mailbox_email);

@@ -4,7 +4,7 @@
 import { classify, expectsReply, signalsOf } from '../server/classify.js';
 import { slaFor, slaByTier, domainOf, isFreeDomain, normalizeKey, scoreRow, tierOf } from '../server/priority.js';
 import { matchCondition, matchRule } from '../server/mail_rules.js';
-import { scopeFromAddress, isValidStage, stageMeta, STAGES, suggestStageAfterSend } from '../server/deals.js';
+import { scopeFromAddress, resolveScopes, isValidStage, stageMeta, STAGES, suggestStageAfterSend } from '../server/deals.js';
 import { isBlockedHostname } from '../server/net_guard.js';
 import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
@@ -166,6 +166,20 @@ assert(
 assert('scope company', scopeFromAddress('buyer@acme-apparel.com')?.key === 'c:@acme-apparel.com');
 assert('scope gmail personal', scopeFromAddress('buyer@gmail.com')?.key === 'a:buyer@gmail.com');
 assert('scope robot null', scopeFromAddress('noreply@shop.com') == null);
+assert(
+  'scope person override',
+  scopeFromAddress('buyer@acme-apparel.com', 'address')?.key === 'a:buyer@acme-apparel.com'
+);
+assert(
+  'scope company explicit',
+  scopeFromAddress('buyer@acme-apparel.com', 'company')?.key === 'c:@acme-apparel.com'
+);
+{
+  const rs = resolveScopes('buyer2@acme-apparel.com');
+  assert('resolveScopes has company', rs?.company?.key === 'c:@acme-apparel.com');
+  assert('resolveScopes has person', rs?.person?.key === 'a:buyer2@acme-apparel.com');
+  assert('resolveScopes default company', rs?.default?.kind === 'company');
+}
 assert('stages count', STAGES.length >= 6);
 assert('valid stage inquiry', isValidStage('inquiry'));
 assert('invalid stage', !isValidStage('foobar'));

@@ -32,13 +32,29 @@ export function isValidStage(id) {
   return STAGE_IDS.has(String(id || ''));
 }
 
-/** 从发件人解析团队共享的认领键：企业域优先，公共邮箱按个人 */
-export function scopeFromAddress(address) {
+/**
+ * 解析认领粒度：企业域默认可按公司（c:@domain）或按个人（a:email）；
+ * 公共邮箱只有个人键。lookup 优先命中个人认领，避免「一人锁整司」后无法跟同域其它采购。
+ */
+export function resolveScopes(address) {
   const a = String(address || '').trim().toLowerCase();
   if (!a || !a.includes('@') || ROBOT.test(a)) return null;
+  const person = { key: 'a:' + a, kind: 'address', label: a, address: a };
   const d = domainOf(a);
-  if (d && !isFreeDomain(d)) return { key: 'c:@' + d, kind: 'company', label: '@' + d, address: a };
-  return { key: 'a:' + a, kind: 'address', label: a, address: a };
+  if (d && !isFreeDomain(d)) {
+    const company = { key: 'c:@' + d, kind: 'company', label: '@' + d, address: a };
+    return { person, company, default: company };
+  }
+  return { person, company: null, default: person };
+}
+
+/** 默认认领键：企业域 → 公司；公共邮箱 → 个人（兼容旧调用） */
+export function scopeFromAddress(address, scopeKind) {
+  const scopes = resolveScopes(address);
+  if (!scopes) return null;
+  if (scopeKind === 'address' || scopeKind === 'person') return scopes.person;
+  if (scopeKind === 'company' && scopes.company) return scopes.company;
+  return scopes.default;
 }
 
 function userRow(id) {
@@ -87,18 +103,23 @@ export function listEvents(viewerId, { dealId, address, limit = 12 } = {}) {
     const row = getDealById(dealId);
     if (row) scopeKey = row.scope_key;
   }
-  if (!scopeKey && address) {
-    const scope = scopeFromAddress(address);
-    if (scope) scopeKey = scope.key;
+  let scopeKeys = scopeKey ? [scopeKey] : [];
+  if (!scopeKeys.length && address) {
+    const scopes = resolveScopes(address);
+    if (scopes) {
+      scopeKeys = [scopes.person.key];
+      if (scopes.company) scopeKeys.push(scopes.company.key);
+    }
   }
-  if (!scopeKey) return [];
+  if (!scopeKeys.length) return [];
   const lim = Math.min(40, Math.max(1, Number(limit) || 12));
+  const ph = scopeKeys.map(() => '?').join(',');
   const rows = db
     .prepare(
       `SELECT id, deal_id, scope_key, actor_user_id, action, detail, created_at
-       FROM deal_events WHERE scope_key = ? ORDER BY created_at DESC LIMIT ?`
+       FROM deal_events WHERE scope_key IN (${ph}) ORDER BY created_at DESC LIMIT ?`
     )
-    .all(scopeKey, lim);
+    .all(...scopeKeys, lim);
   return rows.map((r) => {
     const actor = userRow(r.actor_user_id);
     return {
@@ -119,22 +140,39 @@ export function getDealById(id) {
 }
 
 export function lookup(viewerId, { address, threadId } = {}) {
-  const scope = scopeFromAddress(address);
-  if (!scope) return { deal: null, scope: null, stages: STAGES };
-  const row = db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(scope.key);
-  let deal = publicDeal(row, viewerId);
-  // 若带 threadId 且当前无 deal，不自动创建；仅回填 last_thread 供展示
-  if (deal && threadId && deal.lastThreadId !== threadId) {
-    /* read-only lookup — no write */
-  }
-  return { deal, scope: { key: scope.key, kind: scope.kind, label: scope.label }, stages: STAGES };
+  const scopes = resolveScopes(address);
+  if (!scopes) return { deal: null, scope: null, scopes: null, canSplit: false, stages: STAGES };
+  const personRow = db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(scopes.person.key);
+  const companyRow = scopes.company
+    ? db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(scopes.company.key)
+    : null;
+  // 个人认领优先于公司域，便于同域多采购并行跟进
+  const row = personRow || companyRow;
+  const deal = publicDeal(row, viewerId);
+  const matched = personRow ? scopes.person : companyRow ? scopes.company : scopes.default;
+  void threadId;
+  return {
+    deal,
+    scope: matched ? { key: matched.key, kind: matched.kind, label: matched.label } : null,
+    scopes: {
+      person: { key: scopes.person.key, kind: scopes.person.kind, label: scopes.person.label },
+      company: scopes.company
+        ? { key: scopes.company.key, kind: scopes.company.kind, label: scopes.company.label }
+        : null,
+    },
+    companyDeal: companyRow && personRow ? publicDeal(companyRow, viewerId) : null,
+    canSplit: !!(deal?.mine && deal.scopeKind === 'company' && scopes.person),
+    canClaimPerson: !!(scopes.company && !personRow),
+    stages: STAGES,
+  };
 }
 
 /**
  * 认领客户。他人已认领时默认 409；admin 或 force=true 可接管。
+ * scopeKind: 'company' | 'address'（企业域可拆到个人，避免一人锁整司）
  */
-export function claim(userId, { address, threadId, note, force = false } = {}) {
-  const scope = scopeFromAddress(address);
+export function claim(userId, { address, threadId, note, force = false, scopeKind } = {}) {
+  const scope = scopeFromAddress(address, scopeKind);
   if (!scope) throw Object.assign(new Error('无法认领：发件人地址无效'), { status: 400 });
   const user = userRow(userId);
   if (!user) throw Object.assign(new Error('用户不存在'), { status: 401 });
@@ -196,13 +234,13 @@ export function claim(userId, { address, threadId, note, force = false } = {}) {
 /**
  * 管理员指派给指定成员（写入认领归属；被指派人收到 SSE 后可进今日待办跟进）。
  */
-export function assign(adminId, { address, toUserId, threadId, note } = {}) {
+export function assign(adminId, { address, toUserId, threadId, note, scopeKind } = {}) {
   const admin = userRow(adminId);
   if (admin?.role !== 'admin') throw Object.assign(new Error('需要管理员权限'), { status: 403 });
   const targetId = Number(toUserId);
   const target = userRow(targetId);
   if (!target) throw Object.assign(new Error('指派对象不存在'), { status: 404 });
-  const scope = scopeFromAddress(address);
+  const scope = scopeFromAddress(address, scopeKind);
   if (!scope) throw Object.assign(new Error('无法指派：发件人地址无效'), { status: 400 });
   const t = now();
   const existing = db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(scope.key);
@@ -247,6 +285,81 @@ export function release(userId, dealId) {
   logEvent(row.id, row.scope_key, userId, 'release', userId === row.owner_user_id ? '释放认领' : '管理员释放认领');
   db.prepare('DELETE FROM deals WHERE id = ?').run(dealId);
   return { ok: true };
+}
+
+/**
+ * 将公司域认领拆到当前联系人个人键，并释放公司锁，便于同事跟同域其它采购。
+ */
+export function splitToPerson(userId, dealId) {
+  const row = getDealById(dealId);
+  if (!row) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
+  if (row.scope_kind !== 'company') {
+    throw Object.assign(new Error('仅公司域认领可拆到个人'), { status: 400 });
+  }
+  const user = userRow(userId);
+  if (row.owner_user_id !== userId && user?.role !== 'admin') {
+    throw Object.assign(new Error('只有认领人或管理员可以拆分'), { status: 403 });
+  }
+  const address = String(row.last_address || '').trim().toLowerCase();
+  if (!address || !address.includes('@')) {
+    throw Object.assign(new Error('缺少联系人地址，无法拆到个人'), { status: 400 });
+  }
+  const person = scopeFromAddress(address, 'address');
+  if (!person || person.kind !== 'address') {
+    throw Object.assign(new Error('该地址无法拆到个人'), { status: 400 });
+  }
+  const t = now();
+  const existingPerson = db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(person.key);
+  if (existingPerson && existingPerson.owner_user_id !== row.owner_user_id) {
+    throw Object.assign(
+      new Error(`${publicDeal(existingPerson, userId).owner.name} 已认领此联系人`),
+      { status: 409, deal: publicDeal(existingPerson, userId) }
+    );
+  }
+  let personId = existingPerson?.id;
+  if (existingPerson) {
+    db.prepare(
+      `UPDATE deals SET owner_user_id = ?, stage = ?, stage_updated_at = ?, note = ?,
+        next_follow_at = ?, last_thread_id = COALESCE(?, last_thread_id), last_address = ?,
+        claimed_at = ?, updated_at = ? WHERE id = ?`
+    ).run(
+      row.owner_user_id,
+      row.stage,
+      row.stage_updated_at || t,
+      row.note || '',
+      row.next_follow_at,
+      row.last_thread_id,
+      address,
+      row.claimed_at || t,
+      t,
+      existingPerson.id
+    );
+  } else {
+    const info = db
+      .prepare(
+        `INSERT INTO deals
+          (scope_key, scope_kind, owner_user_id, claimed_at, stage, stage_updated_at, note,
+           next_follow_at, last_thread_id, last_address, updated_at)
+         VALUES (?, 'address', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        person.key,
+        row.owner_user_id,
+        row.claimed_at || t,
+        row.stage,
+        row.stage_updated_at || t,
+        row.note || '',
+        row.next_follow_at,
+        row.last_thread_id,
+        address,
+        t
+      );
+    personId = Number(info.lastInsertRowid);
+  }
+  logEvent(personId, person.key, userId, 'split', `从 ${row.scope_key.slice(2)} 拆到个人`);
+  logEvent(row.id, row.scope_key, userId, 'release', '拆分后释放公司域认领');
+  db.prepare('DELETE FROM deals WHERE id = ?').run(dealId);
+  return publicDeal(getDealById(personId), userId);
 }
 
 export function setStage(userId, dealId, stage) {
@@ -329,10 +442,17 @@ export function rollFollowAfterHandled(userId, messageRows = [], { days = 3, onl
     } catch {
       addr = r.from_addr || '';
     }
-    const scope = scopeFromAddress(addr);
-    if (!scope || seen.has(scope.key)) continue;
-    seen.add(scope.key);
-    const row = db.prepare('SELECT * FROM deals WHERE scope_key = ? AND owner_user_id = ?').get(scope.key, userId);
+    const scopes = resolveScopes(addr);
+    if (!scopes) continue;
+    const keys = [scopes.person.key];
+    if (scopes.company) keys.push(scopes.company.key);
+    if (keys.some((k) => seen.has(k))) continue;
+    keys.forEach((k) => seen.add(k));
+    const row =
+      db.prepare('SELECT * FROM deals WHERE scope_key = ? AND owner_user_id = ?').get(scopes.person.key, userId) ||
+      (scopes.company
+        ? db.prepare('SELECT * FROM deals WHERE scope_key = ? AND owner_user_id = ?').get(scopes.company.key, userId)
+        : null);
     if (!row) continue;
     // 仅当已设跟进日时滚动；从未设过的不自动开跟进日
     if (row.next_follow_at == null) continue;
@@ -346,36 +466,39 @@ export function rollFollowAfterHandled(userId, messageRows = [], { days = 3, onl
 
 /** 对方来信：若跟进日已到期则清掉，避免「已回仍因到期日挂着」 */
 export function clearDueFollowOnInbound(userId, fromAddr) {
-  const scope = scopeFromAddress(fromAddr);
-  if (!scope) return null;
-  const row = db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(scope.key);
+  const scopes = resolveScopes(fromAddr);
+  if (!scopes) return null;
+  const row =
+    db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(scopes.person.key) ||
+    (scopes.company ? db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(scopes.company.key) : null);
   if (!row || row.next_follow_at == null || row.next_follow_at > now()) return null;
   db.prepare('UPDATE deals SET next_follow_at = NULL, updated_at = ? WHERE id = ?').run(now(), row.id);
   logEvent(row.id, row.scope_key, userId, 'follow', '对方已回，清除到期跟进');
   return publicDeal(getDealById(row.id), userId);
 }
 
-/** 批量挂到 Focus / 列表：按地址解析 scope */
+/** 批量挂到 Focus / 列表：个人认领优先于公司域 */
 export function attachDeals(viewerId, messages = []) {
   if (!messages.length) return messages;
   const keys = new Set();
-  const keyOf = new Map();
+  const keyPair = new Map();
   for (const m of messages) {
     const addr = m.from?.address || m.to?.address || '';
-    // 待回复：用发件人；待跟进：用 follow.to
     const a = m.follow?.to?.address || m.from?.address || addr;
-    const scope = scopeFromAddress(a);
-    if (!scope) continue;
-    keys.add(scope.key);
-    keyOf.set(m.id, scope.key);
+    const scopes = resolveScopes(a);
+    if (!scopes) continue;
+    keys.add(scopes.person.key);
+    if (scopes.company) keys.add(scopes.company.key);
+    keyPair.set(m.id, scopes);
   }
   if (!keys.size) return messages;
   const ph = [...keys].map(() => '?').join(',');
   const rows = db.prepare(`SELECT * FROM deals WHERE scope_key IN (${ph})`).all(...keys);
   const byKey = new Map(rows.map((r) => [r.scope_key, publicDeal(r, viewerId)]));
   return messages.map((m) => {
-    const k = keyOf.get(m.id);
-    const deal = k ? byKey.get(k) : null;
+    const scopes = keyPair.get(m.id);
+    if (!scopes) return m;
+    const deal = byKey.get(scopes.person.key) || (scopes.company ? byKey.get(scopes.company.key) : null);
     return deal ? { ...m, deal } : m;
   });
 }

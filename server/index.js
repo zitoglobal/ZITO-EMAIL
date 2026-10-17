@@ -792,7 +792,14 @@ app.get(
       conflict: priority.conflictHints(req.user.id, { fromAddr: row.from_addr, threadId: row.thread_id }),
       ...(() => {
         const d = deals.lookup(req.user.id, { address: row.from_addr, threadId: row.thread_id });
-        return { deal: d.deal, dealScope: d.scope, dealStages: d.stages };
+        return {
+          deal: d.deal,
+          dealScope: d.scope,
+          dealScopes: d.scopes,
+          dealStages: d.stages,
+          canSplitDeal: !!d.canSplit,
+          canClaimPerson: !!d.canClaimPerson,
+        };
       })(),
     });
   })

@@ -241,10 +241,13 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
         <DealBar
           deal={m.deal}
           scope={m.dealScope}
+          scopes={m.dealScopes}
           stages={m.dealStages}
           address={item.from?.address}
           threadId={item.threadId || m.threadId}
           messageId={item.id}
+          canSplitDeal={m.canSplitDeal}
+          canClaimPerson={m.canClaimPerson}
           notify={onNotify}
           onChange={(deal) => onDealChange?.(item.id, deal)}
         />
@@ -288,7 +291,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
 }
 
 export default function Reader({
-  id, listItem, settings, aiEnabled, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp, onAiNote,
+  id, listItem, settings, aiEnabled, aiMeta, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp, onAiNote,
   onOpenCustomer, onOpenSettings, labels = [], onToggleLabels, onCreateLabel,
 }) {
   const [thread, setThread] = useState(null);
@@ -296,9 +299,11 @@ export default function Reader({
   const [expanded, setExpanded] = useState(() => new Set());
   const [summary, setSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState('');
   const [translated, setTranslated] = useState(null);
   const [showTranslated, setShowTranslated] = useState(false);
   const [translating, setTranslating] = useState(false);
+  const [translateError, setTranslateError] = useState('');
   const [lastTranslateTarget, setLastTranslateTarget] = useState(null);
   const [menu, setMenu] = useState(null);
   const [quick, setQuick] = useState('');
@@ -339,8 +344,10 @@ export default function Reader({
     setThread(null);
     setDetails({});
     setSummary(null);
+    setSummaryError('');
     setTranslated(null);
     setShowTranslated(false);
+    setTranslateError('');
     setLastTranslateTarget(null);
     setMenu(null);
     setQuick('');
@@ -430,7 +437,9 @@ export default function Reader({
       setSummary(cached);
       return;
     }
-    if (aiEnabled && settings.autoSummary && !summary && !summaryLoading && !msg.aiNote?.summary) runSummary();
+    if (aiEnabled && settings.autoSummary && !summary && !summaryLoading && !msg.aiNote?.summary) {
+      runSummary({ quiet: true });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msg?.id]);
 
@@ -448,13 +457,15 @@ export default function Reader({
     if (el && thread[thread.length - 1].id !== id) el.scrollIntoView({ block: 'start' });
   }, [thread, id]);
 
-  async function runSummary() {
+  async function runSummary(opts = {}) {
     if (!id) return;
     setSummaryLoading(true);
+    setSummaryError('');
     try {
       setSummary(await api('/ai/summarize', { method: 'POST', body: { id } }));
     } catch (e) {
-      notify(e.message, 'error');
+      setSummaryError(e.message || '摘要失败');
+      if (!opts.quiet) notify(e.message, 'error');
     } finally {
       setSummaryLoading(false);
     }
@@ -488,6 +499,7 @@ export default function Reader({
       return;
     }
     setTranslating(true);
+    setTranslateError('');
     try {
       const result = await api('/ai/translate', { method: 'POST', body: { id, target } });
       if (result?.sourceLang && sourceMatchesTarget(result.sourceLang, target)) {
@@ -499,6 +511,7 @@ export default function Reader({
       setLastTranslateTarget(target);
       if (!opts.quiet) setShowTranslated(true);
     } catch (e) {
+      setTranslateError(e.message || '翻译失败');
       if (!opts.quiet) notify(e.message, 'error');
     } finally {
       setTranslating(false);
@@ -823,7 +836,13 @@ export default function Reader({
             {!aiEnabled && (
               <div className="ai-off-strip">
                 <Sparkles size={14} />
-                <span>智能功能未开通 · 翻译与摘要暂不可用</span>
+                <span>
+                  {aiMeta?.configured === false
+                    ? '智能功能未开通 · 请管理员配置服务器 AI'
+                    : aiMeta?.cloudOk === false
+                      ? '已关闭云端 AI · 翻译与摘要不可用'
+                      : '智能功能暂不可用 · 翻译与摘要已隐藏'}
+                </span>
                 <button type="button" onClick={() => onOpenSettings?.('preferences')}>去设置</button>
               </div>
             )}
@@ -856,6 +875,27 @@ export default function Reader({
                 </button>
                 <button type="button" className="intel-tab" onClick={() => openSmartReply()} disabled={!msg}>
                   回复
+                </button>
+              </div>
+            )}
+
+            {aiEnabled && summaryError && !summary && (
+              <div className="ai-fail-strip" role="status">
+                <span>摘要失败 · {summaryError}</span>
+                <button type="button" onClick={() => runSummary()} disabled={summaryLoading}>
+                  {summaryLoading ? '重试中…' : '重试'}
+                </button>
+              </div>
+            )}
+            {aiEnabled && translateError && !translated && (
+              <div className="ai-fail-strip" role="status">
+                <span>翻译失败 · {translateError}</span>
+                <button
+                  type="button"
+                  onClick={() => runTranslate(lastTranslateTarget || resolveTranslateTarget())}
+                  disabled={translating}
+                >
+                  {translating ? '重试中…' : '重试'}
                 </button>
               </div>
             )}
