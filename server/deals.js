@@ -193,6 +193,50 @@ export function claim(userId, { address, threadId, note, force = false } = {}) {
   return publicDeal(getDealById(newId), userId);
 }
 
+/**
+ * 管理员指派给指定成员（写入认领归属；被指派人收到 SSE 后可进今日待办跟进）。
+ */
+export function assign(adminId, { address, toUserId, threadId, note } = {}) {
+  const admin = userRow(adminId);
+  if (admin?.role !== 'admin') throw Object.assign(new Error('需要管理员权限'), { status: 403 });
+  const targetId = Number(toUserId);
+  const target = userRow(targetId);
+  if (!target) throw Object.assign(new Error('指派对象不存在'), { status: 404 });
+  const scope = scopeFromAddress(address);
+  if (!scope) throw Object.assign(new Error('无法指派：发件人地址无效'), { status: 400 });
+  const t = now();
+  const existing = db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(scope.key);
+  const noteStr = String(note || '').trim().slice(0, 200);
+
+  if (existing) {
+    const prev = userRow(existing.owner_user_id);
+    db.prepare(
+      `UPDATE deals SET owner_user_id = ?, claimed_at = ?, note = CASE WHEN ? != '' THEN ? ELSE note END,
+        last_thread_id = COALESCE(?, last_thread_id), last_address = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(targetId, t, noteStr, noteStr, threadId || null, scope.address, t, existing.id);
+    logEvent(
+      existing.id,
+      scope.key,
+      adminId,
+      'assign',
+      `指派给 ${target.name || target.email}` + (prev && prev.id !== targetId ? `（原 ${prev.name || prev.email}）` : '')
+    );
+    return publicDeal(getDealById(existing.id), adminId);
+  }
+
+  const info = db
+    .prepare(
+      `INSERT INTO deals
+        (scope_key, scope_kind, owner_user_id, claimed_at, stage, stage_updated_at, note, last_thread_id, last_address, updated_at)
+       VALUES (?, ?, ?, ?, 'inquiry', ?, ?, ?, ?, ?)`
+    )
+    .run(scope.key, scope.kind, targetId, t, t, noteStr, threadId || null, scope.address, t);
+  const newId = Number(info.lastInsertRowid);
+  logEvent(newId, scope.key, adminId, 'assign', `指派给 ${target.name || target.email}`);
+  return publicDeal(getDealById(newId), adminId);
+}
+
 export function release(userId, dealId) {
   const row = getDealById(dealId);
   if (!row) throw Object.assign(new Error('认领记录不存在'), { status: 404 });

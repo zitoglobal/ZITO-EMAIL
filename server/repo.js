@@ -80,7 +80,12 @@ export const upsertMessages = tx((mailboxId, folder, items) => {
   for (const m of items) {
     const preview = m.preview || m.snippet || '';
     const threadId = userId
-      ? resolveThreadId(userId, { messageId: m.messageId, inReplyTo: m.inReplyTo, threadId: m.threadId })
+      ? resolveThreadId(userId, {
+          messageId: m.messageId,
+          inReplyTo: m.inReplyTo,
+          threadId: m.threadId,
+          references: m.references,
+        })
       : m.threadId || m.messageId || null;
     const info = st.run({
       mailbox_id: mailboxId,
@@ -404,29 +409,48 @@ export function conversationKey(row) {
   return row.thread_id || row.in_reply_to || row.message_id || (row.id != null ? `#${row.id}` : '');
 }
 
-/** 解析会话键：优先继承父信 thread_id，避免断链 */
-export function resolveThreadId(userId, { messageId, inReplyTo, threadId } = {}) {
-  const variants = idVariants(inReplyTo);
-  if (variants.length) {
+/** 解析会话键：In-Reply-To → References（近到远）→ 信封 threadId */
+export function resolveThreadId(userId, { messageId, inReplyTo, threadId, references } = {}) {
+  const refList = Array.isArray(references)
+    ? references
+    : String(references || '')
+        .match(/<[^>]+>/g)
+        ?.map((x) => x.replace(/^<|>$/g, '')) || [];
+  // 最近父信优先，再扫整条 References（含根）
+  const candidates = [];
+  if (inReplyTo) candidates.push(inReplyTo);
+  for (let i = refList.length - 1; i >= 0; i--) candidates.push(refList[i]);
+  if (refList[0]) candidates.push(refList[0]);
+
+  const seen = new Set();
+  for (const cand of candidates) {
+    const variants = idVariants(cand);
+    if (!variants.length) continue;
+    const sig = variants.join('|');
+    if (seen.has(sig)) continue;
+    seen.add(sig);
     const ph = variants.map(() => '?').join(',');
     const parent = db
       .prepare(
         `SELECT m.thread_id, m.message_id FROM messages m
          JOIN mailboxes b ON b.id = m.mailbox_id
          WHERE b.user_id = ? AND m.message_id IN (${ph})
-         ORDER BY m.date DESC LIMIT 1`
+         ORDER BY m.date ASC LIMIT 1`
       )
       .get(userId, ...variants);
     if (parent?.thread_id) return parent.thread_id;
     if (parent?.message_id) return parent.message_id;
   }
-  // 父信未入库时：优先信封 threadId / 本信 Message-Id，再退回 In-Reply-To
-  return threadId || messageId || variants[0] || null;
+  return threadId || messageId || idVariants(inReplyTo)[0] || null;
 }
 
 /** 发出回复后：把同会话收件箱标为已回复 */
-export function markThreadAnswered(userId, { threadId, inReplyTo, messageId } = {}) {
-  const tids = idVariants(threadId, inReplyTo, messageId);
+export function markThreadAnswered(userId, { threadId, inReplyTo, messageId, references } = {}) {
+  const resolved =
+    threadId ||
+    resolveThreadId(userId, { messageId, inReplyTo, threadId, references });
+  const refArr = Array.isArray(references) ? references : [];
+  const tids = idVariants(resolved, threadId, inReplyTo, messageId, ...refArr);
   if (!tids.length) return 0;
   const ph = tids.map(() => '?').join(',');
   const rows = db

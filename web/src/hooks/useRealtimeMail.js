@@ -38,6 +38,7 @@ export function useRealtimeMail({
     es.addEventListener('sync', (e) => {
       const d = parse(e);
       // Sent / 发信本地同步：更快刷新，稳住今日待办与等待
+      if (d?.deal) window.dispatchEvent(new CustomEvent('zm-deal', { detail: d }));
       if (d?.sent || d?.deal) {
         clearTimeout(fastTimer);
         fastTimer = setTimeout(() => scheduleRef.current(), 200);

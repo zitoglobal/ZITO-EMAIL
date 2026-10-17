@@ -308,10 +308,14 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
     const messageId = cleanId(env.messageId);
     const inReplyTo = cleanId(env.inReplyTo || headers['in-reply-to']);
     const pv = previews.get(msg.uid) || { snippet: '', preview: '' };
+    const references = (String(headers.references || '').match(/<[^>]+>/g) || [])
+      .map((x) => cleanId(x))
+      .filter(Boolean);
     return {
       uid: msg.uid,
       messageId,
       inReplyTo: inReplyTo || null,
+      references,
       threadId: threadIdOf(messageId, inReplyTo, headers.references),
       subject: env.subject || '',
       from,

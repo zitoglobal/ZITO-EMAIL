@@ -2033,18 +2033,32 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
   padding: 12px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel);
 }
 .team-queue-row.mine { border-color: color-mix(in srgb, var(--accent, #0a66ff) 35%, var(--border)); }
+.team-queue-row.overdue { border-color: color-mix(in srgb, var(--danger, #c0392b) 40%, var(--border)); }
+.team-queue-row.vip { box-shadow: inset 3px 0 0 #c9a227; }
+.tq-filters { flex-wrap: wrap; }
 .tq-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
 .tq-from { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }
 .tq-from b { font-weight: 700; }
 .tq-scope { font-size: 11px; color: var(--muted); padding: 1px 6px; border-radius: 999px; background: var(--panel-2); }
+.tq-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 999px;
+}
+.tq-badge.vip { background: color-mix(in srgb, #c9a227 18%, transparent); color: #8f620a; }
+.tq-badge.overdue { background: color-mix(in srgb, var(--danger, #c0392b) 12%, transparent); color: var(--danger, #c0392b); }
 .tq-wait { font-size: 11px; color: #8a5a00; }
 .tq-wait.overdue { color: var(--danger, #c0392b); font-weight: 600; }
 .tq-subj { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tq-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11.5px; color: var(--muted); }
+.tq-assign { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.tq-assign select {
+  flex: 1; min-width: 0; height: 30px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 12.5px; padding: 0 8px;
+}
 .tq-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
 @media (max-width: 720px) {
   .team-queue-row { flex-direction: column; }
-  .tq-actions { flex-direction: row; width: 100%; }
+  .tq-actions { flex-direction: row; flex-wrap: wrap; width: 100%; }
   .tq-actions .btn-primary, .tq-actions .btn-ghost { flex: 1; justify-content: center; }
 }
 

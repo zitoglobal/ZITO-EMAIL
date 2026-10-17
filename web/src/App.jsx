@@ -1284,7 +1284,9 @@ export default function App() {
         <TeamQueue
           onMenu={() => setSidebarOpen(true)}
           notify={notify}
+          isAdmin={user.role === 'admin'}
           onOpenMessage={(id) => openMessage(id, { box: 'inbox' })}
+          onGoToday={() => setView({ mailboxId: 'all', box: 'today' })}
         />
       ) : view.box === 'deals' ? (
         <Deals

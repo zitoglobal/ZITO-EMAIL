@@ -10,6 +10,7 @@ import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
 import { conversationKey } from '../server/repo.js';
+import { threadIdOf } from '../server/imap.js';
 import { generateSecret, generateSync, verifySync } from 'otplib';
 
 let fail = 0;
@@ -203,6 +204,10 @@ assert('conv key prefers thread', conversationKey({ thread_id: 't1', in_reply_to
 assert('conv key falls to in_reply_to', conversationKey({ thread_id: null, in_reply_to: 'p1', message_id: 'm1' }) === 'p1');
 assert('conv key falls to message_id', conversationKey({ message_id: 'm1', id: 3 }) === 'm1');
 assert('conv key id fallback', conversationKey({ id: 42 }) === '#42');
+
+assert('threadIdOf prefers first References', threadIdOf('<m3>', '<m2>', '<m1> <m2>') === 'm1');
+assert('threadIdOf falls to In-Reply-To', threadIdOf('<m3>', '<m2>', '') === 'm2');
+assert('threadIdOf falls to self', threadIdOf('<m3>', '', '') === 'm3');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

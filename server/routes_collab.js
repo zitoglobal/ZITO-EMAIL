@@ -23,6 +23,7 @@ export function registerCollabRoutes(app, ctx) {
     now,
     COLORS,
     MAX_MAILBOXES,
+    users,
   } = ctx;
 
   app.get('/api/oauth/status', auth, (_req, res) => res.json(oauth.status()));
@@ -162,6 +163,17 @@ export function registerCollabRoutes(app, ctx) {
       res.json(teamQueue.listQueue(req.user.id, { limit: Number(req.query.limit) || 60 }));
     })
   );
+
+  app.get('/api/team/members', auth, (_req, res) => {
+    res.json({
+      members: users.listUsers().map((u) => ({
+        id: u.id,
+        name: u.name || u.email,
+        email: u.email,
+        role: u.role,
+      })),
+    });
+  });
 
   app.get(
     '/api/admin/ops',
