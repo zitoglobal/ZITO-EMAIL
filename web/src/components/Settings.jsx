@@ -132,9 +132,10 @@ function MailboxCard({ mb, index, total, onMove, onChanged, notify, focus }) {
   async function syncNow() {
     setBusy('sync');
     try {
-      await api(`/mailboxes/${mb.id}/sync`, { method: 'POST', body: {} });
-      notify('已开始同步');
-      setTimeout(onChanged, 1500);
+      const d = await api(`/mailboxes/${mb.id}/sync`, { method: 'POST', body: {} });
+      if (d.status === 'error') notify(d.lastError || '同步失败', 'error');
+      else notify(`已与服务器同步 ${mb.email}`, 'success');
+      onChanged?.();
     } catch (e) {
       notify(e.message, 'error');
     } finally {

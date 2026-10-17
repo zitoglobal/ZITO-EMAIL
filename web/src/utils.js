@@ -473,21 +473,36 @@ export function greeting() {
   return h < 6 ? '夜深了' : h < 11 ? '早上好' : h < 13 ? '中午好' : h < 18 ? '下午好' : '晚上好';
 }
 
-/** 今日待办的展示顺序：按优先级，或按客户公司聚合（组按组内最高分排序） */
+/**
+ * 今日待办展示顺序：
+ * - newest：最新来信优先（同日内再按优先级）
+ * - priority：客户等级 × 意图 × 等待时长
+ * - customer：按客户公司聚合
+ */
 export function orderFocus(items, mode) {
   const reply = items.filter((m) => m._section === 'reply');
   const rest = items.filter((m) => m._section !== 'reply');
-  if (mode !== 'customer') return [...reply.sort((a, b) => b.priority.score - a.priority.score || b.date - a.date), ...rest];
-  const groups = new Map();
-  for (const m of reply) {
-    const k = m.priority.company?.key || m.from?.address;
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(m);
+  const byScore = (a, b) => (b.priority?.score || 0) - (a.priority?.score || 0) || b.date - a.date;
+  const byNewest = (a, b) => b.date - a.date || (b.priority?.score || 0) - (a.priority?.score || 0);
+  if (mode === 'customer') {
+    const groups = new Map();
+    for (const m of reply) {
+      const k = m.priority?.company?.key || m.from?.address;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(m);
+    }
+    const sorted = [...groups.values()]
+      .map((g) => g.sort(byScore))
+      .sort((a, b) => byScore(a[0], b[0]));
+    return [...sorted.flat(), ...rest.sort(byNewest)];
   }
-  const sorted = [...groups.values()]
-    .map((g) => g.sort((a, b) => b.priority.score - a.priority.score))
-    .sort((a, b) => b[0].priority.score - a[0].priority.score);
-  return [...sorted.flat(), ...rest];
+  if (mode === 'newest') {
+    // 今日未回置顶，再按时间新→旧
+    const today = reply.filter((m) => m.receivedToday).sort(byNewest);
+    const older = reply.filter((m) => !m.receivedToday).sort(byNewest);
+    return [...today, ...older, ...rest.sort(byNewest)];
+  }
+  return [...reply.sort(byScore), ...rest.sort(byNewest)];
 }
 
 export const hasRemoteImages = (html) => /<img[^>]+src\s*=\s*["']?\s*https?:|url\(\s*['"]?https?:|background\s*=\s*["']?https?:/i.test(html || '');

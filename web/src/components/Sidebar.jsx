@@ -91,7 +91,12 @@ export default function Sidebar({
    * - unread: unifiedUnread；inbox 不挂未读角标
    */
   const smartCount = (box) => {
-    if (box === 'today') return (counts.focus?.needReply || 0) + (counts.focus?.followups || 0);
+    // 侧栏角标优先「今日未回」；没有则回退待回+跟进
+    if (box === 'today') {
+      const tu = counts.focus?.todayUnreplied;
+      if (typeof tu === 'number' && tu > 0) return tu;
+      return (counts.focus?.needReply || 0) + (counts.focus?.followups || 0);
+    }
     if (box === 'waiting') {
       const mine = counts.focus?.waitingMine;
       const them = counts.focus?.waitingThem;
@@ -120,13 +125,17 @@ export default function Sidebar({
     const active = isActive(v);
     const label = multi || s.box !== 'inbox' ? s.label : '收件箱';
     const overdue =
-      (s.box === 'today' && counts.focus?.overdue > 0) ||
+      (s.box === 'today' && (counts.focus?.overdue > 0 || counts.focus?.todayUnreplied > 0)) ||
       (s.box === 'team' && counts.team?.overdue > 0);
     const waitingSplit =
       s.box === 'waiting' &&
       (typeof counts.focus?.waitingMine === 'number' || typeof counts.focus?.waitingThem === 'number');
     const countLabel = fmtCount(n);
     const showPill = (s.box === 'today' || s.box === 'waiting' || s.box === 'team') && n > 0;
+    const todayTitle =
+      s.box === 'today'
+        ? `今日未回 ${counts.focus?.todayUnreplied || 0} · 待回 ${counts.focus?.needReply || 0} · 超时 ${counts.focus?.overdue || 0} · 跟进 ${counts.focus?.followups || 0}`
+        : null;
     const showCount = !showPill && countLabel != null;
 
     return (
@@ -142,7 +151,8 @@ export default function Sidebar({
         }
         onClick={() => go(v)}
         title={
-          s.box === 'waiting'
+          todayTitle ||
+          (s.box === 'waiting'
             ? waitingSplit
               ? `等我 ${counts.focus.waitingMine || 0} · 等对方 ${counts.focus.waitingThem || 0}`
               : '等我回复 · 等对方回复'
@@ -150,9 +160,9 @@ export default function Sidebar({
               ? counts.team
                 ? `公海 ${counts.team.total || 0}${counts.team.overdue ? ` · 超时 ${counts.team.overdue}` : ''}${counts.team.vip ? ` · VIP ${counts.team.vip}` : ''}`
                 : '未认领客户来信'
-              : label
+              : label)
         }
-        aria-label={label}
+        aria-label={todayTitle || label}
         aria-current={active ? 'page' : undefined}
       >
         <SmartIcon {...ICON_LG} />

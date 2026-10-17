@@ -1406,10 +1406,42 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .focus-head.compact .focus-stats { display: none; }
 .focus-head.compact .focus-progress,
 .focus-head.compact .focus-sla-strip,
-.focus-head.compact .overdue-summary { display: none; }
+.focus-head.compact .overdue-summary,
+.focus-head.compact .today-unreplied-panel { display: none; }
+.focus-head.compact.expanded .focus-details .focus-stats { display: grid; }
 .focus-head.compact.expanded .focus-details .focus-progress,
 .focus-head.compact.expanded .focus-details .focus-sla-strip,
 .focus-head.compact.expanded .focus-details .overdue-summary { display: flex; }
+.focus-head.compact.expanded .focus-details .today-unreplied-panel { display: block; }
+
+.today-unreplied-panel {
+  border-radius: var(--r); border: 1px solid color-mix(in srgb, var(--selvedge) 22%, var(--hairline));
+  background: color-mix(in srgb, var(--selvedge) 5%, var(--panel)); overflow: hidden;
+}
+.today-unreplied-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  padding: 8px 10px 6px; border-bottom: 1px solid var(--hairline);
+}
+.today-unreplied-head b { font-size: 12.5px; font-weight: 650; }
+.today-unreplied-head small { font-size: 11.5px; color: var(--muted); }
+.today-unreplied-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; }
+.today-unreplied-item {
+  display: grid; grid-template-columns: minmax(72px, 0.9fr) 1.6fr auto; gap: 8px; align-items: center;
+  width: 100%; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--hairline);
+  background: transparent; text-align: left; cursor: pointer; font: inherit; color: inherit;
+}
+.today-unreplied-item:last-child { border-bottom: 0; }
+.today-unreplied-item:hover { background: var(--hover); }
+.today-unreplied-item.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.today-unreplied-item.over .tu-meta { color: var(--selvedge); font-weight: 600; }
+.tu-from { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tu-sub { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tu-meta { font-size: 11.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; display: flex; gap: 8px; align-items: center; }
+.tu-time { color: var(--faint); }
+.cust-today-tag {
+  margin-left: auto; font-size: 11px; font-weight: 650; color: var(--selvedge);
+  background: color-mix(in srgb, var(--selvedge) 12%, transparent); padding: 1px 6px; border-radius: 999px;
+}
 
 .await-strip {
   display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 6px 10px 6px 12px; margin-bottom: 14px;

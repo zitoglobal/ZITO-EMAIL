@@ -630,8 +630,40 @@ app.post(
     const mb = mailboxOf(req);
     const e = sync.ensure(mb.id);
     if (req.body?.folder) await e.syncFolder(req.body.folder);
-    else e.full();
-    res.json({ ok: true });
+    else await e.full();
+    const row = repo.getMailboxById(mb.id);
+    res.json({
+      ok: true,
+      status: row?.status || 'ok',
+      lastSync: row?.last_sync || null,
+      lastError: row?.last_error || null,
+    });
+  })
+);
+
+/** 全面同步当前用户全部真实邮箱（跳过 demo），等待完成后返回逐箱状态 */
+app.post(
+  '/api/sync/all',
+  auth,
+  wrap(async (req, res) => {
+    const list = repo.listMailboxes(req.user.id).filter((m) => m.provider !== 'demo');
+    const results = [];
+    for (const mb of list) {
+      try {
+        await sync.ensure(mb.id).full();
+        const row = repo.getMailboxById(mb.id);
+        results.push({
+          id: mb.id,
+          email: mb.email,
+          status: row?.status || 'ok',
+          lastSync: row?.last_sync || null,
+          error: row?.last_error || null,
+        });
+      } catch (e) {
+        results.push({ id: mb.id, email: mb.email, status: 'error', lastSync: null, error: e.message || String(e) });
+      }
+    }
+    res.json({ ok: true, results, syncedAt: Date.now() });
   })
 );
 

@@ -111,7 +111,7 @@ export default function App() {
   const [outboxVersion, setOutboxVersion] = useState(0);
   const [dealsVersion, setDealsVersion] = useState(0);
   const [focusData, setFocusData] = useState(null);
-  const [groupMode, setGroupModeState] = useState(() => localStorage.getItem('zm_group') || 'priority');
+  const [groupMode, setGroupModeState] = useState(() => localStorage.getItem('zm_group') || 'newest');
   const [aiBusy, setAiBusy] = useState(false);
   const [waitingTab, setWaitingTab] = useState('mine');
   const [customerOpen, setCustomerOpen] = useState(false); // drawer when rail hidden
@@ -767,11 +767,37 @@ export default function App() {
 
   async function refresh() {
     setRefreshing(true);
-    const targets = view.mailboxId === 'all' ? mailboxes : [mailboxMap[view.mailboxId]].filter(Boolean);
-    await Promise.allSettled(targets.map((mb) => api(`/mailboxes/${mb.id}/sync`, { method: 'POST', body: view.box === 'folder' ? { folder: view.folder } : {} })));
-    await loadState();
-    await loadList({ silent: true });
-    setRefreshing(false);
+    try {
+      const folderBody = view.box === 'folder' ? { folder: view.folder } : {};
+      if (view.mailboxId === 'all' || !mailboxMap[view.mailboxId]) {
+        const d = await api('/sync/all', { method: 'POST', body: {} });
+        const results = d.results || [];
+        const bad = results.filter((r) => r.status === 'error');
+        if (bad.length) {
+          notify(
+            bad.length === 1
+              ? `${bad[0].email} 同步失败${bad[0].error ? `：${String(bad[0].error).slice(0, 48)}` : ''}`
+              : `${bad.length}/${results.length} 个邮箱同步失败`,
+            'error'
+          );
+        } else if (results.length) {
+          notify(`已与服务器全面同步 ${results.length} 个邮箱`, 'success');
+        } else {
+          notify('没有可同步的邮箱', 'info');
+        }
+      } else {
+        const mb = mailboxMap[view.mailboxId];
+        const d = await api(`/mailboxes/${mb.id}/sync`, { method: 'POST', body: folderBody });
+        if (d.status === 'error') notify(d.lastError || '同步失败', 'error');
+        else notify(`已同步 ${mb.email}`, 'success');
+      }
+      await loadState();
+      await loadList({ silent: true });
+    } catch (e) {
+      notify(e.message || '同步失败', 'error');
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   // ---------- 写信 ----------

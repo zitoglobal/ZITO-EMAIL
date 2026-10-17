@@ -3,7 +3,7 @@ import { Menu, RefreshCw, Sparkles, Loader2, Crown, CornerDownRight, Send, Party
 import { Row } from './MailList.jsx';
 import ClaimFilter, { filterByClaim, loadClaimFilter, saveClaimFilter } from './ClaimFilter.jsx';
 import { api } from '../api.js';
-import { avatarColor, greeting, waitText } from '../utils.js';
+import { avatarColor, formatListDate, greeting, waitText } from '../utils.js';
 
 function SectionHead({ id, title, count, hint }) {
   return (
@@ -53,6 +53,9 @@ export default function Focus({
 
   const filteredReply = useMemo(() => filterByClaim(reply, claimFilter), [reply, claimFilter]);
   const filteredFollow = useMemo(() => filterByClaim(follow, claimFilter), [follow, claimFilter]);
+  const todayReply = useMemo(() => filteredReply.filter((m) => m.receivedToday), [filteredReply]);
+  const olderReply = useMemo(() => filteredReply.filter((m) => !m.receivedToday), [filteredReply]);
+  const todayDetail = data?.todayUnreplied || [];
   const visibleIds = useMemo(
     () => [...filteredReply.map((m) => m.id), ...filteredFollow.map((m) => m.id)],
     [filteredReply, filteredFollow]
@@ -210,27 +213,27 @@ export default function Focus({
               {aiBusy ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} AI 分析
             </button>
           )}
-          <button type="button" className="icon-btn" onClick={onRefresh} title="同步所有邮箱" aria-label="同步所有邮箱">
+          <button type="button" className="icon-btn" onClick={onRefresh} title="全面同步所有邮箱（等待服务器完成）" aria-label="全面同步所有邮箱" disabled={refreshing}>
             <RefreshCw size={16} className={refreshing ? 'spin' : ''} />
           </button>
         </div>
 
-        {(reply.length > 0 || follow.length > 0 || overdue > 0) && (
+        {(reply.length > 0 || follow.length > 0 || overdue > 0 || (stats?.todayUnreplied || 0) > 0) && (
           <button
             type="button"
             className={'focus-summary' + (headOpen ? ' open' : '')}
             onClick={toggleHead}
             aria-expanded={headOpen}
-            aria-label={`待回复 ${reply.length} 封，超时 ${overdue} 封，跟进 ${follow.length} 封，今日来信 ${stats?.todayIn ?? 0}`}
+            aria-label={`今日未回 ${stats?.todayUnreplied ?? 0} 封，待回复 ${reply.length} 封，超时 ${overdue} 封，跟进 ${follow.length} 封`}
           >
-            {overdue > 0 && !headOpen && <span className="fs-dot-alert" aria-hidden />}
+            {(overdue > 0 || (stats?.todayUnreplied || 0) > 0) && !headOpen && <span className="fs-dot-alert" aria-hidden />}
+            <span className={(stats?.todayUnreplied || 0) ? 'fs-danger' : ''}>今日未回 <b>{stats?.todayUnreplied ?? 0}</b></span>
+            <span className="fs-dot">·</span>
             <span>待回 <b>{reply.length}</b></span>
             <span className="fs-dot">·</span>
             <span className={overdue ? 'fs-danger' : ''}>超时 <b>{overdue}</b></span>
             <span className="fs-dot">·</span>
             <span className={follow.length ? 'fs-warn' : ''}>跟进 <b>{follow.length}</b></span>
-            <span className="fs-dot">·</span>
-            <span>今日来信 <b>{stats?.todayIn ?? 0}</b></span>
             <ChevronDown size={14} className="fs-chev" />
           </button>
         )}
@@ -238,8 +241,11 @@ export default function Focus({
         {headOpen && (
           <div className="focus-details">
             <div className="focus-stats" style={{ display: 'grid' }}>
+              <button type="button" className={'stat' + ((stats?.todayUnreplied || 0) ? ' danger' : '')} onClick={() => jump('fs-today')} aria-label={`今日未回 ${stats?.todayUnreplied ?? 0} 封`}>
+                <b>{stats?.todayUnreplied ?? 0}</b><span>今日未回</span>
+              </button>
               <button type="button" className="stat" onClick={() => jump('fs-reply')} aria-label={`待回复 ${reply.length} 封`}>
-                <b>{reply.length}</b><span>待回复</span>
+                <b>{reply.length}</b><span>全部待回</span>
               </button>
               <button type="button" className={'stat' + (overdue ? ' danger' : '')} onClick={() => jump('fs-reply')} aria-label={`已超时 ${overdue} 封`} title={`分层时限：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h`}>
                 <b>{overdue}</b><span>已超时</span>
@@ -247,14 +253,38 @@ export default function Focus({
               <button type="button" className={'stat' + (follow.length ? ' warn' : '')} onClick={() => jump('fs-follow')} aria-label={`待跟进 ${follow.length} 封`}>
                 <b>{follow.length}</b><span>待跟进</span>
               </button>
-              <div className="stat plain">
-                <b>{stats?.todayIn ?? 0}</b><span>今日来信</span>
-              </div>
             </div>
             <div className={'focus-progress' + (pct === 100 && total ? ' done' : '')} title="今日已回复或标记处理的客户邮件">
               <div className="fp-bar"><i style={{ width: pct + '%' }} /></div>
-              <span>今日已处理 <b>{handled}</b> / {total}{total > 0 ? <> · <b className="fp-pct">{pct}%</b></> : null}</span>
+              <span>今日已处理 <b>{handled}</b> / {total}{total > 0 ? <> · <b className="fp-pct">{pct}%</b></> : null} · 今日来信 <b>{stats?.todayIn ?? 0}</b></span>
             </div>
+            {todayDetail.length > 0 && (
+              <div className="today-unreplied-panel" aria-label="今日未回明细">
+                <div className="today-unreplied-head">
+                  <b>今日未回明细</b>
+                  <small>共 {todayDetail.length} 封 · 按最新来信</small>
+                </div>
+                <ul className="today-unreplied-list">
+                  {todayDetail.map((m) => (
+                    <li key={m.id}>
+                      <button
+                        type="button"
+                        className={'today-unreplied-item' + (m.overdue ? ' over' : '') + (selectedId === m.id ? ' on' : '')}
+                        onClick={() => onSelect?.(m.id)}
+                        title={m.why || m.subject}
+                      >
+                        <span className="tu-from">{m.from?.name || m.from?.address || '未知'}</span>
+                        <span className="tu-sub">{m.subject || '(无主题)'}</span>
+                        <span className="tu-meta">
+                          {m.overdue ? '超时' : '已等'} {waitText(m.waitingHours || 0)}
+                          <span className="tu-time">{formatListDate(m.date)}</span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div className="focus-sla-strip" title="按客户层级分层的回复时限">
               <span className="focus-sla-chip vip"><Crown size={11} /> VIP {slaTier.vip}h</span>
               <span className="focus-sla-chip">客户 {slaTier.customer}h</span>
@@ -276,13 +306,14 @@ export default function Focus({
 
         <div className="focus-tools">
           <div className="segmented">
-            <button type="button" className={groupMode !== 'customer' ? 'on' : ''} onClick={() => setGroupMode('priority')}>按优先级</button>
+            <button type="button" className={groupMode === 'newest' ? 'on' : ''} onClick={() => setGroupMode('newest')} title="最新来信优先，今日未回置顶">最新</button>
+            <button type="button" className={groupMode === 'priority' ? 'on' : ''} onClick={() => setGroupMode('priority')} title="客户等级 × 意图 × 等待时长">优先级</button>
             <button type="button" className={groupMode === 'customer' ? 'on' : ''} onClick={() => setGroupMode('customer')}>按客户</button>
           </div>
           <ClaimFilter value={claimFilter} onChange={setClaim} unclaimedN={unclaimedN} mineN={mineN} />
           <span
             className="focus-legend"
-            title={`每行「为何待办/等待」可验真。排序：客户等级 × 意图 × 等待时长。SLA：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h · 默认 ${slaTier.default}h · 跟进 ${followDays} 天`}
+            title={`「今日未回」= 今天收到且仍待你回复。排序：最新 / 优先级 / 按客户。SLA：VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h · 跟进 ${followDays} 天。点同步会等待服务器全量拉信完成。`}
           >
             <Info size={12} /> 验真说明
           </span>
@@ -336,23 +367,44 @@ export default function Focus({
           </div>
         )}
 
-        {filteredReply.length > 0 && (
-          <SectionHead
-            id="fs-reply"
-            title="需要你回复"
-            count={filteredReply.length}
-            hint={claimFilter !== 'all' && claimFilter !== 'active' ? `筛选后 ${filteredReply.length}/${reply.length}` : claimFilter === 'active' ? `跟进中 ${filteredReply.length}（未认领+我跟）` : `VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 询盘 ${slaTier.inquiry}h`}
-          />
-        )}
         {!loading && !error && data && reply.length > 0 && !filteredReply.length && (
           <div className="empty focus-empty sm">
             <p>当前筛选下没有待回复邮件</p>
             <button type="button" className="btn-ghost sm" onClick={() => setClaim('all')}>查看全部</button>
           </div>
         )}
-        {filteredReply.map((m) => {
+
+        {groupMode !== 'customer' && todayReply.length > 0 && (
+          <SectionHead
+            id="fs-today"
+            title="今日未回"
+            count={todayReply.length}
+            hint="今天收到、仍待你回复 · 按最新排列"
+          />
+        )}
+        {groupMode !== 'customer' && todayReply.map((m) => <Row key={m.id} {...rowProps(m, 'reply')} />)}
+
+        {groupMode !== 'customer' && olderReply.length > 0 && (
+          <SectionHead
+            id="fs-reply"
+            title="更早未回"
+            count={olderReply.length}
+            hint={claimFilter !== 'all' && claimFilter !== 'active' ? `筛选后 ${olderReply.length}` : `VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 询盘 ${slaTier.inquiry}h`}
+          />
+        )}
+        {groupMode !== 'customer' && olderReply.map((m) => <Row key={m.id} {...rowProps(m, 'reply')} />)}
+
+        {groupMode === 'customer' && filteredReply.length > 0 && (
+          <SectionHead
+            id="fs-reply"
+            title="需要你回复"
+            count={filteredReply.length}
+            hint={claimFilter === 'active' ? `跟进中 ${filteredReply.length}` : `按客户聚合 · 共 ${filteredReply.length} 封`}
+          />
+        )}
+        {groupMode === 'customer' && filteredReply.map((m) => {
           const k = m.priority.company?.key;
-          const head = groupMode === 'customer' && k !== lastGroup;
+          const head = k !== lastGroup;
           lastGroup = k;
           return (
             <React.Fragment key={m.id}>
@@ -363,6 +415,9 @@ export default function Focus({
                   {m.priority.tier === 'vip' && <Crown size={12} className="vip-icon" />}
                   {m.priority.company?.domain && <small>{m.priority.company.domain}</small>}
                   <span className="cust-count">{groupSizes.get(k)} 封</span>
+                  {filteredReply.some((x) => (x.priority?.company?.key || x.from?.address) === k && x.receivedToday) && (
+                    <span className="cust-today-tag">含今日</span>
+                  )}
                 </div>
               )}
               <Row {...rowProps(m, 'reply')} />

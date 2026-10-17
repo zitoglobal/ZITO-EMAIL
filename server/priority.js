@@ -438,20 +438,49 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     })
     .sort((a, b) => (b.follow?.score || 0) - (a.follow?.score || 0));
 
+  // 标注「今日收到仍未回」，供前端拆段与明细
+  const replyMarked = replyWithDeals.map((m) => ({
+    ...m,
+    receivedToday: m.date >= today,
+  }));
+  const todayUnreplied = replyMarked.filter((m) => m.receivedToday);
+  const olderUnreplied = replyMarked.filter((m) => !m.receivedToday);
+
   return {
-    reply: replyWithDeals,
+    reply: replyMarked,
     followups: followWithDeals,
     stats: {
-      needReply: reply.length,
+      needReply: replyMarked.length,
       overdue,
-      high: reply.filter((m) => m.priority.level === 'high').length,
+      high: replyMarked.filter((m) => m.priority.level === 'high').length,
       followups: followWithDeals.length,
       /** 侧栏「等待」角标：等我 / 等对方 */
-      waitingMine: reply.length,
+      waitingMine: replyMarked.length,
       waitingThem: followWithDeals.length,
       todayIn,
+      /** 今日收到且仍待你回复（明细见 todayUnreplied） */
+      todayUnreplied: todayUnreplied.length,
+      olderUnreplied: olderUnreplied.length,
       handledToday: repliedToday + doneToday,
     },
+    /** 今日未回清单（按最新来信），方便一眼看清「今天谁还没回」 */
+    todayUnreplied: todayUnreplied
+      .slice()
+      .sort((a, b) => b.date - a.date)
+      .map((m) => ({
+        id: m.id,
+        subject: m.subject,
+        from: m.from,
+        date: m.date,
+        waitingHours: m.priority?.waitingHours,
+        overdue: !!m.priority?.overdue,
+        tier: m.priority?.tier,
+        level: m.priority?.level,
+        why: m.priority?.why || '',
+        deal: m.deal
+          ? { stage: m.deal.stage, stageLabel: m.deal.stageLabel, mine: m.deal.mine, scopeLabel: m.deal.scopeLabel }
+          : null,
+      })),
     overdueSummary: {
       count: overdue,
       byTier,
