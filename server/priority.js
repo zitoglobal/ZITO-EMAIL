@@ -1,12 +1,11 @@
 import { db, now } from './db.js';
-import { MY_LAST_SQL, THEIR_LAST_SQL, rowToMessage, conversationKey } from './repo.js';
+import { MY_LAST_SQL, rowToMessage } from './repo.js';
 import { expectsReply, signalsOf } from './classify.js';
-import { attachDeals, dueFollowDeals } from './deals.js';
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
-const REPLY_WINDOW = 21 * DAY;
-const FOLLOW_WINDOW = 30 * DAY;
+const REPLY_WINDOW = 14 * DAY;
+const FOLLOW_WINDOW = 21 * DAY;
 
 /** 分层 SLA：VIP / 老客户 / 新询盘可不同时限；其余回落到 replySlaHours */
 export function slaFor(settings = {}, tier, signals = []) {
@@ -50,10 +49,6 @@ const TIER_LABEL = { vip: 'VIP 客户', customer: '老客户', new: '新联系�
 const cache = new Map();
 export const invalidate = (userId) => cache.delete(userId);
 
-/** 关系索引只扫近 180 天、最多 3000 封已发——对「是否老客户」足够，避免全库 JSON 解析 */
-const RELATION_LOOKBACK = 180 * DAY;
-const RELATION_SENT_CAP = 3000;
-
 export function relationIndex(userId) {
   const hit = cache.get(userId);
   if (hit && now() - hit.at < 60_000) return hit.idx;
@@ -66,13 +61,9 @@ export function relationIndex(userId) {
       `SELECT m.to_json, m.cc_json FROM messages m
        JOIN mailboxes b ON b.id = m.mailbox_id
        LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
-       WHERE b.user_id = ? AND m.from_addr = b.email
-         AND m.date >= ?
-         AND IFNULL(f.special_use, '') NOT IN ('\\Drafts', '\\Trash')
-       ORDER BY m.date DESC
-       LIMIT ?`
+       WHERE b.user_id = ? AND m.from_addr = b.email AND IFNULL(f.special_use, '') NOT IN ('\\Drafts', '\\Trash')`
     )
-    .all(userId, now() - RELATION_LOOKBACK, RELATION_SENT_CAP);
+    .all(userId);
   for (const r of rows) {
     for (const a of [...JSON.parse(r.to_json || '[]'), ...JSON.parse(r.cc_json || '[]')]) {
       const addr = String(a.address || '').toLowerCase();
@@ -144,45 +135,13 @@ export function scoreRow(idx, row, { slaHours = 24, at = now() } = {}) {
   if (TIER_LABEL[tier]) reasons.push(tier === 'new' && signals.includes('inquiry') ? '新询盘' : TIER_LABEL[tier]);
   for (const s of signals) if (SIGNAL_LABEL[s] && s !== 'question') reasons.push(SIGNAL_LABEL[s]);
   if (!direct && to.length) reasons.push('抄送我');
-  const waitingHoursR = Math.round(waitingHours * 10) / 10;
-  const whyParts = [...reasons];
-  if (slaHours != null) whyParts.push(`时限 ${slaHours}h`);
-  if (overdue) whyParts.push('已超时未回');
-  else if (waitingHoursR >= 1) whyParts.push(`已等 ${waitingHoursR}h`);
-  return {
-    score,
-    level,
-    tier,
-    signals,
-    reasons,
-    why: [...new Set(whyParts.filter(Boolean))].slice(0, 6).join(' · '),
-    waitingHours: waitingHoursR,
-    overdue,
-    slaHours,
-  };
-}
-
-function followWhy(f) {
-  const parts = [];
-  if (f.due) parts.push('跟进日到期');
-  else if (f.nextFollowAt) parts.push('已设跟进日');
-  if (f.tier === 'vip') parts.push('VIP');
-  else if (f.tier === 'customer') parts.push('老客户');
-  else if (f.tier === 'new') parts.push('新联系人');
-  for (const s of f.signals || []) if (SIGNAL_LABEL[s]) parts.push(SIGNAL_LABEL[s]);
-  if (f.days != null) parts.push(`${f.days} 天未回`);
-  parts.push('对方尚未回复');
-  return [...new Set(parts.filter(Boolean))].slice(0, 6).join(' · ');
+  return { score, level, tier, signals, reasons, waitingHours: Math.round(waitingHours * 10) / 10, overdue, slaHours };
 }
 
 // ---------- 今日待办 ----------
 const BASE_SELECT = `SELECT m.*, f.special_use, b.email AS mb_email,
   (SELECT COUNT(DISTINCT IFNULL(t.message_id, t.id)) FROM messages t WHERE t.mailbox_id = m.mailbox_id AND t.thread_id = m.thread_id AND m.thread_id IS NOT NULL) AS thread_count,
   ${MY_LAST_SQL} AS my_last`;
-
-/** Focus 候选上限：配合窗口天数；高峰期另补 VIP/未读急件 */
-const REPLY_CANDIDATE_CAP = 900;
-const SENT_CANDIDATE_CAP = 500;
 
 function replyCandidates(userId, mailboxId, since) {
   return db
@@ -200,7 +159,7 @@ function replyCandidates(userId, mailboxId, since) {
                AND (sr.key = lower(m.from_addr) OR (sr.key LIKE '@%' AND lower(m.from_addr) LIKE '%' || sr.key))
            )
          )
-       ORDER BY m.date DESC LIMIT ${REPLY_CANDIDATE_CAP}`
+       ORDER BY m.date DESC LIMIT 800`
     )
     .all({ userId, mb: mailboxId, since });
 }
@@ -209,36 +168,14 @@ function sentCandidates(userId, mailboxId, since) {
   return db
     .prepare(
       `${BASE_SELECT},
-        ${THEIR_LAST_SQL} AS their_last
+        (SELECT MAX(t.date) FROM messages t JOIN mailboxes tb ON tb.id = t.mailbox_id
+          WHERE tb.user_id = b.user_id AND m.thread_id IS NOT NULL AND t.thread_id = m.thread_id
+            AND t.from_addr NOT IN (SELECT email FROM mailboxes WHERE user_id = b.user_id)) AS their_last
        FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
        LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
        WHERE b.user_id = @userId AND (@mb = 'all' OR m.mailbox_id = @mb) AND f.special_use = '\\Sent'
          AND m.from_addr = b.email AND m.date >= @since
-       ORDER BY m.date DESC LIMIT ${SENT_CANDIDATE_CAP}`
-    )
-    .all({ userId, mb: mailboxId, since });
-}
-
-/** 硬帽之外再捞 VIP/未读超时，避免高峰急件进不了今日待办 */
-function replyBoostCandidates(userId, mailboxId, since, excludeIds) {
-  const excl = excludeIds?.size
-    ? `AND m.id NOT IN (${[...excludeIds].map(Number).filter(Number.isInteger).join(',') || '0'})`
-    : '';
-  return db
-    .prepare(
-      `${BASE_SELECT}
-       FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
-       LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
-       WHERE b.user_id = @userId AND (@mb = 'all' OR m.mailbox_id = @mb) AND f.special_use = '\\Inbox'
-         AND m.date >= @since AND m.from_addr != b.email AND m.seen = 0 AND IFNULL(m.answered, 0) = 0
-         AND IFNULL(m.done_at, 0) = 0 AND m.snooze_until IS NULL
-         ${excl}
-         AND EXISTS (
-           SELECT 1 FROM sender_rules sr
-           WHERE sr.user_id = b.user_id AND sr.kind = 'vip'
-             AND (sr.key = lower(m.from_addr) OR (sr.key LIKE '@%' AND lower(m.from_addr) LIKE '%' || sr.key))
-         )
-       ORDER BY m.date DESC LIMIT 80`
+       ORDER BY m.date DESC LIMIT 400`
     )
     .all({ userId, mb: mailboxId, since });
 }
@@ -260,27 +197,23 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
   const reply = [];
   let todayIn = 0;
   let doneToday = 0;
-  const seenIds = new Set();
-  const pushReplyRow = (r) => {
+  for (const r of replyCandidates(userId, mailboxId, at - REPLY_WINDOW)) {
     const mk = r.message_id || `#${r.id}`;
-    if (seenMsg.has(mk)) return;
+    if (seenMsg.has(mk)) continue;
     seenMsg.add(mk);
-    seenIds.add(r.id);
     const tier = tierOf(idx, r.from_addr, r.category);
     const person = ['vip', 'customer', 'new', 'colleague'].includes(tier);
     if (r.date >= today && person && tier !== 'colleague') todayIn++;
     if (r.done_at && r.done_at >= today) doneToday++;
-    const tk = conversationKey(r) || mk;
-    if (seenThread.has(tk)) return;
+    const tk = r.thread_id || mk;
+    if (seenThread.has(tk)) continue;
     seenThread.add(tk);
-    if (!person || handled(r)) return;
-    if (r.category === 'notification' && tier !== 'vip' && tier !== 'customer') return;
+    if (!person || handled(r)) continue;
+    if (r.category === 'notification' && tier !== 'vip' && tier !== 'customer') continue;
     const sigs = signalsFrom(r);
     const p = scoreRow(idx, r, { slaHours: slaFor(settings, tier, sigs), at });
     reply.push({ ...rowToMessage(r), priority: { ...p, company: companyOf(idx, { address: r.from_addr, name: r.from_name }) } });
-  };
-  for (const r of replyCandidates(userId, mailboxId, at - REPLY_WINDOW)) pushReplyRow(r);
-  for (const r of replyBoostCandidates(userId, mailboxId, at - REPLY_WINDOW, seenIds)) pushReplyRow(r);
+  }
   reply.sort((a, b) => b.priority.score - a.priority.score || b.date - a.date);
 
   // 等待对方回复：我最后发出、对方还没回、已超过跟进天数
@@ -290,7 +223,7 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
   for (const r of sentCandidates(userId, mailboxId, at - FOLLOW_WINDOW)) {
     const mk = r.message_id || `#${r.id}`;
     if (r.date >= today && r.thread_id && r.thread_id !== r.message_id) repliedToday++;
-    const tk = conversationKey(r) || mk;
+    const tk = r.thread_id || mk;
     if (seenFollow.has(tk)) continue;
     seenFollow.add(tk);
     if (r.nudge_off || r.snooze_until) continue;
@@ -307,11 +240,9 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     const days = Math.floor((at - r.date) / DAY);
     const signals = signalsFrom(r);
     const score = (TIER_SCORE[tier] || 0) + Math.min(30, days * 4) + (signals.includes('inquiry') || signals.includes('sample') ? 10 : 0);
-    const follow = { days, tier, to: external, score, company: companyOf(idx, external), signals };
-    follow.why = followWhy(follow);
     followups.push({
       ...rowToMessage(r),
-      follow,
+      follow: { days, tier, to: external, score, company: companyOf(idx, external), signals },
     });
   }
   followups.sort((a, b) => b.follow.score - a.follow.score);
@@ -337,89 +268,14 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       if (m.priority?.overdue) m.remindStage = stages.get(m.id) || 0;
     }
   }
-  let replyWithDeals = attachDeals(userId, reply);
-  // 我已认领：抬分置顶，减少「认了却找不到」
-  replyWithDeals = replyWithDeals
-    .map((m) => {
-      if (!m.deal?.mine || !m.priority) return m;
-      const score = (m.priority.score || 0) + 28;
-      const why = ['我已认领', m.priority.why].filter(Boolean).join(' · ');
-      return {
-        ...m,
-        priority: { ...m.priority, score, why, claimedBoost: true },
-      };
-    })
-    .sort((a, b) => (b.priority?.score || 0) - (a.priority?.score || 0) || b.date - a.date);
-  let followWithDeals = attachDeals(userId, followups);
-
-  // 跟进日闭环：到期认领客户必出现在待跟进（即使未满全局 followDays）
-  const atNow = Date.now();
-  const dueDeals = dueFollowDeals(userId, atNow);
-  const followScope = new Set(
-    followWithDeals.map((m) => m.deal?.scopeKey).filter(Boolean)
-  );
-  for (const d of dueDeals) {
-    if (followScope.has(d.scopeKey)) continue;
-    const sent = latestSentForDeal(userId, d);
-    if (!sent) continue;
-    if (sent.nudge_off || sent.snooze_until) continue;
-    // 对方已回 / 我又发了更新信 → 不注入，避免「已回仍等待」
-    if (sent.their_last && sent.their_last > sent.date) continue;
-    if (sent.my_last && sent.my_last > sent.date) continue;
-    followScope.add(d.scopeKey);
-    const to = { name: '', address: d.lastAddress || '' };
-    const follow = {
-      days: Math.floor((atNow - sent.date) / DAY),
-      tier: tierOf(idx, d.lastAddress),
-      to,
-      score: 120,
-      company: companyOf(idx, d.lastAddress),
-      signals: signalsFrom(sent),
-      nextFollowAt: d.nextFollowAt,
-      due: true,
-    };
-    follow.why = followWhy(follow);
-    followWithDeals.push({
-      ...rowToMessage(sent),
-      deal: d,
-      follow,
-      _section: undefined,
-    });
-  }
-
-  followWithDeals = followWithDeals
-    .map((m) => {
-      const nf = m.deal?.nextFollowAt || m.follow?.nextFollowAt;
-      if (!nf) return m;
-      const due = nf <= atNow;
-      // 未到期：仍可在列表但降权；到期强提升
-      const dueBoost = due ? 80 : nf <= atNow + DAY ? 40 : nf <= atNow + 3 * DAY ? 15 : 0;
-      const follow = {
-        ...m.follow,
-        nextFollowAt: nf,
-        score: (m.follow?.score || 0) + dueBoost,
-        due,
-      };
-      follow.why = followWhy(follow);
-      return { ...m, follow };
-    })
-    .filter((m) => {
-      const nf = m.follow?.nextFollowAt;
-      if (!nf) return true;
-      // 未到期且未满全局跟进天数 → 先不进「等待对方」（避免噪音）；到期必出现
-      if (nf > atNow && (m.follow?.days || 0) < followDays && !m.follow?.due) return false;
-      return true;
-    })
-    .sort((a, b) => (b.follow?.score || 0) - (a.follow?.score || 0));
-
   return {
-    reply: replyWithDeals,
-    followups: followWithDeals,
+    reply,
+    followups,
     stats: {
       needReply: reply.length,
       overdue,
       high: reply.filter((m) => m.priority.level === 'high').length,
-      followups: followWithDeals.length,
+      followups: followups.length,
       todayIn,
       handledToday: repliedToday + doneToday,
     },
@@ -438,97 +294,6 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
     },
     settings: { slaHours, followDays, slaByTier: tiers },
   };
-}
-
-/**
- * 单封验真：是否在今日待办/等待，以及进/出原因（供 UI 与排查）
- */
-export function explainMessage(userId, messageId, settings = {}) {
-  const id = Number(messageId);
-  if (!Number.isInteger(id)) return { inFocus: false, section: null, why: '', out: ['无效邮件'] };
-  const data = focus(userId, settings);
-  const inReply = data.reply.find((m) => m.id === id);
-  if (inReply) {
-    return {
-      inFocus: true,
-      section: 'reply',
-      why: inReply.priority?.why || (inReply.priority?.reasons || []).join(' · '),
-      out: [],
-      priority: inReply.priority,
-    };
-  }
-  const inFollow = data.followups.find((m) => m.id === id);
-  if (inFollow) {
-    return {
-      inFocus: true,
-      section: 'follow',
-      why: inFollow.follow?.why || '',
-      out: [],
-      follow: inFollow.follow,
-    };
-  }
-
-  const row = db
-    .prepare(
-      `SELECT m.*, f.special_use, b.email AS mb_email, ${MY_LAST_SQL} AS my_last, ${THEIR_LAST_SQL} AS their_last
-       FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
-       LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
-       WHERE b.user_id = ? AND m.id = ?`
-    )
-    .get(userId, id);
-  if (!row) return { inFocus: false, section: null, why: '', out: ['邮件不存在或不属于你'] };
-
-  const out = [];
-  const at = now();
-  const idx = relationIndex(userId);
-  if (row.special_use === '\\Inbox') {
-    const tier = tierOf(idx, row.from_addr, row.category);
-    if (handled(row)) {
-      if (row.answered || (row.my_last && row.my_last > row.date)) out.push('你已回复（不再进待办）');
-      if (row.done_at) out.push('已标记处理完成');
-      if (row.snooze_until) out.push('稍后处理中');
-    }
-    if (!['vip', 'customer', 'new', 'colleague'].includes(tier)) out.push(`关系档位「${tier}」不进今日待办`);
-    if (row.category === 'notification' && tier !== 'vip' && tier !== 'customer') out.push('通知类邮件已过滤');
-    if (at - row.date > REPLY_WINDOW) out.push('超出待办时间窗（21 天）');
-    if (!out.length) out.push('未进入候选（可能被会话去重或硬帽截断）');
-  } else if (row.special_use === '\\Sent') {
-    if (row.nudge_off) out.push('已标记无需跟进');
-    if (row.their_last && row.their_last > row.date) out.push('对方已回复');
-    if (row.my_last && row.my_last > row.date) out.push('你有更新的发信');
-    const followDays = Number(settings.followupDays) || 3;
-    if (at - row.date < followDays * DAY) out.push(`未满跟进天数（${followDays} 天）`);
-    if (!expectsReply(row.subject, row.snippet)) out.push('主题/摘要判断为无需跟进');
-    if (at - row.date > FOLLOW_WINDOW) out.push('超出等待时间窗（30 天）');
-    if (!out.length) out.push('未进入等待列表');
-  } else {
-    out.push('非收件箱/已发送，不参与今日待办与等待');
-  }
-  return { inFocus: false, section: null, why: '', out };
-}
-
-/** 认领客户到期时，用最近发给对方的已发送邮件挂到「等待」 */
-function latestSentForDeal(userId, deal) {
-  if (!deal?.lastAddress && !deal?.scopeKey) return null;
-  const addr = String(deal.lastAddress || '').toLowerCase();
-  const domain = deal.scopeKind === 'company' ? String(deal.scopeLabel || '').replace(/^@/, '') : '';
-  const select = `SELECT m.*, f.special_use, b.email AS mb_email,
-    ${MY_LAST_SQL} AS my_last, ${THEIR_LAST_SQL} AS their_last
-    FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
-    LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
-    WHERE b.user_id = ? AND f.special_use = '\\Sent' AND m.from_addr = b.email`;
-  if (addr) {
-    const row = db
-      .prepare(`${select} AND (m.to_json LIKE ? OR m.cc_json LIKE ?) ORDER BY m.date DESC LIMIT 1`)
-      .get(userId, `%${addr}%`, `%${addr}%`);
-    if (row) return row;
-  }
-  if (domain) {
-    return db
-      .prepare(`${select} AND (m.to_json LIKE ? OR m.cc_json LIKE ?) ORDER BY m.date DESC LIMIT 1`)
-      .get(userId, `%@${domain}%`, `%@${domain}%`);
-  }
-  return null;
 }
 
 /** 批量取会话中对方最后回信时间（用于已发送「等对方」） */
@@ -623,128 +388,6 @@ export function importance(userId, item) {
   const important = tier === 'vip' || (tier === 'customer' && signals.some((s) => ['urgent', 'complaint', 'order', 'payment'].includes(s))) ||
     (tier === 'new' && signals.includes('inquiry'));
   return { tier, important, label: tier === 'vip' ? 'VIP 客户' : tier === 'new' ? '新询盘' : tier === 'customer' ? '客户' : '' };
-}
-
-/**
- * 团队询盘冲突提示（MVP）：其他同事近 14 天是否与同一买家/同公司有过往来。
- * 公共邮箱只按完整地址匹配；企业域可按域名聚合。
- */
-export function conflictHints(userId, { fromAddr, threadId } = {}) {
-  const a = String(fromAddr || '').toLowerCase();
-  if (!a || ROBOT.test(a)) return null;
-  const d = domainOf(a);
-  const since = now() - 14 * DAY;
-  const likeAddr = `%"${a}"%`;
-  const useDomain = !!(d && !isFreeDomain(d));
-  const likeDomain = useDomain ? `%@${d}%` : null;
-
-  const peers = useDomain
-    ? db
-        .prepare(
-          `SELECT u.id AS user_id, u.name AS user_name, u.email AS user_email,
-                  MAX(CASE WHEN m.from_addr = b.email THEN m.date END) AS last_sent,
-                  MAX(CASE WHEN lower(m.from_addr) = ? THEN m.date END) AS last_recv,
-                  SUM(CASE WHEN m.from_addr = b.email THEN 1 ELSE 0 END) AS sent_n,
-                  SUM(CASE WHEN lower(m.from_addr) LIKE ? THEN 1 ELSE 0 END) AS recv_n
-           FROM messages m
-           JOIN mailboxes b ON b.id = m.mailbox_id
-           JOIN users u ON u.id = b.user_id
-           WHERE b.user_id != ?
-             AND m.date >= ?
-             AND (
-               lower(m.from_addr) LIKE ?
-               OR m.to_json LIKE ? OR m.cc_json LIKE ?
-               OR m.to_json LIKE ? OR m.cc_json LIKE ?
-             )
-           GROUP BY u.id
-           HAVING sent_n > 0 OR recv_n > 0
-           ORDER BY IFNULL(last_sent, 0) DESC, IFNULL(last_recv, 0) DESC
-           LIMIT 5`
-        )
-        .all(a, `%@${d}`, userId, since, `%@${d}`, likeAddr, likeAddr, likeDomain, likeDomain)
-    : db
-        .prepare(
-          `SELECT u.id AS user_id, u.name AS user_name, u.email AS user_email,
-                  MAX(CASE WHEN m.from_addr = b.email THEN m.date END) AS last_sent,
-                  MAX(CASE WHEN lower(m.from_addr) = ? THEN m.date END) AS last_recv,
-                  SUM(CASE WHEN m.from_addr = b.email THEN 1 ELSE 0 END) AS sent_n,
-                  SUM(CASE WHEN lower(m.from_addr) = ? THEN 1 ELSE 0 END) AS recv_n
-           FROM messages m
-           JOIN mailboxes b ON b.id = m.mailbox_id
-           JOIN users u ON u.id = b.user_id
-           WHERE b.user_id != ?
-             AND m.date >= ?
-             AND (lower(m.from_addr) = ? OR m.to_json LIKE ? OR m.cc_json LIKE ?)
-           GROUP BY u.id
-           HAVING sent_n > 0 OR recv_n > 0
-           ORDER BY IFNULL(last_sent, 0) DESC, IFNULL(last_recv, 0) DESC
-           LIMIT 5`
-        )
-        .all(a, a, userId, since, a, likeAddr, likeAddr);
-
-  const threadPeers = threadId
-    ? db
-        .prepare(
-          `SELECT u.id AS user_id, u.name AS user_name, u.email AS user_email, MAX(m.date) AS last_at,
-                  SUM(CASE WHEN m.from_addr = b.email THEN 1 ELSE 0 END) AS sent_n
-           FROM messages m
-           JOIN mailboxes b ON b.id = m.mailbox_id
-           JOIN users u ON u.id = b.user_id
-           WHERE b.user_id != ? AND m.thread_id = ? AND m.date >= ?
-           GROUP BY u.id
-           HAVING sent_n > 0
-           ORDER BY last_at DESC
-           LIMIT 3`
-        )
-        .all(userId, threadId, since)
-    : [];
-
-  if (!peers.length && !threadPeers.length) return null;
-
-  const colleagues = peers.map((p) => {
-    const parts = [];
-    if (p.sent_n > 0) parts.push(`已发 ${p.sent_n} 封`);
-    if (p.recv_n > 0) parts.push('也收到过');
-    return {
-      userId: p.user_id,
-      name: p.user_name || p.user_email,
-      email: p.user_email,
-      lastSent: p.last_sent || null,
-      lastRecv: p.last_recv || null,
-      summary: parts.join(' · ') || '有往来',
-      level: p.sent_n > 0 ? 'replied' : 'watching',
-    };
-  });
-
-  const threadHits = threadPeers.map((p) => ({
-    userId: p.user_id,
-    name: p.user_name || p.user_email,
-    email: p.user_email,
-    lastAt: p.last_at,
-    summary: '同一会话中已有回复',
-    level: 'thread',
-  }));
-
-  const byId = new Map();
-  for (const c of [...threadHits, ...colleagues]) {
-    const prev = byId.get(c.userId);
-    if (!prev || (c.level === 'thread' && prev.level !== 'thread') || (c.level === 'replied' && prev.level === 'watching')) {
-      byId.set(c.userId, c);
-    }
-  }
-  const list = [...byId.values()];
-  const replied = list.filter((c) => c.level === 'replied' || c.level === 'thread');
-  const scope = useDomain ? `同公司 @${d}` : a;
-  const headName = replied[0]?.name || list[0]?.name || '同事';
-  return {
-    scope,
-    count: list.length,
-    severity: replied.length ? 'high' : 'medium',
-    headline: replied.length
-      ? `${headName}${replied.length > 1 ? ` 等 ${replied.length} 人` : ''}近期已与该买家互动，请先确认再回复`
-      : `${list.length} 位同事也收到过${useDomain ? scope : '此发件人'}的邮件`,
-    colleagues: list,
-  };
 }
 
 /** 发件人画像：往来统计 */

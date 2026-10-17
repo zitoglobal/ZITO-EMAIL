@@ -22,12 +22,12 @@ if [ ! -d node_modules ] || [ "$OLD_LOCK" != "$NEW_LOCK" ]; then
   npm ci --omit=dev --no-audit --no-fund
 fi
 
-# 确保从 APP 目录读 .env（dotenv/config 相对 cwd）
 if pm2 describe zito-mail > /dev/null 2>&1; then
-  pm2 delete zito-mail >/dev/null 2>&1 || true
+  pm2 restart zito-mail --update-env
+else
+  pm2 start server/index.js --name zito-mail --cwd "$APP" --max-memory-restart 600M
+  pm2 startup systemd -u root --hp /root || true
 fi
-pm2 start server/index.js --name zito-mail --cwd "$APP" --max-memory-restart 600M --update-env
-pm2 startup systemd -u root --hp /root || true
 pm2 save
 sleep 3
 curl -s -o /dev/null -w "HEALTH %{http_code}\n" http://127.0.0.1:3310/

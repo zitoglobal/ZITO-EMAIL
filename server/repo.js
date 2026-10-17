@@ -23,8 +23,6 @@ export function publicMailbox(m) {
     imap: { host: m.imap_host, port: m.imap_port, secure: !!m.imap_secure },
     smtp: { host: m.smtp_host, port: m.smtp_port, secure: !!m.smtp_secure },
     loginUser: m.login_user,
-    authType: m.oauth_refresh_enc || m.oauth_access_enc ? 'oauth' : 'password',
-    oauthProvider: m.oauth_provider || null,
   };
 }
 
@@ -46,11 +44,8 @@ export const specialFolder = (mailboxId, use) =>
 
 export const replaceFolders = tx((mailboxId, folders) => {
   const keep = new Set(folders.map((f) => f.path));
-  const delFts = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
-  const idsOf = db.prepare('SELECT id FROM messages WHERE mailbox_id = ? AND folder = ?');
   for (const f of listFolders(mailboxId)) {
     if (!keep.has(f.path)) {
-      for (const r of idsOf.all(mailboxId, f.path)) delFts.run(r.id);
       db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, f.path);
       db.prepare('DELETE FROM folders WHERE mailbox_id = ? AND path = ?').run(mailboxId, f.path);
     }
@@ -72,31 +67,19 @@ export function updateFolderState(mailboxId, path, patch) {
 
 // ---------- 邮件 ----------
 export const upsertMessages = tx((mailboxId, folder, items) => {
-  const mb = getMailboxById(mailboxId);
-  const userId = mb?.user_id;
   const st = db.prepare(`INSERT INTO messages
-    (mailbox_id, folder, uid, message_id, thread_id, in_reply_to, subject, from_name, from_addr, to_json, cc_json, date, sort_ts, seen, flagged, answered, has_att, size, snippet, category, signals)
-    VALUES (@mailbox_id, @folder, @uid, @message_id, @thread_id, @in_reply_to, @subject, @from_name, @from_addr, @to_json, @cc_json, @date, @date, @seen, @flagged, @answered, @has_att, @size, @snippet, @category, @signals)
+    (mailbox_id, folder, uid, message_id, thread_id, subject, from_name, from_addr, to_json, cc_json, date, sort_ts, seen, flagged, answered, has_att, size, snippet, category, signals)
+    VALUES (@mailbox_id, @folder, @uid, @message_id, @thread_id, @subject, @from_name, @from_addr, @to_json, @cc_json, @date, @date, @seen, @flagged, @answered, @has_att, @size, @snippet, @category, @signals)
     ON CONFLICT(mailbox_id, folder, uid) DO NOTHING`);
   const upd = db.prepare('UPDATE messages SET seen = ?, flagged = ?, answered = ? WHERE mailbox_id = ? AND folder = ? AND uid = ?');
   const inserted = [];
   for (const m of items) {
-    const preview = m.preview || m.snippet || '';
-    const threadId = userId
-      ? resolveThreadId(userId, {
-          messageId: m.messageId,
-          inReplyTo: m.inReplyTo,
-          threadId: m.threadId,
-          references: m.references,
-        })
-      : m.threadId || m.messageId || null;
     const info = st.run({
       mailbox_id: mailboxId,
       folder,
       uid: m.uid,
       message_id: m.messageId || null,
-      thread_id: threadId,
-      in_reply_to: m.inReplyTo || null,
+      thread_id: m.threadId || null,
       subject: m.subject,
       from_name: m.from?.name || '',
       from_addr: (m.from?.address || '').toLowerCase(),
@@ -110,36 +93,10 @@ export const upsertMessages = tx((mailboxId, folder, items) => {
       size: m.size || 0,
       snippet: m.snippet || '',
       category: m.category || 'people',
-      // 入库即用正文预览算意图（不再只靠 200 字 snippet）
-      signals: signalsOf(m.subject, preview).join(','),
+      signals: signalsOf(m.subject, m.snippet).join(','),
     });
-    if (info.changes) {
-      const id = Number(info.lastInsertRowid);
-      inserted.push({ id, ...m, threadId });
-      try {
-        upsertFts(id, {
-          subject: m.subject,
-          snippet: m.snippet,
-          fromName: m.from?.name,
-          fromAddr: m.from?.address,
-          body: preview,
-        });
-      } catch {
-        /* fts optional */
-      }
-    } else {
-      upd.run(m.seen ? 1 : 0, m.flagged ? 1 : 0, m.answered ? 1 : 0, mailboxId, folder, m.uid);
-      // 父信晚到时回填会话键（原 ON CONFLICT DO NOTHING 会永久断链）
-      if (threadId) {
-        const row = db
-          .prepare('SELECT id, thread_id, message_id FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?')
-          .get(mailboxId, folder, m.uid);
-        if (row && row.thread_id !== threadId) {
-          const weak = !row.thread_id || row.thread_id === row.message_id;
-          if (weak) db.prepare('UPDATE messages SET thread_id = ? WHERE id = ?').run(threadId, row.id);
-        }
-      }
-    }
+    if (info.changes) inserted.push({ id: Number(info.lastInsertRowid), ...m });
+    else upd.run(m.seen ? 1 : 0, m.flagged ? 1 : 0, m.answered ? 1 : 0, mailboxId, folder, m.uid);
   }
   return inserted;
 });
@@ -160,21 +117,12 @@ export const applyFlagChanges = tx((mailboxId, folder, changes) => {
 });
 
 export const deleteUids = tx((mailboxId, folder, uids) => {
-  const getId = db.prepare('SELECT id FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?');
-  const delFts = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
-  const delMsg = db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?');
-  for (const u of uids) {
-    const row = getId.get(mailboxId, folder, u);
-    if (row) delFts.run(row.id);
-    delMsg.run(mailboxId, folder, u);
-  }
+  const st = db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ? AND uid = ?');
+  for (const u of uids) st.run(mailboxId, folder, u);
 });
 
-export const clearFolderMessages = (mailboxId, folder) => {
-  const ids = db.prepare('SELECT id FROM messages WHERE mailbox_id = ? AND folder = ?').all(mailboxId, folder).map((r) => r.id);
-  removeFts(ids);
-  return db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, folder);
-};
+export const clearFolderMessages = (mailboxId, folder) =>
+  db.prepare('DELETE FROM messages WHERE mailbox_id = ? AND folder = ?').run(mailboxId, folder);
 
 export function getMessagesForUser(userId, ids) {
   if (!ids.length) return [];
@@ -193,7 +141,6 @@ export function patchMessages(ids, patch) {
 
 export function deleteMessageRows(ids) {
   if (!ids.length) return;
-  removeFts(ids);
   db.prepare(`DELETE FROM messages WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
 }
 
@@ -229,108 +176,12 @@ export function rowToMessage(r) {
   };
 }
 
-/** 用主题 + 正文/摘要重算意图；有正文时覆盖仅摘要的弱信号 */
-export function refreshSignals(messagePk, subject, text = '') {
-  const blob = String(text || '').slice(0, 8000);
-  const sig = signalsOf(subject, blob).join(',');
-  const row = db.prepare('SELECT signals FROM messages WHERE id = ?').get(messagePk);
-  if (!row) return [];
-  if (row.signals === sig) return sig ? sig.split(',') : [];
-  db.prepare('UPDATE messages SET signals = ? WHERE id = ?').run(sig, messagePk);
-  return sig ? sig.split(',') : [];
-}
-
-/** 旧数据补算业务意图（优先用已缓存正文） */
+/** 旧数据补算业务意图 */
 export function backfillSignals() {
-  const rows = db
-    .prepare(
-      `SELECT m.id, m.subject, m.snippet, b.text AS body_text
-       FROM messages m
-       LEFT JOIN bodies b ON b.message_pk = m.id
-       WHERE m.signals IS NULL
-       LIMIT 20000`
-    )
-    .all();
+  const rows = db.prepare('SELECT id, subject, snippet FROM messages WHERE signals IS NULL LIMIT 20000').all();
   if (!rows.length) return;
   const st = db.prepare('UPDATE messages SET signals = ? WHERE id = ?');
-  tx(() =>
-    rows.forEach((r) => {
-      const text = (r.body_text || r.snippet || '').slice(0, 8000);
-      st.run(signalsOf(r.subject, text).join(','), r.id);
-    })
-  )();
-}
-
-function ftsEscape(term) {
-  return String(term || '')
-    .replace(/["']/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((t) => `"${t.replace(/"/g, '')}"`)
-    .join(' ');
-}
-
-export function upsertFts(messagePk, { subject = '', snippet = '', fromName = '', fromAddr = '', body = '' } = {}) {
-  const fromText = `${fromName} ${fromAddr}`.trim();
-  db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(messagePk);
-  db.prepare(
-    `INSERT INTO messages_fts (rowid, subject, snippet, from_text, body) VALUES (?, ?, ?, ?, ?)`
-  ).run(messagePk, subject || '', snippet || '', fromText, String(body || '').slice(0, 50000));
-}
-
-export function removeFts(messagePks = []) {
-  const ids = messagePks.map(Number).filter((n) => Number.isInteger(n));
-  if (!ids.length) return;
-  const st = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
-  tx(() => ids.forEach((id) => st.run(id)))();
-}
-
-/** 全文检索命中的 message id（最多 limit）；FTS 不可用时返回 null 以回退 LIKE */
-export function searchFtsIds(terms = [], limit = 500) {
-  const q = terms.map(ftsEscape).filter(Boolean).join(' ');
-  if (!q) return null;
-  try {
-    const n = db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get().n;
-    if (!n) return null; // 尚未建索引 → LIKE
-    return db
-      .prepare(`SELECT rowid AS id FROM messages_fts WHERE messages_fts MATCH ? LIMIT ?`)
-      .all(q, limit)
-      .map((r) => r.id);
-  } catch {
-    return null;
-  }
-}
-
-/** 启动时差量补齐 FTS，并清理孤儿索引（删信路径漏清时自愈） */
-export function backfillFts(limit = 15000) {
-  try {
-    db.prepare('DELETE FROM messages_fts WHERE rowid NOT IN (SELECT id FROM messages)').run();
-  } catch {
-    /* ignore */
-  }
-  const rows = db
-    .prepare(
-      `SELECT m.id, m.subject, m.snippet, m.from_name, m.from_addr, b.text AS body
-       FROM messages m
-       LEFT JOIN bodies b ON b.message_pk = m.id
-       WHERE m.id NOT IN (SELECT rowid FROM messages_fts)
-       ORDER BY m.date DESC LIMIT ?`
-    )
-    .all(limit);
-  if (!rows.length) return;
-  const run = tx(() => {
-    for (const r of rows) {
-      upsertFts(r.id, {
-        subject: r.subject,
-        snippet: r.snippet,
-        fromName: r.from_name,
-        fromAddr: r.from_addr,
-        body: r.body || '',
-      });
-    }
-  });
-  run();
+  tx(() => rows.forEach((r) => st.run(signalsOf(r.subject, r.snippet).join(','), r.id)))();
 }
 
 /** 解析搜索语法：from/to/subject/has/is + label:/is:vip/category:，其余为关键词 */
@@ -381,116 +232,12 @@ export function parseQuery(q) {
 
 const like = (s) => `%${String(s).replace(/[%_\\]/g, (c) => '\\' + c)}%`;
 
-/**
- * 同一会话中「我」最后一次发信（含 In-Reply-To 断链补全，不含草稿/已删除）
- */
+/** 同一会话中「我」最后一次发信的时间（任一已绑定邮箱，不含草稿） */
 export const MY_LAST_SQL = `(SELECT MAX(s.date) FROM messages s
     JOIN mailboxes sb ON sb.id = s.mailbox_id
     LEFT JOIN folders sf ON sf.mailbox_id = s.mailbox_id AND sf.path = s.folder
-    WHERE sb.user_id = b.user_id AND s.from_addr = sb.email
-      AND IFNULL(sf.special_use, '') NOT IN ('\\Drafts', '\\Trash')
-      AND (
-        (m.thread_id IS NOT NULL AND s.thread_id = m.thread_id)
-        OR (m.message_id IS NOT NULL AND s.in_reply_to = m.message_id)
-        OR (m.in_reply_to IS NOT NULL AND (s.message_id = m.in_reply_to OR s.in_reply_to = m.in_reply_to OR s.thread_id = m.in_reply_to))
-      ))`;
-
-/** 对方在同一会话的最后来信（线程键 + In-Reply-To） */
-export const THEIR_LAST_SQL = `(SELECT MAX(t.date) FROM messages t JOIN mailboxes tb ON tb.id = t.mailbox_id
-    WHERE tb.user_id = b.user_id
-      AND t.from_addr NOT IN (SELECT email FROM mailboxes WHERE user_id = b.user_id)
-      AND (
-        (m.thread_id IS NOT NULL AND t.thread_id = m.thread_id)
-        OR (m.message_id IS NOT NULL AND t.in_reply_to = m.message_id)
-        OR (m.in_reply_to IS NOT NULL AND (t.message_id = m.in_reply_to OR t.in_reply_to = m.in_reply_to))
-      ))`;
-
-/** Message-Id 常见带/不带尖括号，匹配时两边都试 */
-function idVariants(...ids) {
-  const out = new Set();
-  for (const raw of ids) {
-    const s = String(raw || '').trim();
-    if (!s) continue;
-    out.add(s);
-    const bare = s.replace(/^<|>$/g, '');
-    if (bare) {
-      out.add(bare);
-      out.add(`<${bare}>`);
-    }
-  }
-  return [...out];
-}
-
-/** Focus / 会话去重共用键 */
-export function conversationKey(row) {
-  if (!row) return '';
-  return row.thread_id || row.in_reply_to || row.message_id || (row.id != null ? `#${row.id}` : '');
-}
-
-/** 解析会话键：In-Reply-To → References（近到远）→ 信封 threadId */
-export function resolveThreadId(userId, { messageId, inReplyTo, threadId, references } = {}) {
-  const refList = Array.isArray(references)
-    ? references
-    : String(references || '')
-        .match(/<[^>]+>/g)
-        ?.map((x) => x.replace(/^<|>$/g, '')) || [];
-  // 最近父信优先，再扫整条 References（含根）
-  const candidates = [];
-  if (inReplyTo) candidates.push(inReplyTo);
-  for (let i = refList.length - 1; i >= 0; i--) candidates.push(refList[i]);
-  if (refList[0]) candidates.push(refList[0]);
-
-  const seen = new Set();
-  for (const cand of candidates) {
-    const variants = idVariants(cand);
-    if (!variants.length) continue;
-    const sig = variants.join('|');
-    if (seen.has(sig)) continue;
-    seen.add(sig);
-    const ph = variants.map(() => '?').join(',');
-    const parent = db
-      .prepare(
-        `SELECT m.thread_id, m.message_id FROM messages m
-         JOIN mailboxes b ON b.id = m.mailbox_id
-         WHERE b.user_id = ? AND m.message_id IN (${ph})
-         ORDER BY m.date ASC LIMIT 1`
-      )
-      .get(userId, ...variants);
-    if (parent?.thread_id) return parent.thread_id;
-    if (parent?.message_id) return parent.message_id;
-  }
-  return threadId || messageId || idVariants(inReplyTo)[0] || null;
-}
-
-/** 发出回复后：把同会话收件箱标为已回复 */
-export function markThreadAnswered(userId, { threadId, inReplyTo, messageId, references } = {}) {
-  const resolved =
-    threadId ||
-    resolveThreadId(userId, { messageId, inReplyTo, threadId, references });
-  const refArr = Array.isArray(references) ? references : [];
-  const tids = idVariants(resolved, threadId, inReplyTo, messageId, ...refArr);
-  if (!tids.length) return 0;
-  const ph = tids.map(() => '?').join(',');
-  const rows = db
-    .prepare(
-      `SELECT m.id FROM messages m
-       JOIN mailboxes b ON b.id = m.mailbox_id
-       LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
-       WHERE b.user_id = ? AND f.special_use = '\\Inbox' AND IFNULL(m.answered, 0) = 0
-         AND (
-           m.thread_id IN (${ph})
-           OR m.message_id IN (${ph})
-           OR m.in_reply_to IN (${ph})
-         )`
-    )
-    .all(userId, ...tids, ...tids, ...tids);
-  if (!rows.length) return 0;
-  patchMessages(
-    rows.map((r) => r.id),
-    { answered: 1 }
-  );
-  return rows.length;
-}
+    WHERE sb.user_id = b.user_id AND m.thread_id IS NOT NULL AND s.thread_id = m.thread_id AND s.from_addr = sb.email
+      AND IFNULL(sf.special_use, '') NOT IN ('\\Drafts', '\\Trash'))`;
 
 export function queryMessages(userId, { mailboxId, box = 'inbox', folder, category, q, cursor, limit = 50, excludePinned = false, onlyPinned = false, ids, map, labelId }) {
   const where = ['b.user_id = @userId'];
@@ -536,22 +283,10 @@ export function queryMessages(userId, { mailboxId, box = 'inbox', folder, catego
 
   if (q) {
     const pq = parseQuery(q);
-    const ftsIds = pq.terms.length ? searchFtsIds(pq.terms, 800) : null;
-    if (pq.terms.length && Array.isArray(ftsIds)) {
-      if (!ftsIds.length) return { messages: [], nextCursor: null };
-      const ph = ftsIds.map((_, i) => `@fts${i}`).join(',');
-      where.push(`m.id IN (${ph})`);
-      ftsIds.forEach((id, i) => {
-        p[`fts${i}`] = id;
-      });
-    } else {
-      pq.terms.forEach((t, i) => {
-        where.push(
-          `(m.subject LIKE @t${i} ESCAPE '\\' OR m.from_name LIKE @t${i} ESCAPE '\\' OR m.from_addr LIKE @t${i} ESCAPE '\\' OR m.snippet LIKE @t${i} ESCAPE '\\' OR m.to_json LIKE @t${i} ESCAPE '\\' OR EXISTS (SELECT 1 FROM bodies b WHERE b.message_pk = m.id AND b.text LIKE @t${i} ESCAPE '\\'))`
-        );
-        p[`t${i}`] = like(t);
-      });
-    }
+    pq.terms.forEach((t, i) => {
+      where.push(`(m.subject LIKE @t${i} ESCAPE '\\' OR m.from_name LIKE @t${i} ESCAPE '\\' OR m.from_addr LIKE @t${i} ESCAPE '\\' OR m.snippet LIKE @t${i} ESCAPE '\\' OR m.to_json LIKE @t${i} ESCAPE '\\')`);
+      p[`t${i}`] = like(t);
+    });
     pq.from.forEach((t, i) => {
       where.push(`(m.from_name LIKE @f${i} ESCAPE '\\' OR m.from_addr LIKE @f${i} ESCAPE '\\')`);
       p[`f${i}`] = like(t);
@@ -602,12 +337,7 @@ export function queryMessages(userId, { mailboxId, box = 'inbox', folder, catego
   const rows = db
     .prepare(
       `SELECT m.*, f.special_use,
-        (SELECT COUNT(DISTINCT IFNULL(t.message_id, t.id))
-           FROM messages t
-           JOIN mailboxes tb ON tb.id = t.mailbox_id
-          WHERE tb.user_id = b.user_id
-            AND m.thread_id IS NOT NULL
-            AND t.thread_id = m.thread_id) AS thread_count,
+        (SELECT COUNT(DISTINCT IFNULL(t.message_id, t.id)) FROM messages t WHERE t.mailbox_id = m.mailbox_id AND t.thread_id = m.thread_id AND m.thread_id IS NOT NULL) AS thread_count,
         ${MY_LAST_SQL} AS my_last
        FROM messages m
        JOIN mailboxes b ON b.id = m.mailbox_id
@@ -623,29 +353,27 @@ export function queryMessages(userId, { mailboxId, box = 'inbox', folder, catego
 }
 
 export function threadMessages(userId, row) {
-  const variants = idVariants(row.thread_id, row.message_id, row.in_reply_to);
-  if (!variants.length) return [row];
-  const ph = variants.map(() => '?').join(',');
+  if (!row.thread_id) return [row];
   const rows = db
     .prepare(
       `SELECT m.*, f.special_use FROM messages m
        JOIN mailboxes b ON b.id = m.mailbox_id
        LEFT JOIN folders f ON f.mailbox_id = m.mailbox_id AND f.path = m.folder
-       WHERE b.user_id = ?
-         AND (m.thread_id IN (${ph}) OR m.message_id IN (${ph}) OR m.in_reply_to IN (${ph}))
+       WHERE b.user_id = ? AND m.mailbox_id = ? AND (m.thread_id = ? OR m.message_id = ?)
          AND (IFNULL(f.special_use, '') NOT IN ('\\Trash', '\\Junk') OR m.id = ?)
-       ORDER BY m.date ASC LIMIT 120`
+       ORDER BY m.date ASC LIMIT 100`
     )
-    .all(userId, ...variants, ...variants, ...variants, row.id);
-  // 跨邮箱合并：同 Message-ID 只留一份（优先当前打开、其次收件箱、再次已发送）
-  const rank = (r) => (r.id === row.id ? 0 : r.special_use === '\\Inbox' ? 1 : r.special_use === '\\Sent' ? 2 : 3);
+    .all(userId, row.mailbox_id, row.thread_id, row.thread_id, row.id);
+  // 同一封邮件可能同时存在于「已发送」和「收件箱」（发给自己 / 抄送自己），按 Message-ID 只保留一份
+  const rank = (r) => (r.id === row.id ? 0 : r.special_use === '\\Sent' ? 2 : 1);
   const best = new Map();
   for (const r of rows) {
-    const mk = r.message_id || `#${r.id}`;
-    const cur = best.get(mk);
-    if (!cur || rank(r) < rank(cur)) best.set(mk, r);
+    const key = r.message_id || `#${r.id}`;
+    const cur = best.get(key);
+    if (!cur || rank(r) < rank(cur)) best.set(key, r);
   }
-  return [...best.values()].sort((a, b) => a.date - b.date || a.id - b.id);
+  const keep = new Set([...best.values()].map((r) => r.id));
+  return rows.filter((r) => keep.has(r.id));
 }
 
 export function counts(userId) {
@@ -675,21 +403,6 @@ export function saveBody(pk, { html, text, meta }) {
     JSON.stringify(meta),
     now()
   );
-  const row = db.prepare('SELECT subject, snippet, from_name, from_addr FROM messages WHERE id = ?').get(pk);
-  if (row) {
-    refreshSignals(pk, row.subject, text || row.snippet || '');
-    try {
-      upsertFts(pk, {
-        subject: row.subject,
-        snippet: row.snippet,
-        fromName: row.from_name,
-        fromAddr: row.from_addr,
-        body: text || '',
-      });
-    } catch {
-      /* ignore */
-    }
-  }
 }
 export function pruneBodies(keep = 3000) {
   db.prepare('DELETE FROM bodies WHERE message_pk NOT IN (SELECT message_pk FROM bodies ORDER BY fetched_at DESC LIMIT ?)').run(keep);
@@ -727,18 +440,6 @@ export const dueOutbox = () => db.prepare("SELECT * FROM outbox WHERE status = '
 export const setOutboxStatus = (id, status, error = null) => db.prepare('UPDATE outbox SET status = ?, error = ? WHERE id = ?').run(status, error, id);
 export const updateOutboxTime = (id, sendAt) => db.prepare("UPDATE outbox SET send_at = ?, status = 'scheduled', error = NULL WHERE id = ?").run(sendAt, id);
 export const deleteOutbox = (id) => db.prepare('DELETE FROM outbox WHERE id = ?').run(id);
-/** 仅删除仍为 scheduled 的任务（与 sending claim 互斥） */
-export function deleteOutboxIfScheduled(id) {
-  return db.prepare("DELETE FROM outbox WHERE id = ? AND status = 'scheduled'").run(id).changes > 0;
-}
-/** 原子抢占发送权；失败表示已被撤销或他进程抢走 */
-export function claimOutboxSending(id) {
-  return (
-    db
-      .prepare("UPDATE outbox SET status = 'sending' WHERE id = ? AND status = 'scheduled' AND send_at <= ?")
-      .run(id, Date.now() + 100).changes > 0
-  );
-}
 
 // ---------- 稍后处理 ----------
 export const dueSnoozes = () =>

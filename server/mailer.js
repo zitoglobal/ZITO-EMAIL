@@ -7,9 +7,6 @@ import * as sync from './sync.js';
 import { sendMail } from './smtp.js';
 import { emit } from './events.js';
 import { DATA_DIR, db } from './db.js';
-import * as deals from './deals.js';
-import * as users from './users.js';
-import * as priority from './priority.js';
 
 export const OUTBOX_DIR = path.join(DATA_DIR, 'outbox');
 
@@ -61,21 +58,6 @@ export async function deliver(mb, payload, files) {
     if (orig) {
       repo.patchMessages([orig.id], { answered: 1 });
       jobs.push(imap.setFlags(repo.getMailboxById(orig.mailbox_id), orig.folder, [orig.uid], { answered: true }));
-      try {
-        repo.markThreadAnswered(mb.user_id, {
-          threadId: orig.thread_id || payload.replyTo.threadId,
-          inReplyTo: mail.inReplyTo || orig.message_id,
-          messageId: orig.message_id,
-        });
-      } catch {
-        /* best-effort */
-      }
-    }
-  } else if (mail.inReplyTo) {
-    try {
-      repo.markThreadAnswered(mb.user_id, { inReplyTo: mail.inReplyTo, threadId: payload.threadId });
-    } catch {
-      /* best-effort */
     }
   }
   if (payload.draftUid) {
@@ -84,15 +66,9 @@ export async function deliver(mb, payload, files) {
   }
   await Promise.allSettled(jobs);
   repo.addContacts(mb.user_id, [...mail.to, ...mail.cc, ...mail.bcc], 3);
-  priority.invalidate(mb.user_id);
-  // 近实时：发信后立刻拉 Sent（并短延迟再补一次，覆盖服务器稍后落库）
-  if (sent) {
-    sync.forceSync(mb.id, sent.path).catch(() => {});
-    sync.touch(mb.id, sent.path, 2500);
-  }
+  if (sent) sync.touch(mb.id, sent.path);
   const drafts = repo.specialFolder(mb.id, '\\Drafts');
   if (payload.draftUid && drafts) sync.touch(mb.id, drafts.path);
-  emit(mb.user_id, 'sync', { mailboxId: mb.id, folder: sent?.path, local: true, sent: true });
 }
 
 export function saveOutboxFiles(files) {
@@ -125,27 +101,13 @@ async function tick() {
   busy = true;
   try {
     for (const job of repo.dueOutbox()) {
-      // 与 DELETE 条件删除互斥：抢不到说明用户已撤销
-      if (!repo.claimOutboxSending(job.id)) continue;
+      repo.setOutboxStatus(job.id, 'sending');
       const mb = repo.getMailboxById(job.mailbox_id);
       try {
-        const payload = JSON.parse(job.payload);
-        await deliver(mb, payload, loadOutboxFiles(job.files_dir));
+        await deliver(mb, JSON.parse(job.payload), loadOutboxFiles(job.files_dir));
         repo.deleteOutbox(job.id);
         removeOutboxFiles(job.files_dir);
         emit(job.user_id, 'outbox', { id: job.id, status: 'sent' });
-        try {
-          const settings = users.settingsOf(job.user_id);
-          if (settings.sendAutoClaim !== 'off') {
-            const selfEmails = repo.listMailboxes(job.user_id).map((m) => m.email).filter(Boolean);
-            const meta = deals.afterOutboundSend(job.user_id, payload, { mode: 'auto', selfEmails });
-            if (meta?.claimed || meta?.conflict) {
-              for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
-            }
-          }
-        } catch (e) {
-          console.warn('[deals] outbox claim', e.message);
-        }
       } catch (e) {
         repo.setOutboxStatus(job.id, 'failed', e.message);
         emit(job.user_id, 'outbox', { id: job.id, status: 'failed', error: e.message });
@@ -172,7 +134,6 @@ async function tick() {
 
 export function startScheduler() {
   db.prepare("UPDATE outbox SET status = 'scheduled' WHERE status = 'sending'").run();
-  // 1.5s：缩短撤销窗口与真正发出的竞态
-  setInterval(() => tick().catch((e) => console.error('[scheduler]', e)), 1_500).unref();
+  setInterval(() => tick().catch((e) => console.error('[scheduler]', e)), 5_000).unref();
   setInterval(() => repo.pruneBodies(), 3600_000).unref();
 }

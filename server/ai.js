@@ -17,15 +17,6 @@ export function aiConfigured() {
   return !!API_KEY();
 }
 
-/** 仅主机名，供设置页披露「邮件会发往何处」 */
-export function aiVendorHost() {
-  try {
-    return new URL(BASE_URL()).hostname || '';
-  } catch {
-    return '';
-  }
-}
-
 const AI_TIMEOUT_MS = 90_000;
 
 /** POST JSON over IPv4-only https.request (avoids bare fetch/undici path). */
@@ -68,18 +59,7 @@ function httpsPostJson(urlStr, bodyObj, { headers = {}, timeoutMs = AI_TIMEOUT_M
   });
 }
 
-function friendlyAiError(e) {
-  const msg = String(e?.message || e || '');
-  if (/超时|ETIMEDOUT|timeout/i.test(msg)) return new Error('AI 服务超时，请稍后重试');
-  if (/ECONNRESET|ECONNREFUSED|ENOTFOUND|socket|network|fetch failed/i.test(msg)) {
-    return new Error('AI 服务暂时不可达，请稍后重试');
-  }
-  if (/返回错误 401|Unauthorized/i.test(msg)) return new Error('AI 密钥无效，请检查服务器 AI_API_KEY');
-  if (/返回错误 429/i.test(msg)) return new Error('AI 调用过于频繁，请稍后再试');
-  return e instanceof Error ? e : new Error(msg || 'AI 调用失败');
-}
-
-async function chatOnce(messages, { json = false, temperature = 0.4, maxTokens = 1500 } = {}) {
+async function chat(messages, { json = false, temperature = 0.4, maxTokens = 1500 } = {}) {
   if (!aiConfigured()) throw new Error('AI 未配置：请在服务器 .env 中设置 AI_API_KEY（以及 AI_BASE_URL / AI_MODEL）');
   const { status, text } = await httpsPostJson(
     `${BASE_URL()}/chat/completions`,
@@ -109,26 +89,6 @@ async function chatOnce(messages, { json = false, temperature = 0.4, maxTokens =
   } catch {
     throw new Error('AI 返回格式异常，请重试');
   }
-}
-
-/** 网络类错误自动重试 1 次，并转成可读中文错误 */
-async function chat(messages, opts = {}) {
-  let last;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await chatOnce(messages, opts);
-    } catch (e) {
-      last = e;
-      const msg = String(e?.message || e);
-      const retryable = /超时|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|socket|network|fetch failed/i.test(msg);
-      if (attempt === 0 && retryable) {
-        await new Promise((r) => setTimeout(r, 700));
-        continue;
-      }
-      throw friendlyAiError(e);
-    }
-  }
-  throw friendlyAiError(last);
 }
 
 function mailContext(m) {
@@ -195,10 +155,7 @@ const TONES = {
   persuasive: '有说服力的销售口吻',
 };
 
-export async function draftReply(
-  mail,
-  { instruction = '', tone = 'professional', language = '', signature = '', glossary = [], bizContext = '' } = {}
-) {
+export async function draftReply(mail, { instruction = '', tone = 'professional', language = '', signature = '', glossary = [] } = {}) {
   const lang = language || '与原邮件相同的语言';
   const text = await chat(
     [
@@ -209,10 +166,9 @@ export async function draftReply(
 要求：
 - 语气：${TONES[tone] || tone}
 - 语言：${lang}
-- 回复意图：${instruction || '根据邮件内容与业务上下文给出合适回复'}
+- 回复意图：${instruction || '根据邮件内容给出合适回复'}
 - 只输出正文（含称呼和结尾敬语），不要输出主题行，不要用 Markdown，不要编造价格、日期等未知信息，需要时用 [ ] 占位
-- 若业务上下文标明阶段/SLA/认领状态，回复策略必须与之匹配（例如报价中勿重新询价开场；已超时可礼貌催推进度）
-${signature ? `- 结尾署名使用：${signature}` : ''}${glossaryHint(glossary)}${bizContext || ''}
+${signature ? `- 结尾署名使用：${signature}` : ''}${glossaryHint(glossary)}
 
 ${mailContext(mail)}`,
       },
@@ -282,35 +238,23 @@ export async function translate(mail, target = '简体中文', glossary = []) {
   return { subject: out.subject || '', body: out.body || '', sourceLang };
 }
 
-/**
- * 待回复邮件逐封：一句话建议 + 可执行动作。
- * items[].context 为业务状态摘要（可选）。
- */
+/** 待回复邮件逐封给出「一句话要做什么」 */
 export async function triage(items) {
   const list = items
-    .map((m) => {
-      const ctx = m.context ? `｜状态：${m.context}` : '';
-      return `[uid:${m.uid}] 来自 ${m.from?.name || ''} <${m.from?.address || ''}>｜主题：${m.subject}｜预览：${(m.snippet || '').slice(0, 160)}${ctx}`;
-    })
+    .map((m) => `[uid:${m.uid}] 来自 ${m.from?.name || ''} <${m.from?.address || ''}>｜主题：${m.subject}｜预览：${(m.snippet || '').slice(0, 200)}`)
     .join('\n');
   return chat(
     [
       { role: 'system', content: SYSTEM },
       {
         role: 'user',
-        content: `下面是等待我回复的客户邮件。请逐封用简体中文给出行动建议，并给出 1～3 个可在产品内一键执行的动作。
-规则：
-- note：不超过 30 字，以动词开头
-- urgency：high|medium|low
-- actions 仅允许 type：claim（认领，仅未认领时）、stage（推进阶段，stage 取 inquiry|quote|sample|bulk|payment|won）、snooze（hours 为数字）、reply（写回复，instruction 为简短意图）、followup（催单）、done（标记已处理）
-- 不要建议与「状态」矛盾的动作（如已认领勿再 claim；已在 quote 勿再 stage=quote）
-输出 JSON：
-{"items":[{"uid":数字,"note":"行动建议","urgency":"high|medium|low","actions":[{"type":"claim|stage|snooze|reply|followup|done","label":"按钮文案","stage":"仅 stage 时","hours":4,"instruction":"仅 reply/followup 时"}]}]}
+        content: `下面是等待我回复的客户邮件。请逐封用简体中文给出「我需要做什么」的一句话行动建议（不超过 30 字，以动词开头，如「确认 3000 件订单并发送 PI」），并判断紧急程度。输出 JSON：
+{"items": [{"uid": 数字, "note": "行动建议", "urgency": "high|medium|low"}]}
 
 ${list}`,
       },
     ],
-    { json: true, temperature: 0.2, maxTokens: 2400 }
+    { json: true, temperature: 0.2, maxTokens: 1800 }
   );
 }
 

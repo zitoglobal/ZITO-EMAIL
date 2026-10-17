@@ -29,16 +29,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_seen INTEGER NOT NULL,
   user_agent TEXT
 );
-`);
-
-{
-  const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
-  if (!userCols.has('totp_enc')) db.exec('ALTER TABLE users ADD COLUMN totp_enc TEXT');
-  if (!userCols.has('totp_enabled')) db.exec('ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0');
-  if (!userCols.has('totp_recovery_enc')) db.exec('ALTER TABLE users ADD COLUMN totp_recovery_enc TEXT');
-}
-
-db.exec(`
 
 CREATE TABLE IF NOT EXISTS mailboxes (
   id TEXT PRIMARY KEY,
@@ -167,31 +157,17 @@ for (const [name, def] of [
   ['ai_note', 'TEXT'],
   ['reminded', 'INTEGER NOT NULL DEFAULT 0'],  // 提醒阶段 0→1→2→3（兼容旧的 0/1）
   ['reminded_at', 'INTEGER'],                 // 上次提醒时间，用于冷却
-  ['in_reply_to', 'TEXT'],                     // 断链补会话
 ]) {
   if (!msgCols.has(name)) db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${def}`);
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_tid ON messages(thread_id)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_date ON messages(date DESC)');
-db.exec('CREATE INDEX IF NOT EXISTS idx_msg_in_reply ON messages(in_reply_to) WHERE in_reply_to IS NOT NULL');
-db.exec('CREATE INDEX IF NOT EXISTS idx_msg_message_id ON messages(message_id) WHERE message_id IS NOT NULL');
 
 // Focus / 分诊查询加速：按邮箱+日期窗口、发件人、文件夹 special_use、会话时间线
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_mb_date ON messages(mailbox_id, date DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_mb_from_date ON messages(mailbox_id, from_addr, date DESC)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_msg_thread_date ON messages(thread_id, date DESC) WHERE thread_id IS NOT NULL');
 db.exec('CREATE INDEX IF NOT EXISTS idx_folders_special ON folders(special_use, mailbox_id)');
-
-// OAuth 绑定（Gmail / M365）
-const mbCols = new Set(db.prepare('PRAGMA table_info(mailboxes)').all().map((c) => c.name));
-for (const [name, def] of [
-  ['oauth_provider', 'TEXT'],
-  ['oauth_access_enc', 'TEXT'],
-  ['oauth_refresh_enc', 'TEXT'],
-  ['oauth_expiry', 'INTEGER'],
-]) {
-  if (!mbCols.has(name)) db.exec(`ALTER TABLE mailboxes ADD COLUMN ${name} ${def}`);
-}
 
 export const now = () => Date.now();
 
@@ -355,70 +331,3 @@ CREATE INDEX IF NOT EXISTS idx_contact_tag_map_tag ON contact_tag_map(tag_id);
     migrate(pending);
   }
 }
-
-// ---------- 团队认领 + 业务阶段（邮箱内销售台，不依赖已下线 CRM） ----------
-db.exec(`
-CREATE TABLE IF NOT EXISTS deals (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  scope_key TEXT NOT NULL UNIQUE,
-  scope_kind TEXT NOT NULL,
-  owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  claimed_at INTEGER NOT NULL,
-  stage TEXT NOT NULL DEFAULT 'inquiry',
-  stage_updated_at INTEGER NOT NULL,
-  note TEXT NOT NULL DEFAULT '',
-  last_thread_id TEXT,
-  last_address TEXT,
-  updated_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_deals_owner ON deals(owner_user_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage);
-
-CREATE TABLE IF NOT EXISTS deal_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  deal_id INTEGER,
-  scope_key TEXT NOT NULL,
-  actor_user_id INTEGER NOT NULL,
-  action TEXT NOT NULL,
-  detail TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_deal_events_scope ON deal_events(scope_key, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_deal_events_deal ON deal_events(deal_id, created_at DESC);
-`);
-
-// deals / contact_persons：客户级下次跟进日
-{
-  const dealCols = new Set(db.prepare('PRAGMA table_info(deals)').all().map((c) => c.name));
-  if (!dealCols.has('next_follow_at')) db.exec('ALTER TABLE deals ADD COLUMN next_follow_at INTEGER');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_deals_next_follow ON deals(next_follow_at) WHERE next_follow_at IS NOT NULL');
-  const personCols = new Set(db.prepare('PRAGMA table_info(contact_persons)').all().map((c) => c.name));
-  if (!personCols.has('next_follow_at')) db.exec('ALTER TABLE contact_persons ADD COLUMN next_follow_at INTEGER');
-}
-
-// FTS5 全文（主题/摘要/发件人/正文）
-db.exec(`
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-  subject,
-  snippet,
-  from_text,
-  body,
-  content='',
-  tokenize='unicode61 remove_diacritics 2'
-);
-`);
-
-// Web Push 订阅
-db.exec(`
-CREATE TABLE IF NOT EXISTS push_subscriptions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  endpoint TEXT NOT NULL UNIQUE,
-  p256dh TEXT NOT NULL,
-  auth TEXT NOT NULL,
-  user_agent TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
-`);

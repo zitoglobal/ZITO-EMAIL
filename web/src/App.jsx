@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, Menu } from 'lucide-react';
+import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, PenSquare, AlertCircle, RefreshCw, Hourglass, Clock, Menu } from 'lucide-react';
 import { api, qs } from './api.js';
 import Auth, { HeroBrand } from './components/Auth.jsx';
 import { BrandIcon } from './components/Brand.jsx';
@@ -13,15 +13,11 @@ import Digest from './components/Digest.jsx';
 import Settings from './components/Settings.jsx';
 import Focus from './components/Focus.jsx';
 import Waiting from './components/Waiting.jsx';
-import AdminEmpty from './components/AdminEmpty.jsx';
-import Deals from './components/Deals.jsx';
-import Insights from './components/Insights.jsx';
-import TeamQueue from './components/TeamQueue.jsx';
 import CustomerPanel from './components/CustomerPanel.jsx';
 import ColumnSplitter from './components/ColumnSplitter.jsx';
 import Palette from './components/Palette.jsx';
 import SaveSearchModal from './components/SaveSearchModal.jsx';
-import { SMART_VIEWS, dayStart, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
+import { SMART_VIEWS, dayStart, displayName, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
 import { buildComposeState, signatureHtml, toForm } from './compose.js';
 import {
   LAYOUT_LIMITS,
@@ -31,9 +27,9 @@ import {
   saveLayoutLocal,
   widthsFromSettings,
 } from './layout.js';
-import { ACTION_TEXT, DEFAULT_VIEW, followUpAiForStage, followUpBodyForStage, PAGE, REMOVING, SHORTCUTS, UNDO_OF } from './appConstants.js';
-import { useRealtimeMail } from './hooks/useRealtimeMail.js';
-import { useAppBoot } from './hooks/useAppBoot.js';
+
+const PAGE = 50;
+const DEFAULT_VIEW = { mailboxId: 'all', box: 'today' };
 
 function mergeLocalLabels(current = [], add = [], remove = [], allLabels = []) {
   const byId = new Map((current || []).map((l) => [l.id, l]));
@@ -44,6 +40,25 @@ function mergeLocalLabels(current = [], add = [], remove = [], allLabels = []) {
     if (meta) byId.set(id, { id: meta.id, name: meta.name, color: meta.color });
   }
   return [...byId.values()];
+}
+
+const REMOVING = new Set(['archive', 'trash', 'spam', 'notspam', 'move', 'delete']);
+const ACTION_TEXT = {
+  archive: '已归档', trash: '已移到已删除', spam: '已标记为垃圾邮件', notspam: '已移回收件箱', move: '已移动', delete: '已彻底删除', snooze: '已设为稍后提醒',
+  done: '已标记为处理完成', nofollow: '已移出待跟进',
+};
+const UNDO_OF = { done: 'undone', nofollow: 'follow' };
+
+const SHORTCUTS = [
+  ['C', '写邮件'], ['R / A / F', '回复 / 全部回复 / 转发'], ['D', '标记已处理（移出待回复）'], ['E', '归档'], ['#  或 Delete', '删除'], ['!', '垃圾邮件'],
+  ['B', '稍后提醒（明天 8:00）'], ['S', '星标'], ['P', '置顶'], ['U', '标为未读'], ['X', '勾选当前邮件'], ['J / K 或 ↓ / ↑', '下一封 / 上一封'], ['/', '搜索'],
+  ['G 然后 T / W / I / U / S', '前往 今日待办 / 等待 / 收件箱 / 未读 / 星标'], ['Ctrl + K', '搜索邮件与命令'], ['Ctrl + Enter', '发送邮件'], ['Ctrl + S', '保存草稿'], ['Esc', '关闭阅读 / 最小化写信窗口'], ['?', '显示快捷键'],
+];
+
+const FOLLOW_UP_AI = '礼貌地跟进这封邮件：询问对方是否已查看、有无疑问，并推动下一步（如确认订单细节或安排样品），保持简短';
+function followUpBody(person, signature) {
+  const first = String(person?.name || '').split(/\s+/)[0] || 'there';
+  return `<div>Hi ${first},</div><div><br></div><div>Just following up on my email below — have you had a chance to review it? I'm happy to answer any questions or adjust the details if needed.</div><div><br></div><div>Looking forward to hearing from you.</div><br>${signatureHtml(signature)}`;
 }
 
 function loadView() {
@@ -64,7 +79,6 @@ export default function App() {
   const [boot, setBoot] = useState('loading');
   const [user, setUser] = useState(null);
   const [ai, setAi] = useState(false);
-  const [aiMeta, setAiMeta] = useState(null);
   const [mailboxes, setMailboxes] = useState([]);
   const [folders, setFolders] = useState({});
   const [counts, setCounts] = useState({ unifiedUnread: 0, snoozed: 0, scheduled: 0 });
@@ -92,7 +106,6 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [outboxVersion, setOutboxVersion] = useState(0);
-  const [dealsVersion, setDealsVersion] = useState(0);
   const [focusData, setFocusData] = useState(null);
   const [groupMode, setGroupModeState] = useState(() => localStorage.getItem('zm_group') || 'priority');
   const [aiBusy, setAiBusy] = useState(false);
@@ -191,14 +204,9 @@ export default function App() {
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
 
   useEffect(() => {
-    const onResize = () => setViewportW(window.visualViewport?.width || window.innerWidth);
-    onResize();
+    const onResize = () => setViewportW(window.innerWidth);
     window.addEventListener('resize', onResize);
-    window.visualViewport?.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      window.visualViewport?.removeEventListener('resize', onResize);
-    };
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   // 从用户设置恢复布局（与 localStorage 双写，设置优先）
@@ -235,17 +243,25 @@ export default function App() {
     }
   }, [applyState]);
 
-  function setView(v) {
-    setViewState(v);
-    localStorage.setItem('zm_view', JSON.stringify(v));
-    setSelectedId(null);
-    setChecked(new Set());
-    setCategory('all');
-    setQ('');
-    setDeep(false);
-  }
-
-  useAppBoot({ applyState, setUser, setAi, setAiMeta, setBoot, setQ, setViewState: setView, notify });
+  useEffect(() => {
+    api('/me' + qs({ dayStart: dayStart() }))
+      .then((d) => {
+        setUser(d.user);
+        setAi(d.ai);
+        applyState(d);
+        // 恢复智能文件夹视图时同步查询串
+        try {
+          const v = JSON.parse(localStorage.getItem('zm_view') || 'null');
+          if (v?.box === 'smart' && v.smartId && d.savedSearches?.length) {
+            const ss = d.savedSearches.find((x) => Number(x.id) === Number(v.smartId));
+            if (ss) setQ(ss.query);
+            else setViewState(DEFAULT_VIEW);
+          }
+        } catch { /* ignore */ }
+        setBoot('ready');
+      })
+      .catch(() => setBoot('auth'));
+  }, [applyState]);
 
   // 视图引用的邮箱/文件夹不存在时回到默认视图
   useEffect(() => {
@@ -264,28 +280,20 @@ export default function App() {
       .catch(() => {});
   }, [boot]);
 
-  /** 通知点达：切换视图时保留目标邮件选中 */
-  const openMessage = useCallback((id, { box = 'today', mailboxId = 'all' } = {}) => {
-    if (!id) return;
-    const next = { mailboxId, box };
-    setViewState(next);
-    localStorage.setItem('zm_view', JSON.stringify(next));
+  function setView(v) {
+    setViewState(v);
+    localStorage.setItem('zm_view', JSON.stringify(v));
+    setSelectedId(null);
     setChecked(new Set());
     setCategory('all');
     setQ('');
     setDeep(false);
-    setSelectedId(id);
-    setSidebarOpen(false);
-  }, []);
-
-  const goToday = useCallback(() => {
-    setView({ mailboxId: 'all', box: 'today' });
-  }, []);
+  }
 
   // ---------- 列表 ----------
   const loadList = useCallback(
     async ({ append = false, silent = false } = {}) => {
-        if (view.box === 'scheduled' || view.box === 'deals' || view.box === 'team' || view.box === 'insights') return;
+      if (view.box === 'scheduled') return;
       if (view.box === 'today' || view.box === 'waiting') {
         if (append) return;
         const id = ++reqId.current;
@@ -383,69 +391,11 @@ export default function App() {
     try {
       const { notes } = await api('/ai/triage', { method: 'POST', body: { ids, force: true } });
       setList((l) => ({ ...l, messages: l.messages.map((m) => (notes[m.id] ? { ...m, aiNote: notes[m.id] } : m)) }));
-      notify('AI 已给出建议与可执行动作', 'success');
+      notify('AI 已为每封邮件给出行动建议', 'success');
     } catch (e) {
       notify(e.message, 'error');
     } finally {
       setAiBusy(false);
-    }
-  }
-
-  const [aiActionBusy, setAiActionBusy] = useState(false);
-  async function runAiAction(m, action) {
-    if (!m?.id || !action?.type || aiActionBusy) return;
-    setAiActionBusy(true);
-    try {
-      const addr = m.from?.address;
-      if (action.type === 'claim') {
-        await api('/deals/claim', { method: 'POST', body: { address: addr, threadId: m.threadId, messageId: m.id } });
-        notify('已认领，将抬升今日待办排序', 'success');
-      } else if (action.type === 'stage') {
-        let deal = m.deal;
-        if (!deal?.id) {
-          const r = await api('/deals/claim', { method: 'POST', body: { address: addr, threadId: m.threadId, messageId: m.id } });
-          deal = r.deal;
-        }
-        if (!deal?.id) throw new Error('无法推进阶段：缺少客户认领');
-        if (!deal.mine && user.role !== 'admin') throw new Error('同事已认领，无法改阶段');
-        await api(`/deals/${deal.id}`, { method: 'PATCH', body: { stage: action.stage, messageId: m.id } });
-        notify(`已推进到「${action.label || action.stage}」`, 'success');
-      } else if (action.type === 'snooze') {
-        const hours = Number(action.hours) || 4;
-        await doAction([m.id], 'snooze', { until: Date.now() + hours * 3600_000 });
-        notify(`已稍后 ${hours} 小时`, 'success');
-        setAiActionBusy(false);
-        return;
-      } else if (action.type === 'done') {
-        await doAction([m.id], 'done');
-        setAiActionBusy(false);
-        return;
-      } else if (action.type === 'reply') {
-        const d = await api(`/messages/${m.id}?markSeen=0`);
-        openCompose('reply', d, {
-          aiInstruction: action.instruction || m.aiNote?.note || '根据邮件内容给出合适回复',
-        });
-        setAiActionBusy(false);
-        return;
-      } else if (action.type === 'followup') {
-        const d = await api(`/messages/${m.id}?markSeen=0`);
-        const stage = m.deal?.stage || d.deal?.stage;
-        openCompose(
-          'reply',
-          d,
-          ai
-            ? { aiInstruction: action.instruction || followUpAiForStage(stage) }
-            : { body: followUpBodyForStage(m.follow?.to || m.from, signatureHtml(mailboxMap[d.mailboxId]?.signature), stage) }
-        );
-        setAiActionBusy(false);
-        return;
-      }
-      loadList({ silent: true });
-      loadState();
-    } catch (e) {
-      notify(e.message || '操作失败', 'error');
-    } finally {
-      setAiActionBusy(false);
     }
   }
 
@@ -458,23 +408,80 @@ export default function App() {
       loadList({ silent: true });
     }, 600);
   }, [loadState, loadList]);
+  const scheduleRef = useRef(scheduleRefresh);
+  scheduleRef.current = scheduleRefresh;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const mbRef = useRef(mailboxMap);
   mbRef.current = mailboxMap;
+  const setViewRef = useRef();
+  setViewRef.current = setView;
 
-  useRealtimeMail({
-    boot,
-    notify,
-    scheduleRefresh,
-    settingsRef,
-    mbRef,
-    setMailboxes,
-    setOutboxVersion,
-    openMessage,
-    goToday,
-    goBox: (box) => setView({ mailboxId: 'all', box }),
-  });
+  useEffect(() => {
+    if (boot !== 'ready') return;
+    const es = new EventSource('/api/events');
+    const parse = (e) => {
+      try {
+        return JSON.parse(e.data);
+      } catch {
+        return {};
+      }
+    };
+    es.addEventListener('sync', () => scheduleRef.current());
+    es.addEventListener('mailbox', (e) => {
+      const d = parse(e);
+      setMailboxes((list) => list.map((m) => (m.id === d.id ? { ...m, status: d.status, lastError: d.error || null, lastSync: d.status === 'ok' ? Date.now() : m.lastSync } : m)));
+      if (d.status === 'ok') scheduleRef.current();
+    });
+    es.addEventListener('new', (e) => {
+      const d = parse(e);
+      const mb = mbRef.current[d.mailboxId];
+      const first = d.items?.[0];
+      const important = !d.snooze && first?.important;
+      const text = d.snooze
+        ? `稍后提醒：${first?.subject || ''}`
+        : important
+          ? `${first.label}来信 · ${displayName(first.from)}：${first.subject || '(无主题)'}${d.count > 1 ? `（另有 ${d.count - 1} 封）` : ''}`
+          : d.count > 1
+            ? `${mb?.email || ''} 收到 ${d.count} 封新邮件`
+            : `${displayName(first?.from)}：${first?.subject || '(无主题)'}`;
+      notify(text, important ? 'important' : 'info', first ? { label: '查看', fn: () => setSelectedId(first.id) } : null, important ? 10_000 : 6000);
+      if (settingsRef.current.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        const n = new Notification(d.snooze ? '稍后提醒' : important ? `重要 · ${first.label}来信` : `新邮件 · ${mb?.email || ''}`, { body: text, tag: 'zm-' + d.mailboxId, icon: '/favicon-180.png' });
+        n.onclick = () => {
+          window.focus();
+          if (first) setSelectedId(first.id);
+        };
+      }
+      scheduleRef.current();
+    });
+    es.addEventListener('remind', (e) => {
+      const d = parse(e);
+      const first = d.items?.[0];
+      const escalate = !!d.escalate;
+      const text =
+        d.count > 1
+          ? `${escalate ? '再次提醒：' : ''}有 ${d.count} 封客户邮件已超过回复时限，最早的来自 ${displayName(first?.from)}`
+          : `${escalate ? '再次提醒 · ' : ''}${displayName(first?.from)} 的邮件已超过回复时限：${first?.subject || ''}`;
+      notify(text, 'important', { label: '去处理', fn: () => setViewRef.current({ mailboxId: 'all', box: 'today' }) }, 15_000);
+      if (settingsRef.current.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        const n = new Notification(escalate ? '超时升级提醒' : '客户邮件待回复', { body: text, tag: 'zm-remind', icon: '/favicon-180.png' });
+        n.onclick = () => {
+          window.focus();
+          setViewRef.current({ mailboxId: 'all', box: 'today' });
+        };
+      }
+      scheduleRef.current();
+    });
+    es.addEventListener('outbox', (e) => {
+      const d = parse(e);
+      if (d.status === 'sent') notify('邮件已发送 ✓', 'success');
+      if (d.status === 'failed') notify(`发送失败：${d.error}（可在「定时发送」中重试）`, 'error', null, 10_000);
+      setOutboxVersion((v) => v + 1);
+      scheduleRef.current();
+    });
+    return () => es.close();
+  }, [boot, notify]);
 
   // ---------- 邮件操作 ----------
   function nextAfter(ids) {
@@ -505,27 +512,6 @@ export default function App() {
           setSelectedId(next && window.innerWidth > 900 ? next.id : null);
         }
         setList((l) => ({ ...l, messages: l.messages.filter((m) => !ids.includes(m.id)), pinned: l.pinned.filter((m) => !ids.includes(m.id)) }));
-        if ((view.box === 'today' || view.box === 'waiting') && (action === 'done' || action === 'nofollow')) {
-          const idSet = new Set(ids);
-          setFocusData((d) => {
-            if (!d) return d;
-            const wasReply = (d.reply || []).filter((m) => idSet.has(m.id)).length;
-            const wasFollow = (d.followups || []).filter((m) => idSet.has(m.id)).length;
-            return {
-              ...d,
-              reply: (d.reply || []).filter((m) => !idSet.has(m.id)),
-              followups: (d.followups || []).filter((m) => !idSet.has(m.id)),
-              stats: d.stats
-                ? {
-                    ...d.stats,
-                    needReply: Math.max(0, (d.stats.needReply || 0) - wasReply),
-                    followups: Math.max(0, (d.stats.followups || 0) - wasFollow),
-                    handledToday: (d.stats.handledToday || 0) + (action === 'done' ? wasReply : 0),
-                  }
-                : d.stats,
-            };
-          });
-        }
       } else {
         const patch = {
           read: { seen: true }, unread: { seen: false }, flag: { flagged: true }, unflag: { flagged: false }, pin: { pinned: true }, unpin: { pinned: false },
@@ -564,18 +550,6 @@ export default function App() {
           notify(text, 'info', { label: '撤销', fn: () => doAction(ids, 'restore', { origins }) }, 7000);
         } else if (text) notify(text);
         if (action === 'restore' || action === 'undone' || action === 'follow') notify('已撤销');
-        if (res.followRolled?.length) {
-          const f = res.followRolled[0];
-          const when = f.nextFollowAt ? formatShortDateTime(f.nextFollowAt) : '';
-          notify(
-            res.followRolled.length > 1
-              ? `已滚动 ${res.followRolled.length} 个客户的下次跟进日`
-              : `下次跟进已滚到 ${when}${f.scopeLabel ? ` · ${f.scopeLabel}` : ''}`,
-            'success',
-            null,
-            7000
-          );
-        }
         loadState();
         if (view.box === 'today' || view.box === 'waiting' || ['restore', 'unsnooze', 'pin', 'unpin'].includes(action)) loadList({ silent: true });
       } catch (e) {
@@ -736,74 +710,16 @@ export default function App() {
 
   function openCompose(mode = 'new', msg = null, extra = {}) {
     if (mode !== 'new' && !msg) return;
-    if (!mailboxes.length) {
-      notify(
-        user?.role === 'admin' ? '请先绑定邮箱后再写信' : '请先绑定邮箱',
-        'info',
-        { label: '去绑定', fn: () => setModal({ type: 'add' }) },
-        6000
-      );
-      return;
-    }
     pushComposer(buildComposeState(mode, msg, composeCtx, extra));
   }
-
-  /* 服务号菜单深链：?compose=1 → 打开写信 */
-  useEffect(() => {
-    if (boot !== 'ready' || !user) return;
-    try {
-      const sp = new URLSearchParams(window.location.search);
-      if (sp.get('compose') !== '1') return;
-      window.history.replaceState({}, '', window.location.pathname);
-      openCompose();
-    } catch {
-      /* ignore */
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首屏 ready 时读一次 URL
-  }, [boot, user?.id]);
 
   async function followUp(m) {
     try {
       const d = await api(`/messages/${m.id}?markSeen=0`);
       const mb = mailboxMap[d.mailboxId];
-      const stage = m.deal?.stage || d.deal?.stage;
-      openCompose(
-        'reply',
-        d,
-        ai
-          ? { aiInstruction: followUpAiForStage(stage) }
-          : { body: followUpBodyForStage(m.follow?.to, signatureHtml(mb?.signature), stage) }
-      );
+      openCompose('reply', d, ai ? { aiInstruction: FOLLOW_UP_AI } : { body: followUpBody(m.follow?.to, mb?.signature) });
     } catch (e) {
       notify(e.message, 'error');
-    }
-  }
-
-  function handleDealMeta(meta) {
-    if (!meta) return;
-    if (meta.conflict && meta.deal) {
-      notify(`${meta.deal.owner?.name || '同事'} 已认领 ${meta.deal.scopeLabel}，请先沟通再跟进`, 'error', null, 7000);
-      return;
-    }
-    if (meta.claimed && meta.deal) {
-      notify(`已自动认领 ${meta.deal.scopeLabel}`, 'success');
-    }
-    if (meta.stageSuggest && meta.deal?.mine) {
-      const sug = meta.stageSuggest;
-      const dealId = meta.deal.id;
-      notify(`要推进到「${sug.label}」吗？`, 'info', {
-        label: '推进',
-        fn: async () => {
-          try {
-            const r = await api(`/deals/${dealId}`, { method: 'PATCH', body: { stage: sug.stage } });
-            notify(`阶段已更新为 ${r.deal.stageLabel}`, 'success');
-            if (view.box === 'today' || view.box === 'waiting') loadList({ silent: true });
-            setDealsVersion((v) => v + 1);
-          } catch (e) {
-            notify(e.message, 'error');
-          }
-        },
-      }, 10000);
     }
   }
 
@@ -834,35 +750,17 @@ export default function App() {
         const ms = Math.max(1500, res.sendAt - Date.now());
         const id = notify('正在发送…', 'info', { label: '撤销', fn: () => { dismiss(id); reopen(); } }, ms);
       }
-      handleDealMeta(res.dealMeta);
       if (payload.replyTo?.id) {
         const rid = payload.replyTo.id;
         setList((l) => ({
           ...l,
           messages:
-            view.box === 'today' || view.box === 'waiting'
+            view.box === 'today'
               ? l.messages.filter((m) => m.id !== rid)
               : l.messages.map((m) => (m.id === rid ? { ...m, answered: true, awaiting: false, overdue: false } : m)),
         }));
-        setFocusData((d) => {
-          if (!d) return d;
-          return {
-            ...d,
-            reply: (d.reply || []).filter((m) => m.id !== rid),
-            stats: d.stats
-              ? {
-                  ...d.stats,
-                  needReply: Math.max(0, (d.stats.needReply || 0) - 1),
-                  handledToday: (d.stats.handledToday || 0) + 1,
-                }
-              : d.stats,
-          };
-        });
       }
       loadState();
-      // 发信后尽快拉 Sent / 刷新 Focus，缩短「已回仍待办」窗口
-      setTimeout(() => loadList({ silent: true }), 800);
-      setTimeout(() => loadList({ silent: true }), 2800);
       setOutboxVersion((v) => v + 1);
       return true;
     } catch (e) {
@@ -936,14 +834,6 @@ export default function App() {
     try {
       const r = await api('/me/settings', { method: 'PUT', body: patch });
       setUser((u) => ({ ...u, settings: r.settings }));
-      if ('aiCloudOk' in patch) {
-        api('/me' + qs({ dayStart: dayStart() }))
-          .then((d) => {
-            setAi(!!d.ai);
-            if (d.aiMeta) setAiMeta(d.aiMeta);
-          })
-          .catch(() => {});
-      }
       if ('replySlaHours' in patch || 'followupDays' in patch) {
         loadState();
         if (view.box === 'today' || view.box === 'waiting') loadList({ silent: true });
@@ -1007,12 +897,11 @@ export default function App() {
     setBoot('auth');
   }
 
-  async function onAuthed(u, meta) {
+  async function onAuthed(u) {
     setUser(u);
     try {
       const d = await api('/me');
       setAi(d.ai);
-      if (d.aiMeta) setAiMeta(d.aiMeta);
       applyState(d);
     } catch {
       // ignore
@@ -1020,17 +909,6 @@ export default function App() {
     // 登录后默认进入今日待办作战台
     setView(DEFAULT_VIEW);
     setBoot('ready');
-    if (meta?.via === 'recovery') {
-      const left = meta.recoveryLeft;
-      notify(
-        left != null
-          ? `已用备用码登录，还剩 ${left} 条。建议尽快在设置中重新生成`
-          : '已用备用码登录，建议尽快在设置中重新生成备用码',
-        'info',
-        null,
-        8000
-      );
-    }
   }
 
   async function onMailboxBound(res) {
@@ -1086,7 +964,7 @@ export default function App() {
       const item = s.selectedItem || s.currentMsg;
       if (gPending.current && Date.now() - gPending.current < 1500) {
         gPending.current = 0;
-        const target = { t: 'today', w: 'waiting', i: 'inbox', u: 'unread', s: 'flagged', d: 'deals', a: 'insights' }[e.key];
+        const target = { t: 'today', w: 'waiting', i: 'inbox', u: 'unread', s: 'flagged' }[e.key];
         if (target) {
           e.preventDefault();
           setView({ mailboxId: 'all', box: target });
@@ -1146,8 +1024,8 @@ export default function App() {
   }
   if (boot === 'auth' || !user) return <Auth onAuthed={onAuthed} />;
 
-  // 管理员 / 测试账号免绑定：登录即进主界面（管理员可先管团队，稍后再绑邮箱）
-  if (!mailboxes.length && user.role !== 'tester' && user.role !== 'admin') {
+  // 测试账号免绑定：登录即进入，内置演示邮件
+  if (!mailboxes.length && user.role !== 'tester') {
     return (
       <div className="login-page onboarding">
         <div className="login-hero">
@@ -1291,14 +1169,7 @@ export default function App() {
           {syncBad.length ? (
             <>
               <AlertCircle size={14} />
-              <span title={syncBad[0]?.lastError || ''}>
-                {syncBad.length === 1
-                  ? `${syncBad[0].email} 同步失败${syncBad[0].lastError ? `：${String(syncBad[0].lastError).slice(0, 48)}` : ''}`
-                  : `${syncBad.length} 个邮箱同步失败`}
-              </span>
-              <button type="button" className="mb-sync-link" onClick={() => refresh()} disabled={refreshing}>
-                {refreshing ? '同步中…' : '重试同步'}
-              </button>
+              <span>{syncBad.length === 1 ? `${syncBad[0].email} 同步失败` : `${syncBad.length} 个邮箱同步失败`}</span>
               <button type="button" className="mb-sync-link" onClick={() => setModal({ type: 'settings', tab: 'mailboxes', mb: syncBad[0]?.id })}>去设置</button>
             </>
           ) : (
@@ -1310,14 +1181,7 @@ export default function App() {
         </div>
       ) : null}
 
-      {user.role === 'admin' && !mailboxes.length && ['today', 'waiting', 'inbox', 'unread', 'flagged', 'sent', 'deals', 'team', 'insights'].includes(view.box) ? (
-        <AdminEmpty
-          user={user}
-          onAddMailbox={() => setModal({ type: 'add' })}
-          onOpenTeam={() => setModal({ type: 'settings', tab: 'team' })}
-          onOpenSettings={() => setModal({ type: 'settings', tab: 'preferences' })}
-        />
-      ) : view.box === 'scheduled' ? (
+      {view.box === 'scheduled' ? (
         <Outbox
           mailboxMap={mailboxMap}
           onMenu={() => setSidebarOpen(true)}
@@ -1349,9 +1213,6 @@ export default function App() {
           checked={checked}
           setChecked={setChecked}
           salesDensity={layoutMode === 'sales'}
-          notify={notify}
-          onAiAction={runAiAction}
-          aiActionBusy={aiActionBusy}
         />
       ) : view.box === 'waiting' ? (
         <Waiting
@@ -1369,31 +1230,7 @@ export default function App() {
           onMenu={() => setSidebarOpen(true)}
           tab={waitingTab}
           setTab={setWaitingTab}
-          notify={notify}
-          checked={checked}
-          setChecked={setChecked}
         />
-      ) : view.box === 'team' ? (
-        <TeamQueue
-          onMenu={() => setSidebarOpen(true)}
-          notify={notify}
-          isAdmin={user.role === 'admin'}
-          onOpenMessage={(id) => openMessage(id, { box: 'inbox' })}
-          onGoToday={() => setView({ mailboxId: 'all', box: 'today' })}
-          onOpenInToday={(id) => openMessage(id, { box: 'today' })}
-          onComposeOutreach={(hint) => openCompose('new', null, hint || {})}
-        />
-      ) : view.box === 'deals' ? (
-        <Deals
-          key={dealsVersion}
-          onMenu={() => setSidebarOpen(true)}
-          notify={notify}
-          onOpenDeal={(d) => {
-            if (d.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
-          }}
-        />
-      ) : view.box === 'insights' ? (
-        <Insights onMenu={() => setSidebarOpen(true)} isAdmin={user.role === 'admin'} />
       ) : (
         <MailList
           title={title}
@@ -1451,7 +1288,6 @@ export default function App() {
           listItem={selectedItem}
           settings={settings}
           aiEnabled={ai}
-          aiMeta={aiMeta}
           dark={dark}
           mailboxMap={mailboxMap}
           folders={folders}
@@ -1538,7 +1374,6 @@ export default function App() {
             initial={c.initial}
             mailboxes={mailboxes}
             aiEnabled={ai}
-            aiMeta={aiMeta}
             stacked={composers.length > 1 && i < composers.length - 1}
             onSend={(payload, files, state) => sendMail(payload, files, state, c.key)}
             onSaveDraft={saveDraft}
@@ -1575,8 +1410,6 @@ export default function App() {
           onAddMailbox={() => setModal({ type: 'add' })}
           onLogout={logout}
           aiEnabled={ai}
-          aiMeta={aiMeta}
-          onAiCloudChange={(ok) => setAi(!!(aiMeta?.configured && ok))}
           onLabelsChanged={(list) => setLabels(list || [])}
         />
       )}
@@ -1633,35 +1466,49 @@ export default function App() {
         onSnooze={() => { setPalette(false); selectedId && doAction([selectedId], 'snooze', { until: snoozePresets()[1].at }); }}
       />
 
-      <nav className="zm-mob-nav" aria-label="ZITO 智能邮箱导航">
+      <nav className="zm-mob-nav" aria-label="移动主导航">
         <button
           type="button"
           className={view.box === 'today' ? 'on' : ''}
-          aria-current={view.box === 'today' ? 'page' : undefined}
-          aria-label="工作台"
+          aria-label="今日待办"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'today' }); setSidebarOpen(false); }}
         >
-          <ListTodo size={20} strokeWidth={1.75} aria-hidden />
-          <span>工作台</span>
+          <ListTodo size={20} strokeWidth={1.75} />
+          <span>待办</span>
         </button>
         <button
           type="button"
-          className={view.box === 'inbox' || view.box === 'unread' || view.box === 'flagged' || view.box === 'sent' ? 'on' : ''}
-          aria-current={view.box === 'inbox' ? 'page' : undefined}
-          aria-label="邮箱"
+          className={view.box === 'inbox' ? 'on' : ''}
+          aria-label="收件箱"
           onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'inbox' }); setSidebarOpen(false); }}
         >
-          <Inbox size={20} strokeWidth={1.75} aria-hidden />
-          <span>邮箱</span>
+          <Inbox size={20} strokeWidth={1.75} />
+          <span>收件</span>
         </button>
         <button
           type="button"
-          className={sidebarOpen || !['today', 'inbox', 'unread', 'flagged', 'sent'].includes(view.box) ? 'on' : ''}
-          aria-label="更多"
-          aria-expanded={sidebarOpen}
-          onClick={() => setSidebarOpen((o) => !o)}
+          className={view.box === 'waiting' ? 'on' : ''}
+          aria-label="等待"
+          onClick={() => { setSelectedId(null); setView({ mailboxId: 'all', box: 'waiting' }); setSidebarOpen(false); }}
         >
-          <Menu size={20} strokeWidth={1.75} aria-hidden />
+          <Hourglass size={20} strokeWidth={1.75} />
+          <span>等待</span>
+        </button>
+        <button
+          type="button"
+          className="zm-mob-compose"
+          aria-label="写邮件"
+          onClick={() => { setSidebarOpen(false); openCompose(); }}
+        >
+          <PenSquare size={20} strokeWidth={1.75} />
+          <span>写信</span>
+        </button>
+        <button
+          type="button"
+          aria-label="更多"
+          onClick={() => setSidebarOpen(true)}
+        >
+          <Menu size={20} strokeWidth={1.75} />
           <span>更多</span>
         </button>
       </nav>

@@ -1,10 +1,10 @@
-import React, { Component, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Star, Mail, Sparkles, Languages, Paperclip, Download, ArrowLeft, Loader2,
   AlertTriangle, CheckCircle2, ListChecks, FolderInput, Eye, Clock, Pin, ShieldAlert, ShieldCheck, MoreHorizontal, ImageOff,
-  BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass, Tag, Users,
+  BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass, Tag,
 } from 'lucide-react';
-import { api, qs } from '../api.js';
+import { api } from '../api.js';
 import {
   addrString, avatarColor, detectMailLang, displayName, folderLabel, formatFullDate, formatListDate, formatSize, hasRemoteImages, initials,
   mostlyChinese, normalizeTranslateTarget, relativeTime, replyIdeas, smartReplyInstruction, snoozePresets, sortFolders,
@@ -15,74 +15,9 @@ import MailFrame from './MailFrame.jsx';
 import { BrandSymbol } from './Brand.jsx';
 import TimeMenu from './TimeMenu.jsx';
 import LabelMenu from './LabelMenu.jsx';
-import DealBar from './DealBar.jsx';
 
 const URGENCY = { high: ['紧急', 'high'], medium: ['一般', 'medium'], low: ['不急', 'low'] };
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
-
-/** 读信正文崩溃时不拖垮整栏 */
-class BodyGuard extends Component {
-  constructor(props) {
-    super(props);
-    this.state = { err: null };
-  }
-  static getDerivedStateFromError(err) {
-    return { err };
-  }
-  componentDidCatch(err) {
-    console.error('[reader-body]', err);
-  }
-  render() {
-    if (this.state.err) {
-      return (
-        <div className="list-error" role="alert">
-          正文渲染出错：{this.state.err.message || '未知错误'}
-          <button type="button" className="link-btn" style={{ marginLeft: 8 }} onClick={() => this.setState({ err: null })}>
-            重试
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-function ConflictBanner({ conflict }) {
-  if (!conflict?.colleagues?.length) return null;
-  const high = conflict.severity === 'high';
-  return (
-    <div className={'conflict-banner' + (high ? ' high' : '')} role="status">
-      <Users size={14} />
-      <div className="conflict-banner-text">
-        <b>{high ? '可能重复跟进' : '团队往来提示'}</b>
-        <span>{conflict.headline}</span>
-        <span className="conflict-peers">
-          {conflict.colleagues.slice(0, 3).map((c) => (
-            <span key={c.userId} className={'conflict-peer level-' + c.level} title={c.email}>
-              {c.name} · {c.summary}
-            </span>
-          ))}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function PresenceBanner({ viewers }) {
-  if (!viewers?.length) return null;
-  const names = viewers.slice(0, 3).map((v) => v.name || '同事').join('、');
-  const more = viewers.length > 3 ? ` 等 ${viewers.length} 人` : '';
-  return (
-    <div className="presence-banner" role="status">
-      <Eye size={14} />
-      <span>
-        <b>{names}</b>
-        {more}
-        正在看这封邮件
-      </span>
-    </div>
-  );
-}
 
 function RelationCard({ info, onRule, slaHours, onOpenCustomer }) {
   if (!info || info.tier === 'self' || info.tier === 'bulk') return null;
@@ -185,7 +120,7 @@ function Attachments({ msg }) {
   );
 }
 
-function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer, onNotify, onDealChange, viewers }) {
+function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer }) {
   const [allowImages, setAllowImages] = useState(false);
   const loading = expanded && !detail;
   const isDraft = item.specialUse === '\\Drafts';
@@ -235,23 +170,6 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
           {mailbox && <div className="meta-mb"><span className="mb-dot" style={{ background: mailbox.color }} />{mailbox.email}</div>}
         </div>
       </div>
-      {m && primary && <PresenceBanner viewers={viewers} />}
-      {m && primary && <ConflictBanner conflict={m.conflict} />}
-      {m && primary && (
-        <DealBar
-          deal={m.deal}
-          scope={m.dealScope}
-          scopes={m.dealScopes}
-          stages={m.dealStages}
-          address={item.from?.address}
-          threadId={item.threadId || m.threadId}
-          messageId={item.id}
-          canSplitDeal={m.canSplitDeal}
-          canClaimPerson={m.canClaimPerson}
-          notify={onNotify}
-          onChange={(deal) => onDealChange?.(item.id, deal)}
-        />
-      )}
       {m && primary && <RelationCard info={m.sender && { ...m.sender, address: item.from?.address }} onRule={onRule} slaHours={slaHours} onOpenCustomer={onOpenCustomer} />}
 
       {loading && <div className="reader-loading sm"><Loader2 size={16} className="spin" /> 正在加载…</div>}
@@ -267,16 +185,14 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
               <button className="link-btn" onClick={() => setAllowImages(true)}>显示图片</button>
             </div>
           )}
-          <BodyGuard>
-            {isDraft ? (
-              <div className="draft-box">
-                <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} />
-                <button className="btn-ghost sm" onClick={() => onCompose('draft', m)}><FileText size={14} /> 继续编辑草稿</button>
-              </div>
-            ) : (
-              <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} collapseQuotes />
-            )}
-          </BodyGuard>
+          {isDraft ? (
+            <div className="draft-box">
+              <MailFrame html={m.html} text={m.text} dark={dark} allowImages={showImages} />
+              <button className="btn-ghost sm" onClick={() => onCompose('draft', m)}><FileText size={14} /> 继续编辑草稿</button>
+            </div>
+          ) : (
+            <MailFrame html={m.html} text={m.text} dark={dark} allowImages={showImages} collapseQuotes />
+          )}
           <Attachments msg={m} />
           {!isLast && !isDraft && (
             <div className="card-actions">
@@ -291,7 +207,7 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
 }
 
 export default function Reader({
-  id, listItem, settings, aiEnabled, aiMeta, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp, onAiNote,
+  id, listItem, settings, aiEnabled, dark, mailboxMap, folders, composeCtx, onCompose, onAction, onSend, onBack, notify, onLoaded, onFollowUp, onAiNote,
   onOpenCustomer, onOpenSettings, labels = [], onToggleLabels, onCreateLabel,
 }) {
   const [thread, setThread] = useState(null);
@@ -299,11 +215,9 @@ export default function Reader({
   const [expanded, setExpanded] = useState(() => new Set());
   const [summary, setSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState('');
   const [translated, setTranslated] = useState(null);
   const [showTranslated, setShowTranslated] = useState(false);
   const [translating, setTranslating] = useState(false);
-  const [translateError, setTranslateError] = useState('');
   const [lastTranslateTarget, setLastTranslateTarget] = useState(null);
   const [menu, setMenu] = useState(null);
   const [quick, setQuick] = useState('');
@@ -311,8 +225,6 @@ export default function Reader({
   const [pinning, setPinning] = useState(false);
   const [intel, setIntel] = useState(null); // 'summary' | 'translate' | null
   const [translateLayout, setTranslateLayout] = useState(() => localStorage.getItem('zm_translate_layout') || 'split');
-  const [focusExplain, setFocusExplain] = useState(null);
-  const [viewers, setViewers] = useState([]);
   const alive = useRef(0);
   const scroller = useRef();
 
@@ -320,21 +232,9 @@ export default function Reader({
   const base = msg || listItem;
   const displayLabels = (listItem?.labels || base?.labels || []);
 
-  function loadDetail(mid, token, { markSeen = false } = {}) {
+  function loadDetail(mid, token) {
     return api(`/messages/${mid}`)
-      .then((d) => {
-        if (token !== alive.current) return;
-        setDetails((s) => ({ ...s, [mid]: d }));
-        // 读信标已读走 POST，避免 GET 链接诱导
-        if (markSeen && !d.seen) {
-          api(`/messages/${mid}/seen`, { method: 'POST', body: {} })
-            .then(() => {
-              if (token !== alive.current) return;
-              setDetails((s) => (s[mid] ? { ...s, [mid]: { ...s[mid], seen: true } } : s));
-            })
-            .catch(() => {});
-        }
-      })
+      .then((d) => token === alive.current && setDetails((s) => ({ ...s, [mid]: d })))
       .catch((e) => token === alive.current && setDetails((s) => ({ ...s, [mid]: { error: e.message } })));
   }
 
@@ -344,34 +244,17 @@ export default function Reader({
     setThread(null);
     setDetails({});
     setSummary(null);
-    setSummaryError('');
     setTranslated(null);
     setShowTranslated(false);
-    setTranslateError('');
     setLastTranslateTarget(null);
     setMenu(null);
     setQuick('');
     setPinning(false);
     setIntel(null);
-    setFocusExplain(null);
-    setViewers([]);
     setExpanded(new Set([id]));
     scroller.current?.scrollTo(0, 0);
 
-    loadDetail(id, token, { markSeen: true });
-
-    // 读信验真：已在今日待办/等待则用列表 why；否则问后端为何未进
-    if (listItem?._section === 'reply' || listItem?._section === 'follow') {
-      setFocusExplain({
-        inFocus: true,
-        section: listItem._section,
-        why: listItem.priority?.why || listItem.follow?.why || '',
-      });
-    } else {
-      api('/focus/explain' + qs({ id }))
-        .then((d) => token === alive.current && setFocusExplain(d))
-        .catch(() => {});
-    }
+    loadDetail(id, token);
     if (settings.conversationView !== false) {
       api(`/messages/${id}/thread`)
         .then(({ messages }) => {
@@ -382,31 +265,10 @@ export default function Reader({
           if (last) open.add(last.id);
           messages.forEach((m) => !m.seen && open.add(m.id));
           setExpanded(open);
-          open.forEach((mid) => mid !== id && loadDetail(mid, token, { markSeen: false }));
+          open.forEach((mid) => mid !== id && loadDetail(mid, token));
         })
         .catch(() => {});
     }
-
-    const beat = () => {
-      api('/presence/touch', { method: 'POST', body: { messageId: id, threadId: listItem?.threadId || null } })
-        .then((r) => {
-          if (token === alive.current) setViewers(r.viewers || []);
-        })
-        .catch(() => {});
-    };
-    beat();
-    const iv = setInterval(beat, 40_000);
-    const onPresence = (e) => {
-      const d = e.detail;
-      if (!d || Number(d.messageId) !== Number(id)) return;
-      if (token === alive.current) setViewers(d.viewers || []);
-    };
-    window.addEventListener('zm-presence', onPresence);
-    return () => {
-      clearInterval(iv);
-      window.removeEventListener('zm-presence', onPresence);
-      api('/presence/leave', { method: 'POST', body: { messageId: id } }).catch(() => {});
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -437,9 +299,7 @@ export default function Reader({
       setSummary(cached);
       return;
     }
-    if (aiEnabled && settings.autoSummary && !summary && !summaryLoading && !msg.aiNote?.summary) {
-      runSummary({ quiet: true });
-    }
+    if (aiEnabled && settings.autoSummary && !summary && !summaryLoading && !msg.aiNote?.summary) runSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [msg?.id]);
 
@@ -457,15 +317,13 @@ export default function Reader({
     if (el && thread[thread.length - 1].id !== id) el.scrollIntoView({ block: 'start' });
   }, [thread, id]);
 
-  async function runSummary(opts = {}) {
+  async function runSummary() {
     if (!id) return;
     setSummaryLoading(true);
-    setSummaryError('');
     try {
       setSummary(await api('/ai/summarize', { method: 'POST', body: { id } }));
     } catch (e) {
-      setSummaryError(e.message || '摘要失败');
-      if (!opts.quiet) notify(e.message, 'error');
+      notify(e.message, 'error');
     } finally {
       setSummaryLoading(false);
     }
@@ -499,7 +357,6 @@ export default function Reader({
       return;
     }
     setTranslating(true);
-    setTranslateError('');
     try {
       const result = await api('/ai/translate', { method: 'POST', body: { id, target } });
       if (result?.sourceLang && sourceMatchesTarget(result.sourceLang, target)) {
@@ -511,7 +368,6 @@ export default function Reader({
       setLastTranslateTarget(target);
       if (!opts.quiet) setShowTranslated(true);
     } catch (e) {
-      setTranslateError(e.message || '翻译失败');
       if (!opts.quiet) notify(e.message, 'error');
     } finally {
       setTranslating(false);
@@ -783,10 +639,8 @@ export default function Reader({
                     </span>
                   )}
                   <small>
-                    {listItem.priority.why ||
-                      [...(listItem.priority.reasons || []), listItem.priority.slaHours != null ? `时限 ${listItem.priority.slaHours}h` : '']
-                        .filter(Boolean)
-                        .join(' · ')}
+                    {listItem.priority.reasons.join(' · ')}
+                    {listItem.priority.slaHours != null ? ` · 时限 ${listItem.priority.slaHours}h` : ''}
                   </small>
                 </div>
                 <div className="strip-actions">
@@ -800,23 +654,11 @@ export default function Reader({
                 <Send size={15} />
                 <div>
                   <b>{listItem.follow.days} 天前发出，对方未回</b>
-                  <small>
-                    {listItem.follow.why || displayName(listItem.follow.to)}
-                    {listItem.follow.why && listItem.follow.to ? ` · ${displayName(listItem.follow.to)}` : ''}
-                  </small>
+                  <small>{displayName(listItem.follow.to)}</small>
                 </div>
                 <div className="strip-actions">
                   <button type="button" className="btn-ghost sm" onClick={() => act('nofollow')}><BellOff size={13} /> 无需跟进</button>
                   <button type="button" className="btn-primary sm" onClick={() => onFollowUp?.(listItem)}><Reply size={13} /> 写跟进</button>
-                </div>
-              </div>
-            )}
-            {!listItem?._section && focusExplain && !focusExplain.inFocus && (focusExplain.out || []).length > 0 && (
-              <div className="await-strip explain-out" role="status">
-                <Hourglass size={15} />
-                <div>
-                  <b>未进入今日待办 / 等待</b>
-                  <small>{focusExplain.out.slice(0, 4).join(' · ')}</small>
                 </div>
               </div>
             )}
@@ -836,13 +678,7 @@ export default function Reader({
             {!aiEnabled && (
               <div className="ai-off-strip">
                 <Sparkles size={14} />
-                <span>
-                  {aiMeta?.configured === false
-                    ? '智能功能未开通 · 请管理员配置服务器 AI'
-                    : aiMeta?.cloudOk === false
-                      ? '已关闭云端 AI · 翻译与摘要不可用'
-                      : '智能功能暂不可用 · 翻译与摘要已隐藏'}
-                </span>
+                <span>智能功能未开通 · 翻译与摘要暂不可用</span>
                 <button type="button" onClick={() => onOpenSettings?.('preferences')}>去设置</button>
               </div>
             )}
@@ -875,27 +711,6 @@ export default function Reader({
                 </button>
                 <button type="button" className="intel-tab" onClick={() => openSmartReply()} disabled={!msg}>
                   回复
-                </button>
-              </div>
-            )}
-
-            {aiEnabled && summaryError && !summary && (
-              <div className="ai-fail-strip" role="status">
-                <span>摘要失败 · {summaryError}</span>
-                <button type="button" onClick={() => runSummary()} disabled={summaryLoading}>
-                  {summaryLoading ? '重试中…' : '重试'}
-                </button>
-              </div>
-            )}
-            {aiEnabled && translateError && !translated && (
-              <div className="ai-fail-strip" role="status">
-                <span>翻译失败 · {translateError}</span>
-                <button
-                  type="button"
-                  onClick={() => runTranslate(lastTranslateTarget || resolveTranslateTarget())}
-                  disabled={translating}
-                >
-                  {translating ? '重试中…' : '重试'}
                 </button>
               </div>
             )}
@@ -1026,11 +841,6 @@ export default function Reader({
                     mailbox={mailboxMap[it.mailboxId]}
                     slaHours={listItem?.priority?.slaHours}
                     onOpenCustomer={onOpenCustomer}
-                    onNotify={notify}
-                    onDealChange={(mid, deal) => {
-                      setDetails((s) => (s[mid] ? { ...s, [mid]: { ...s[mid], deal } } : s));
-                    }}
-                    viewers={it.id === id ? viewers : undefined}
                   />
                 </div>
               ))}

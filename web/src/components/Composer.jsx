@@ -104,7 +104,7 @@ function RecipientInput({ label, value, onChange, autoFocus, right }) {
   );
 }
 
-export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend, onSaveDraft, onClose, notify, stacked, glossary, onOpenSettings }) {
+export default function Composer({ initial, mailboxes, aiEnabled, onSend, onSaveDraft, onClose, notify, stacked, glossary, onOpenSettings }) {
   const [mailboxId, setMailboxId] = useState(initial.mailboxId || mailboxes[0]?.id);
   const [to, setTo] = useState(initial.to || '');
   const [cc, setCc] = useState(initial.cc || '');
@@ -566,14 +566,7 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
             </div>
           </div>
         ) : (
-          <span className="ai-off-inline">
-            {aiMeta?.cloudOk === false
-              ? '已关闭云端 AI · '
-              : aiMeta?.configured === false
-                ? 'AI 未配置 · '
-                : '智能润色暂不可用 · '}
-            <button type="button" onClick={() => onOpenSettings?.('preferences')}>去设置</button>
-          </span>
+          <span className="ai-off-inline">智能润色暂不可用 · <button type="button" onClick={() => onOpenSettings?.('preferences')}>去设置</button></span>
         )}
         <div className="c-tail">
           <button className="icon-btn" onClick={() => saveDraft(false)} title="保存草稿 (Ctrl+S)" disabled={saving}>

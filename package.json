@@ -6,9 +6,7 @@
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,magenta \"node --watch server/index.js\" \"vite\"",
     "build": "vite build",
-    "start": "node server/index.js",
-    "test": "node scripts/unit-test.mjs",
-    "test:reply": "node scripts/test-expects-reply.mjs"
+    "start": "node server/index.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
@@ -19,11 +17,7 @@
     "libqp": "^2.1.1",
     "mailparser": "^3.7.2",
     "multer": "^2.4.0",
-    "nodemailer": "^6.9.16",
-    "otplib": "^13.5.0",
-    "qrcode": "^1.5.4",
-    "sanitize-html": "^2.18.1",
-    "web-push": "^3.6.7"
+    "nodemailer": "^6.9.16"
   },
   "devDependencies": {
     "@fontsource-variable/instrument-sans": "^5.3.0",

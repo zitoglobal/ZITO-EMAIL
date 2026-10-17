@@ -15,16 +15,15 @@ const FRAME_STYLE = `
 
 const QUOTE_SELECTOR = '.gmail_quote, blockquote[type="cite"], .zm-quote, .zm-forward, #divRplyFwdMsg, #isReplyContent, .yahoo_quoted, #reply-content, .ms-outlook-mobile-reference-message';
 
-/** 把引用部分（以及之后的内容）标记为隐藏，返回是否存在引用；只改 body 片段，勿返回整页 html */
+/** 把引用部分（以及之后的内容）标记为隐藏，返回是否存在引用 */
 function markQuotes(html) {
   if (!html) return { html, hasQuote: false };
-  const doc = new DOMParser().parseFromString(`<div id="zm-root">${html}</div>`, 'text/html');
-  const root = doc.getElementById('zm-root') || doc.body;
-  const first = root.querySelector(QUOTE_SELECTOR);
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const first = doc.body.querySelector(QUOTE_SELECTOR);
   if (!first) return { html, hasQuote: false };
   const textBefore = (() => {
     const range = doc.createRange();
-    range.setStart(root, 0);
+    range.setStart(doc.body, 0);
     range.setEndBefore(first);
     return range.toString().trim();
   })();
@@ -35,19 +34,7 @@ function markQuotes(html) {
     n.classList.add('zm-hidden-quote');
     n = n.nextElementSibling;
   }
-  return { html: root.innerHTML, hasQuote: true };
-}
-
-function hasVisibleBody(html, text) {
-  const t = String(text || '').replace(/\s+/g, '').trim();
-  if (t) return true;
-  const h = String(html || '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/\s+/g, '')
-    .trim();
-  return !!h;
+  return { html: doc.documentElement.outerHTML, hasQuote: true };
 }
 
 export default function MailFrame({ html, text, dark, allowImages = true, collapseQuotes = false }) {
@@ -55,20 +42,11 @@ export default function MailFrame({ html, text, dark, allowImages = true, collap
   const [height, setHeight] = useState(40);
   const [showQuote, setShowQuote] = useState(false);
 
-  const { content, hasQuote, empty } = useMemo(() => {
-    const rawHtml = html && String(html).trim() ? html : '';
-    const rawText = text && String(text).trim() ? text : '';
-    if (!hasVisibleBody(rawHtml, rawText)) {
-      return {
-        content: `<div style="color:#8b91a1;font-size:13px">（此邮件无正文内容，可能仅为附件或空信）</div>`,
-        hasQuote: false,
-        empty: true,
-      };
-    }
-    const raw = rawHtml || `<div style="white-space:normal">${textToHtml(rawText)}</div>`;
-    if (!collapseQuotes || showQuote) return { content: raw, hasQuote: false, empty: false };
+  const { content, hasQuote } = useMemo(() => {
+    const raw = html || `<div style="white-space:normal">${textToHtml(text || '')}</div>`;
+    if (!collapseQuotes || showQuote) return { content: raw, hasQuote: false };
     const r = markQuotes(raw);
-    return { content: r.html, hasQuote: r.hasQuote, empty: false };
+    return { content: r.html, hasQuote: r.hasQuote };
   }, [html, text, collapseQuotes, showQuote]);
 
   const imgSrc = allowImages ? 'img-src * data: blob: cid:' : 'img-src data: blob: cid:';
@@ -80,7 +58,6 @@ export default function MailFrame({ html, text, dark, allowImages = true, collap
     const frame = ref.current;
     if (!frame) return;
     let ro;
-    let tries = 0;
     const measure = () => {
       try {
         const b = frame.contentDocument?.body;
@@ -91,23 +68,15 @@ export default function MailFrame({ html, text, dark, allowImages = true, collap
     };
     const onLoad = () => {
       measure();
-      // 部分邮件字体/图片晚到，短时再量几次
-      const tick = () => {
-        measure();
-        if (++tries < 6) setTimeout(tick, 120 * tries);
-      };
-      setTimeout(tick, 50);
       try {
         ro = new ResizeObserver(measure);
-        if (frame.contentDocument?.body) ro.observe(frame.contentDocument.body);
-        frame.contentDocument?.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
+        ro.observe(frame.contentDocument.body);
+        frame.contentDocument.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
       } catch {
         // ignore
       }
     };
     frame.addEventListener('load', onLoad);
-    // srcDoc 在部分浏览器不会二次触发 load，主动测一次
-    requestAnimationFrame(measure);
     return () => {
       frame.removeEventListener('load', onLoad);
       ro?.disconnect();
@@ -116,7 +85,7 @@ export default function MailFrame({ html, text, dark, allowImages = true, collap
 
   return (
     <div className="mail-frame-shell">
-      {html && !empty ? (
+      {html ? (
         <span className="mail-trust-badge" title="脚本已禁用 · 外链新窗口打开 · 不泄露平台 Cookie">
           已隔离
         </span>
@@ -124,7 +93,7 @@ export default function MailFrame({ html, text, dark, allowImages = true, collap
       <iframe
         ref={ref}
         title="mail-body"
-        className={'mail-frame' + (html && !empty ? ' html' : '')}
+        className={'mail-frame' + (html ? ' html' : '')}
         sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         srcDoc={doc}
         style={{ height }}

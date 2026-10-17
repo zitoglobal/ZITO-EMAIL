@@ -112,7 +112,6 @@ function publicPerson(row, userId) {
     displayName: row.display_name || '',
     company: row.company || '',
     note: row.note || '',
-    nextFollowAt: row.next_follow_at || null,
     primaryAddress: primary,
     addresses,
     tags,
@@ -237,22 +236,13 @@ export function updatePerson(userId, id, patch = {}) {
   let displayName = row.display_name;
   let company = row.company;
   let note = row.note;
-  let nextFollowAt = row.next_follow_at;
   if (patch.displayName != null) displayName = sanitizeName(patch.displayName);
   if (patch.company != null) company = sanitizeName(patch.company, MAX_COMPANY);
   if (patch.note != null) note = sanitizeNote(patch.note);
-  if ('nextFollowAt' in patch) {
-    if (patch.nextFollowAt == null || patch.nextFollowAt === '') nextFollowAt = null;
-    else {
-      const ts = Number(patch.nextFollowAt);
-      if (!Number.isFinite(ts)) throw Object.assign(new Error('无效的跟进日期'), { status: 400 });
-      nextFollowAt = ts;
-    }
-  }
   const t = now();
   db.prepare(
-    'UPDATE contact_persons SET display_name = ?, company = ?, note = ?, next_follow_at = ?, updated_at = ? WHERE id = ? AND user_id = ?'
-  ).run(displayName, company, note, nextFollowAt, t, id, userId);
+    'UPDATE contact_persons SET display_name = ?, company = ?, note = ?, updated_at = ? WHERE id = ? AND user_id = ?'
+  ).run(displayName, company, note, t, id, userId);
   return getPerson(userId, id);
 }
 

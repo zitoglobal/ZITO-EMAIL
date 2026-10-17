@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Inbox, ListTodo, MailOpen, Star, Send, PenSquare, CornerUpLeft, CheckCircle2, Clock, FileText, Briefcase, Hourglass } from 'lucide-react';
+import { Search, Inbox, ListTodo, MailOpen, Star, Send, PenSquare, CornerUpLeft, CheckCircle2, Clock, FileText } from 'lucide-react';
 import { displayName } from '../utils.js';
 
-const ICONS = { today: ListTodo, waiting: Hourglass, deals: Briefcase, inbox: Inbox, unread: MailOpen, flagged: Star, sent: Send, drafts: FileText, compose: PenSquare, reply: CornerUpLeft, done: CheckCircle2, snooze: Clock };
+const ICONS = { today: ListTodo, inbox: Inbox, unread: MailOpen, flagged: Star, sent: Send, drafts: FileText, compose: PenSquare, reply: CornerUpLeft, done: CheckCircle2, snooze: Clock };
 
 /**
  * 命令面板：搜索当前列表里的邮件，或直接跳转、写信、处理。Ctrl/⌘ K 打开。
@@ -24,8 +24,6 @@ export default function Palette({ open, messages, hasSelection, onClose, onOpen,
     const commands = [
       { kind: 'cmd', id: 'compose', label: '写邮件', hint: 'C', run: onCompose },
       { kind: 'cmd', id: 'today', label: '前往今日待办', hint: 'G T', run: () => onGo('today') },
-      { kind: 'cmd', id: 'waiting', label: '前往等待', hint: 'G W', run: () => onGo('waiting') },
-      { kind: 'cmd', id: 'deals', label: '我的客户', hint: 'G D', run: () => onGo('deals') },
       { kind: 'cmd', id: 'inbox', label: '前往收件箱', hint: 'G I', run: () => onGo('inbox') },
       { kind: 'cmd', id: 'unread', label: '只看未读', run: () => onGo('unread') },
       { kind: 'cmd', id: 'flagged', label: '星标邮件', run: () => onGo('flagged') },
