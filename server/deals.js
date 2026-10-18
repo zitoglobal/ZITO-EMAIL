@@ -120,13 +120,14 @@ function assertDealWrite(userId, dealId) {
   return row;
 }
 
-function applyFollowSeq(userId, row, stage) {
+function applyFollowSeq(userId, row, stage, { force = false } = {}) {
   if (row.auto_follow_seq === 0) return;
   const days = FOLLOW_SEQ_DAYS[stage];
   if (!days) return;
   const at = now();
   const due = row.next_follow_at;
-  if (due != null && due > at) return; // 已有未到期跟进日则不覆盖
+  // 改阶段/记寄样默认 force；手动设了未来跟进日时，非 force 不覆盖
+  if (!force && due != null && due > at) return;
   const nextAt = at + days * 24 * 3600 * 1000;
   db.prepare('UPDATE deals SET next_follow_at = ?, updated_at = ? WHERE id = ?').run(nextAt, at, row.id);
   logEvent(row.id, row.scope_key, userId, 'follow_seq', `${stageMeta(stage).label}后 ${days} 天跟进`);
@@ -270,6 +271,7 @@ export function upsertSample(userId, dealId, body = {}) {
   if (sentAt != null && !Number.isFinite(sentAt)) sentAt = null;
   if (status === 'sent' && !sentAt) sentAt = t;
 
+  let sampleId = body.id ? Number(body.id) : null;
   if (body.id) {
     const ex = db.prepare('SELECT id FROM deal_samples WHERE id = ? AND deal_id = ?').get(body.id, dealId);
     if (!ex) throw Object.assign(new Error('样品记录不存在'), { status: 404 });
@@ -277,19 +279,35 @@ export function upsertSample(userId, dealId, body = {}) {
       `UPDATE deal_samples SET sample_type = ?, tracking_no = ?, carrier = ?, sent_at = ?, status = ?, note = ?, updated_at = ?
        WHERE id = ?`
     ).run(sampleType, trackingNo, carrier, sentAt, status, note, t, body.id);
-    return listSamples(dealId).find((s) => s.id === body.id);
+  } else {
+    sampleId = Number(
+      db
+        .prepare(
+          `INSERT INTO deal_samples (deal_id, sample_type, tracking_no, carrier, sent_at, status, note, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(dealId, sampleType, trackingNo, carrier, sentAt, status, note, t).lastInsertRowid
+    );
   }
-  const id = Number(
-    db
-      .prepare(
-        `INSERT INTO deal_samples (deal_id, sample_type, tracking_no, carrier, sent_at, status, note, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(dealId, sampleType, trackingNo, carrier, sentAt, status, note, t).lastInsertRowid
-  );
   const row = assertDealWrite(userId, dealId);
   logEvent(dealId, row.scope_key, userId, 'sample', `${sampleType.toUpperCase()} · ${status}${trackingNo ? ` · ${trackingNo}` : ''}`);
-  return listSamples(dealId).find((s) => s.id === id);
+  applySampleSideEffects(userId, dealId, { sampleType, status });
+  return listSamples(dealId).find((s) => s.id === sampleId);
+}
+
+/** 记样品副作用：询盘/报价→样品阶段；寄出后按序列写跟进日 */
+function applySampleSideEffects(userId, dealId, { status } = {}) {
+  const row = getDealById(dealId);
+  if (!row) return;
+  if (status === 'sent' || status === 'received') {
+    if (row.stage === 'inquiry' || row.stage === 'quote') {
+      setStage(userId, dealId, 'sample');
+      return; // setStage 已 applyFollowSeq force
+    }
+    applyFollowSeq(userId, row, 'sample', { force: status === 'sent' });
+  } else if (status === 'approved') {
+    applyFollowSeq(userId, row, 'bulk', { force: true });
+  }
 }
 
 export function deleteSample(userId, dealId, sampleId) {
@@ -442,6 +460,10 @@ export function listEvents(viewerId, { dealId, address, limit = 12 } = {}) {
 
 export function getDealById(id) {
   return db.prepare('SELECT * FROM deals WHERE id = ?').get(id);
+}
+
+export function getPublicDeal(userId, dealId) {
+  return publicDeal(getDealById(dealId), userId);
 }
 
 export function lookup(viewerId, { address, threadId } = {}) {
@@ -699,7 +721,7 @@ export function setStage(userId, dealId, stage) {
   db.prepare('UPDATE deals SET stage = ?, stage_updated_at = ?, updated_at = ? WHERE id = ?').run(stage, t, t, dealId);
   if (row.stage !== stage) {
     logEvent(dealId, row.scope_key, userId, 'stage', `${from} → ${to}`);
-    applyFollowSeq(userId, { ...row, stage }, stage);
+    applyFollowSeq(userId, { ...row, stage }, stage, { force: true });
   }
   return publicDeal(getDealById(dealId), userId);
 }
@@ -743,6 +765,35 @@ export function dueFollowDeals(userId, at = Date.now()) {
     )
     .all(userId, at);
   return rows.map((r) => publicDeal(r, userId));
+}
+
+const FOLLOW_REMIND_COOLDOWN = 20 * 3600 * 1000; // 约一天一次
+
+/** 到期跟进 Push：每 deal 冷却约 20h，避免刷屏 */
+export function dueFollowToRemind(userId, at = Date.now()) {
+  const due = dueFollowDeals(userId, at);
+  if (!due.length) return null;
+  const items = [];
+  for (const d of due.slice(0, 8)) {
+    const last = db
+      .prepare(
+        `SELECT created_at FROM deal_events
+         WHERE deal_id = ? AND action = 'follow_remind' ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(d.id);
+    if (last && at - last.created_at < FOLLOW_REMIND_COOLDOWN) continue;
+    logEvent(d.id, d.scopeKey, userId, 'follow_remind', '跟进日到期提醒');
+    items.push({
+      dealId: d.id,
+      scopeLabel: d.scopeLabel,
+      stageLabel: d.stageLabel,
+      address: d.lastAddress,
+      messageId: d.lastMessageId,
+      nextFollowAt: d.nextFollowAt,
+    });
+  }
+  if (!items.length) return null;
+  return { count: items.length, items };
 }
 
 /**

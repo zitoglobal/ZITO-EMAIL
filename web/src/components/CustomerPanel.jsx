@@ -542,8 +542,14 @@ export default function CustomerPanel({
               rows={3}
               placeholder="付款习惯、旺季、对接人…"
             />
-            <div className="customer-section-title" style={{ marginTop: 10 }}>
+          </div>
+        )}
+
+        {(dealId || person) && (
+          <div className="customer-sec">
+            <div className="customer-section-title">
               <CalendarClock size={12} /> 下次跟进
+              {dealId ? <small className="muted" style={{ marginLeft: 6 }}>成交跟进日</small> : null}
             </div>
             <div className="customer-follow-row">
               {[1, 3, 7].map((n) => (
@@ -558,11 +564,22 @@ export default function CustomerPanel({
                     d.setDate(d.getDate() + n);
                     setBusy('follow');
                     try {
-                      const r = await api(`/contact-persons/${person.id}`, {
-                        method: 'PATCH',
-                        body: { nextFollowAt: d.getTime() },
-                      });
-                      setPerson(r.person);
+                      if (dealId) {
+                        const r = await api(`/deals/${dealId}`, {
+                          method: 'PATCH',
+                          body: { nextFollowAt: d.getTime() },
+                        });
+                        setTimeline((tl) => (tl ? { ...tl, deal: r.deal } : tl));
+                        try {
+                          window.dispatchEvent(new CustomEvent('zm-deal', { detail: { dealId, reason: 'follow', deal: r.deal } }));
+                        } catch { /* ignore */ }
+                      } else if (person?.id) {
+                        const r = await api(`/contact-persons/${person.id}`, {
+                          method: 'PATCH',
+                          body: { nextFollowAt: d.getTime() },
+                        });
+                        setPerson(r.person);
+                      }
                     } finally {
                       setBusy('');
                     }
@@ -571,20 +588,33 @@ export default function CustomerPanel({
                   {n === 1 ? '明天' : n === 3 ? '3 天' : '一周'}
                 </button>
               ))}
-              {person.nextFollowAt && (
+              {(deal?.nextFollowAt || (!dealId && person?.nextFollowAt)) && (
                 <>
-                  <small className="muted">{formatShortDateTime(person.nextFollowAt)}</small>
+                  <small className="muted">
+                    {formatShortDateTime(deal?.nextFollowAt || person?.nextFollowAt)}
+                  </small>
                   <button
                     type="button"
                     className="deal-follow-chip"
                     onClick={async () => {
                       setBusy('follow');
                       try {
-                        const r = await api(`/contact-persons/${person.id}`, {
-                          method: 'PATCH',
-                          body: { nextFollowAt: null },
-                        });
-                        setPerson(r.person);
+                        if (dealId) {
+                          const r = await api(`/deals/${dealId}`, {
+                            method: 'PATCH',
+                            body: { nextFollowAt: null },
+                          });
+                          setTimeline((tl) => (tl ? { ...tl, deal: r.deal } : tl));
+                          try {
+                            window.dispatchEvent(new CustomEvent('zm-deal', { detail: { dealId, reason: 'follow', deal: r.deal } }));
+                          } catch { /* ignore */ }
+                        } else if (person?.id) {
+                          const r = await api(`/contact-persons/${person.id}`, {
+                            method: 'PATCH',
+                            body: { nextFollowAt: null },
+                          });
+                          setPerson(r.person);
+                        }
                       } finally {
                         setBusy('');
                       }
@@ -595,6 +625,9 @@ export default function CustomerPanel({
                 </>
               )}
             </div>
+            {!dealId && (
+              <small className="muted">认领客户后，跟进日进入成交管线与今日待办</small>
+            )}
           </div>
         )}
 

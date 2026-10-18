@@ -16,12 +16,13 @@ function publicAsset(r) {
     contentType: r.content_type,
     styleNo: r.style_no || '',
     createdAt: r.created_at,
+    mine: false,
     previewUrl: `/api/messages/${r.message_id}/attachments/${r.att_index}?inline=1`,
     downloadUrl: `/api/messages/${r.message_id}/attachments/${r.att_index}`,
   };
 }
 
-export function listAssets(userId, { address, scopeKey, limit = 50 } = {}) {
+function scopeKeysFor(address, scopeKey) {
   let sk = scopeKey;
   if (!sk && address) {
     const scopes = resolveScopes(address);
@@ -35,16 +36,29 @@ export function listAssets(userId, { address, scopeKey, limit = 50 } = {}) {
     if (scopes?.person) keys.push(scopes.person.key);
     if (scopes?.company) keys.push(scopes.company.key);
   }
-  const uniq = [...new Set(keys)];
+  return [...new Set(keys)];
+}
+
+/**
+ * 认领范围内团队可读：按 scope_key 列资料，不限上传者。
+ * 预览/下载仍走原附件 API（需对该邮件有权，或后续统一代理）。
+ */
+export function listAssets(userId, { address, scopeKey, limit = 50 } = {}) {
+  const uniq = scopeKeysFor(address, scopeKey);
+  if (!uniq.length) return [];
   const ph = uniq.map(() => '?').join(',');
   const lim = Math.min(100, Math.max(1, Number(limit) || 50));
   return db
     .prepare(
-      `SELECT * FROM customer_assets WHERE user_id = ? AND scope_key IN (${ph})
+      `SELECT * FROM customer_assets WHERE scope_key IN (${ph})
        ORDER BY created_at DESC LIMIT ?`
     )
-    .all(userId, ...uniq, lim)
-    .map(publicAsset);
+    .all(...uniq, lim)
+    .map((r) => {
+      const a = publicAsset(r);
+      a.mine = r.user_id === userId;
+      return a;
+    });
 }
 
 export function addAsset(userId, body = {}) {
@@ -77,7 +91,11 @@ export function addAsset(userId, body = {}) {
       `SELECT id FROM customer_assets WHERE user_id = ? AND message_id = ? AND att_index = ? AND scope_key = ?`
     )
     .get(userId, messageId, attIndex, scopeKey);
-  if (dup) return publicAsset(db.prepare('SELECT * FROM customer_assets WHERE id = ?').get(dup.id));
+  if (dup) {
+    const a = publicAsset(db.prepare('SELECT * FROM customer_assets WHERE id = ?').get(dup.id));
+    a.mine = true;
+    return a;
+  }
 
   const id = Number(
     db
@@ -88,12 +106,17 @@ export function addAsset(userId, body = {}) {
       )
       .run(userId, scopeKey, kind, title, messageId, attIndex, filename, contentType, styleNo, now()).lastInsertRowid
   );
-  return publicAsset(db.prepare('SELECT * FROM customer_assets WHERE id = ?').get(id));
+  const a = publicAsset(db.prepare('SELECT * FROM customer_assets WHERE id = ?').get(id));
+  a.mine = true;
+  return a;
 }
 
-export function deleteAsset(userId, id) {
-  const r = db.prepare('SELECT * FROM customer_assets WHERE id = ? AND user_id = ?').get(id, userId);
+export function deleteAsset(userId, id, { admin = false } = {}) {
+  const r = db.prepare('SELECT * FROM customer_assets WHERE id = ?').get(id);
   if (!r) throw Object.assign(new Error('资料不存在'), { status: 404 });
+  if (r.user_id !== userId && !admin) {
+    throw Object.assign(new Error('只能删除自己收入的资料'), { status: 403 });
+  }
   db.prepare('DELETE FROM customer_assets WHERE id = ?').run(id);
   return { ok: true };
 }

@@ -2139,6 +2139,27 @@ function remindUser(u) {
   } catch (e) {
     console.error('[remind]', e.message);
   }
+  try {
+    if (!settings.notify) return;
+    const fr = deals.dueFollowToRemind(u.id);
+    if (!fr?.items?.length) return;
+    const first = fr.items[0];
+    const url = first.messageId
+      ? `/?box=today&messageId=${first.messageId}`
+      : '/?box=deals';
+    push
+      .notifyUser(u.id, {
+        title: fr.count > 1 ? `${fr.count} 个客户跟进日已到` : '客户跟进日已到',
+        body: `${first.scopeLabel || first.address || '客户'} · ${first.stageLabel || ''}`.trim(),
+        url,
+        tag: 'zm-follow-due',
+        messageId: first.messageId || null,
+      })
+      .catch(() => {});
+    if (isOnline(u.id)) emit(u.id, 'follow-due', fr);
+  } catch (e) {
+    console.error('[remind-follow]', e.message);
+  }
 }
 const remindOverdue = () => {
   db.prepare('SELECT * FROM users').all().forEach(remindUser);

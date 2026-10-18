@@ -95,6 +95,7 @@ export function buildComposeState(mode, msg, ctx, extra = {}) {
     sourceId: msg.id,
     forward: forward && msg.attachments?.length ? { id: msg.id, attachments: msg.attachments } : undefined,
     quoteSnippet: msg.quoteSnippet || '',
+    dealStage: msg.deal?.stage || '',
     ...extra,
   };
 }

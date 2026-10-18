@@ -351,6 +351,7 @@ assert(
 );
 assert('ASSET_KIND techpack label', ASSET_KIND_LABEL.techpack === 'Tech pack');
 assert('apparel template has stage', APPAREL_EMAIL_TEMPLATES.some((t) => t.stage === 'quote'));
+assert('FOLLOW_SEQ force days sample', FOLLOW_SEQ_DAYS.sample === 7 && FOLLOW_SEQ_DAYS.bulk === 5);
 
 // ---------- conversationKey ----------
 assert('conv key prefers thread', conversationKey({ thread_id: 't1', in_reply_to: 'p1', message_id: 'm1', id: 9 }) === 't1');

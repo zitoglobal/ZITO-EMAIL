@@ -358,7 +358,11 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
   function groupedTemplates(list) {
     if (!list?.length) return [];
     const brandId = mailbox?.brandId || null;
+    const preferStage = initial.dealStage || '';
     const sorted = [...list].sort((a, b) => {
+      const aStageHit = preferStage && a.stage === preferStage ? 0 : a.stage ? 1 : 2;
+      const bStageHit = preferStage && b.stage === preferStage ? 0 : b.stage ? 1 : 2;
+      if (aStageHit !== bStageHit) return aStageHit - bStageHit;
       const aBrand = brandId && a.brandId === brandId ? 0 : a.brandId ? 1 : 2;
       const bBrand = brandId && b.brandId === brandId ? 0 : b.brandId ? 1 : 2;
       if (aBrand !== bBrand) return aBrand - bBrand;
@@ -373,9 +377,10 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
       const key = `${t.brandId || 'any'}:${t.stage || 'any'}`;
       if (!cur || cur.key !== key) {
         const bits = [];
+        if (preferStage && t.stage === preferStage) bits.push('当前阶段');
+        else if (t.stage) bits.push(STAGE_LABEL[t.stage] || t.stage);
         if (t.brandId && brandId && t.brandId === brandId) bits.push('当前品牌');
         else if (t.brandId) bits.push('其它品牌');
-        if (t.stage) bits.push(STAGE_LABEL[t.stage] || t.stage);
         cur = { key, label: bits.join(' · ') || '通用', items: [] };
         groups.push(cur);
       }

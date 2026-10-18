@@ -269,9 +269,10 @@ export function registerDealsRoutes(app, ctx) {
     '/api/deals/:id/samples',
     auth,
     wrap(async (req, res) => {
-      const sample = deals.upsertSample(req.user.id, Number(req.params.id), req.body || {});
+      const id = Number(req.params.id);
+      const sample = deals.upsertSample(req.user.id, id, req.body || {});
       bump();
-      res.json({ sample, samples: deals.listSamples(Number(req.params.id)) });
+      res.json({ sample, samples: deals.listSamples(id), deal: deals.getPublicDeal(req.user.id, id) });
     })
   );
   app.delete(
@@ -306,7 +307,11 @@ export function registerDealsRoutes(app, ctx) {
     '/api/customer-assets/:id',
     auth,
     wrap(async (req, res) => {
-      res.json(customerAssets.deleteAsset(req.user.id, Number(req.params.id)));
+      res.json(
+        customerAssets.deleteAsset(req.user.id, Number(req.params.id), {
+          admin: req.user.role === 'admin',
+        })
+      );
     })
   );
 

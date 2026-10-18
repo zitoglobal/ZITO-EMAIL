@@ -693,7 +693,19 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
       } else {
         follow.score = (follow.score || 0) + 80;
       }
+      // 报价有效期临近（3 天内）或已过：抬权催改价/锁单
+      const qv = m.deal?.quoteValidUntil;
+      if (qv) {
+        const left = qv - atNow;
+        if (left <= 0) follow.score = (follow.score || 0) + 55;
+        else if (left <= 3 * DAY) follow.score = (follow.score || 0) + 35;
+      }
       follow.hits = followHits(follow);
+      if (qv) {
+        const left = qv - atNow;
+        if (left <= 0) follow.hits = [...follow.hits, { code: 'quote_expired', label: '报价已过期' }];
+        else if (left <= 3 * DAY) follow.hits = [...follow.hits, { code: 'quote_expiring', label: '报价将到期' }];
+      }
       follow.why = followWhy(follow);
       return { ...m, follow };
     })

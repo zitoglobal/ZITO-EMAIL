@@ -234,19 +234,6 @@ export default function DealBar({
     }
   }
 
-  function bumpDeal(nextDeal, reason) {
-    onChange?.(nextDeal);
-    try {
-      window.dispatchEvent(
-        new CustomEvent('zm-deal', {
-          detail: { dealId: nextDeal?.id || deal?.id, reason, deal: nextDeal },
-        })
-      );
-    } catch {
-      /* ignore */
-    }
-  }
-
   async function saveCommerce() {
     if (!deal?.id) return;
     setBusy('commerce');
@@ -276,9 +263,16 @@ export default function DealBar({
     if (!deal?.id) return;
     setBusy('sample');
     try {
-      await api(`/deals/${deal.id}/samples`, { method: 'POST', body: sampleDraft });
-      bumpDeal(deal, 'sample');
-      notify('样品记录已添加', 'success');
+      const r = await api(`/deals/${deal.id}/samples`, { method: 'POST', body: sampleDraft });
+      const next = r.deal || deal;
+      bumpDeal(next, 'sample');
+      const staged = r.deal && r.deal.stage !== deal.stage;
+      notify(
+        staged
+          ? `样品已记 · 阶段已推进为「${r.deal.stageLabel}」`
+          : '样品记录已添加',
+        'success'
+      );
       setSampleDraft({ sampleType: 'sms', trackingNo: '', status: 'sent' });
     } catch (e) {
       notify(e.message, 'error');
