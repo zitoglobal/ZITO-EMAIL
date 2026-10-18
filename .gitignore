@@ -32,6 +32,11 @@ id_ed25519*
 *.tgz
 *.tar.gz
 *.zip
+release/
+dist_electron/
+desktop/runtime/
+*.exe
+!desktop/**/*.exe
 
 # 日志与临时文件
 logs/

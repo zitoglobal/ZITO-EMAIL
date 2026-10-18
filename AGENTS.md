@@ -7,8 +7,17 @@
 - **禁止**改动 `web/src/components/Brand.jsx`（BrandIcon / BrandWordmark / BrandSymbol）的路径、配色、比例与布局，除非用户明确要求改 LOGO。
 - UI 精修只动按钮/列表/读信等控件；侧栏 `.brand-name` 字标排版保持品牌规范原样，勿对 LOGO 做滤镜、改色、拉伸或重排。
 
+## v1.0 功能冻结（桌面候选）
+- Git 标签：`v1.0.0-desktop-candidate`（成衣外贸 P0+P1b 基线）
+- **冻结进 v1 安装包**：认领/阶段、多款单价·MOQ、样品、团队品牌、跟进序列、资料库、销售台默认布局、AI bizContext
+- **明确不做进 v1**：漏斗 cohort 深挖、品牌主数据后台、完整 ESP、独立 CRM/PLM
+- Windows 托盘安装：见 `docs/windows-install.md`；`ZITO_DESKTOP=1` 时数据在 `%APPDATA%\ZITO-EMAIL`
+- 云端 SaaS（mail.zitoglobal.com）仍是主产品；Windows 包为同仓第二发行通道
+
 ## 本地开发
 - 启动：`npm run dev`（API 3310 + Vite），或 `npx vite build` 后 `node server/index.js`，访问 `http://localhost:3310`
+- 桌面模式（无 Electron）：`npm run start:desktop`；托盘开发：`npm run desktop`（需先 `npm run build`）
+- 打 Windows 安装包：`npm run dist:win` → `release/ZITO-Email-Setup-*.exe`
 - 纯逻辑单测：`npm test`（classify / SLA / mail rules / deals 认领键，不依赖真实邮箱）
 - 团队认领与业务阶段：邮箱内 `deals` 表（勿对接已下线的 crm.zitoglobal.com）
 - 安全基线：生产默认 `BIND_HOST=127.0.0.1`、Cookie Secure、绑定/连接前 SSRF 复检（`net_guard.js`）；读信 HTML 消毒；会话空闲 14 / 绝对 30 天；登录默认踢掉其它会话；可选 TOTP（管理员强制开启方可调用 `/api/admin/*`，紧急排障可设 `ADMIN_TOTP_REQUIRED=0`）；管理面另有应用层限流

@@ -32,6 +32,10 @@ import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCi
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { aiModels, modelFor, routeForTask, scoreComplexity } from '../server/ai.js';
 import { encrypt, decrypt, encryptBuffer, decryptBuffer } from '../server/security.js';
 import { generateSecret, generateSync, verifySync } from 'otplib';
@@ -338,6 +342,36 @@ assert('FOLLOW_SEQ quote +3', FOLLOW_SEQ_DAYS.quote === 3);
 assert('FOLLOW_SEQ sample +7', FOLLOW_SEQ_DAYS.sample === 7);
 assert('FOLLOW_SEQ bulk +5', FOLLOW_SEQ_DAYS.bulk === 5);
 assert('FOLLOW_SEQ client aligned', CLIENT_FOLLOW_SEQ.quote === FOLLOW_SEQ_DAYS.quote && CLIENT_FOLLOW_SEQ.sample === FOLLOW_SEQ_DAYS.sample);
+// ---------- desktop_boot（子进程，避免污染当前进程 env） ----------
+{
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zito-desk-'));
+  const env = { ...process.env, ZITO_DESKTOP: '1', ZITO_HOME: home, NODE_ENV: 'production' };
+  delete env.MAIL_SECRET;
+  const r = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import { applyDesktopEnv, readDesktopConfig, IS_DESKTOP } from './server/desktop_boot.js';
+       const info = applyDesktopEnv();
+       const cfg = readDesktopConfig();
+       if (!IS_DESKTOP) { console.log('FAIL not desktop'); process.exit(2); }
+       if (!info.applied || !cfg.mailSecret || cfg.mailSecret.length < 32) { console.log('FAIL secret'); process.exit(3); }
+       if (!process.env.DATA_DIR.includes('data')) { console.log('FAIL data'); process.exit(4); }
+       console.log('OK');`,
+    ],
+    {
+      cwd: path.resolve('.'),
+      env,
+      encoding: 'utf8',
+    }
+  );
+  assert('desktop_boot generates MAIL_SECRET', (r.stdout || '').includes('OK'), r.stderr || r.stdout || `code=${r.status}`);
+  try {
+    fs.rmSync(home, { recursive: true, force: true });
+  } catch (_) {}
+}
+
 assert('quoteSnippet empty deal', quoteSnippet(null) === '' && quoteSnippet({}) === '');
 assert(
   'quoteSnippet commerce',

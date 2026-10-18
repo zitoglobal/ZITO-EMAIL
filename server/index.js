@@ -1,8 +1,11 @@
+/** 桌面模式必须先于 dotenv / db / security，以写入 DATA_DIR 与 MAIL_SECRET */
+import { IS_DESKTOP, desktopBootInfo, readDesktopConfig, writeDesktopConfig, desktopHome } from './desktop_boot.js';
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import net from 'node:net';
 import express from 'express';
 import multer from 'multer';
 import { db, now } from './db.js';
@@ -44,14 +47,18 @@ import { registerFocusRoutes } from './routes_focus.js';
 import * as aiContext from './ai_context.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT || 3310);
+let PORT = Number(process.env.PORT || 3310);
 const IS_PROD = process.env.NODE_ENV === 'production';
-/** 生产默认只绑本机，必须经 Nginx；开发可 BIND_HOST=0.0.0.0 */
-const BIND_HOST = process.env.BIND_HOST || (IS_PROD ? '127.0.0.1' : '0.0.0.0');
+/** 生产默认只绑本机，必须经 Nginx；开发可 BIND_HOST=0.0.0.0；桌面强制本机 */
+const BIND_HOST = IS_DESKTOP
+  ? process.env.BIND_HOST || '127.0.0.1'
+  : process.env.BIND_HOST || (IS_PROD ? '127.0.0.1' : '0.0.0.0');
 const COOKIE = 'zm_token';
-/** 生产默认 Secure；可用 COOKIE_SECURE=0 显式关闭（仅排查用） */
-const COOKIE_SECURE =
-  process.env.COOKIE_SECURE === '1' || (IS_PROD && process.env.COOKIE_SECURE !== '0');
+/** 生产默认 Secure；桌面本机 HTTP 默认关；可用 COOKIE_SECURE=0/1 显式覆盖 */
+const COOKIE_SECURE = IS_DESKTOP
+  ? process.env.COOKIE_SECURE === '1'
+  : process.env.COOKIE_SECURE === '1' || (IS_PROD && process.env.COOKIE_SECURE !== '0');
+void desktopBootInfo;
 const MAX_MAILBOXES = Number(process.env.MAX_MAILBOXES_PER_USER || 20);
 const COLORS = ['#0a66ff', '#00b4e6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#64748b'];
 
@@ -261,9 +268,61 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// ---------- 桌面安装版状态 / 首次配置 ----------
+app.get('/api/desktop/status', (req, res) => {
+  if (!IS_DESKTOP) return res.status(404).json({ error: '非桌面模式' });
+  const cfg = readDesktopConfig();
+  res.json({
+    desktop: true,
+    home: desktopHome(),
+    dataDir: process.env.DATA_DIR,
+    port: PORT,
+    hasUsers: users.userCount() > 0,
+    aiConfigured: ai.aiConfigured(),
+    setupComplete: !!cfg.setupComplete || users.userCount() > 0,
+    version: process.env.npm_package_version || '1.0.0',
+  });
+});
+
+app.post(
+  '/api/desktop/setup',
+  wrap(async (req, res) => {
+    if (!IS_DESKTOP) throw httpError(404, '非桌面模式');
+    rateLimit('desktop-setup:' + req.ip, 20, 3600_000);
+    const body = req.body || {};
+    const patch = { setupComplete: true };
+    if ('aiApiKey' in body) {
+      const key = String(body.aiApiKey || '').trim();
+      if (key) {
+        patch.aiApiKey = key;
+        process.env.AI_API_KEY = key;
+      } else {
+        patch.aiApiKey = '';
+        delete process.env.AI_API_KEY;
+      }
+    }
+    if ('aiBaseUrl' in body && body.aiBaseUrl != null) {
+      const url = String(body.aiBaseUrl || '').trim();
+      patch.aiBaseUrl = url;
+      if (url) process.env.AI_BASE_URL = url;
+    }
+    writeDesktopConfig(patch);
+    res.json({
+      ok: true,
+      desktop: true,
+      aiConfigured: ai.aiConfigured(),
+      setupComplete: true,
+    });
+  })
+);
+
 // ---------- 账号 ----------
 app.get('/api/auth/status', (req, res) => {
-  res.json({ hasUsers: users.userCount() > 0, signup: users.userCount() === 0 ? 'open' : signupMode() });
+  res.json({
+    hasUsers: users.userCount() > 0,
+    signup: users.userCount() === 0 ? 'open' : signupMode(),
+    desktop: IS_DESKTOP,
+  });
 });
 
 app.post(
@@ -2171,8 +2230,38 @@ const remindOverdue = () => {
 };
 setTimeout(remindOverdue, 60_000).unref();
 setInterval(remindOverdue, 10 * 60_000).unref();
-const server = app.listen(PORT, BIND_HOST, () => {
-  console.log(`[zito-mail] 服务已启动 http://${BIND_HOST === '0.0.0.0' ? 'localhost' : BIND_HOST}:${PORT} (bind ${BIND_HOST})`);
+
+function isPortFree(port, host) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.once('error', () => resolve(false));
+    srv.listen(port, host, () => {
+      srv.close(() => resolve(true));
+    });
+  });
+}
+
+async function pickPort(preferred, host) {
+  const start = Number(preferred) || 3310;
+  for (let p = start; p < start + 20; p++) {
+    if (await isPortFree(p, host)) return p;
+  }
+  throw new Error(`端口 ${start}-${start + 19} 均被占用`);
+}
+
+function onListening() {
+  const hostLabel = BIND_HOST === '0.0.0.0' ? 'localhost' : BIND_HOST;
+  console.log(`[zito-mail] 服务已启动 http://${hostLabel}:${PORT} (bind ${BIND_HOST})${IS_DESKTOP ? ' [desktop]' : ''}`);
+  if (IS_DESKTOP) {
+    try {
+      writeDesktopConfig({ port: PORT, lastListenAt: Date.now() });
+      const portFile = path.join(process.env.DATA_DIR || desktopHome(), 'port.txt');
+      fs.writeFileSync(portFile, String(PORT), 'utf8');
+    } catch (e) {
+      console.warn('[desktop] write port', e.message);
+    }
+  }
   try {
     brands.ensureTeamBrands();
   } catch (e) {
@@ -2181,21 +2270,46 @@ const server = app.listen(PORT, BIND_HOST, () => {
   try {
     oauth.logStartupHints();
   } catch (_) {}
-});
-
-function shutdown(signal) {
-  console.log(`[zito-mail] 收到 ${signal}，正在关闭…`);
-  server.close(() => {
-    try {
-      db.pragma('wal_checkpoint(TRUNCATE)');
-    } catch (_) {}
-    try {
-      db.close();
-    } catch (_) {}
-    process.exit(0);
-  });
-  setTimeout(() => process.exit(1), 10_000).unref();
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+
+let server;
+if (IS_DESKTOP) {
+  pickPort(PORT, BIND_HOST)
+    .then((p) => {
+      PORT = p;
+      process.env.PORT = String(p);
+      server = app.listen(PORT, BIND_HOST, onListening);
+      wireShutdown();
+    })
+    .catch((e) => {
+      console.error('[desktop] listen failed', e.message);
+      process.exit(1);
+    });
+} else {
+  server = app.listen(PORT, BIND_HOST, onListening);
+  wireShutdown();
+}
+
+function wireShutdown() {
+  function shutdown(signal) {
+    console.log(`[zito-mail] 收到 ${signal}，正在关闭…`);
+    const s = server;
+    if (!s) {
+      process.exit(0);
+      return;
+    }
+    s.close(() => {
+      try {
+        db.pragma('wal_checkpoint(TRUNCATE)');
+      } catch (_) {}
+      try {
+        db.close();
+      } catch (_) {}
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e?.message || e));

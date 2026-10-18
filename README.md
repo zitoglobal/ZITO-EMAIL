@@ -10,13 +10,26 @@
 - 前端：React 18、Vite 6、lucide-react
 - 部署：阿里云香港 Ubuntu 24.04 + pm2 + Nginx + Let's Encrypt
 
+## v1.0 桌面候选
+
+标签 `v1.0.0-desktop-candidate`：成衣外贸能力可作功能冻结基线；Windows 托盘安装包为第二发行通道（SaaS 仍是主产品）。详见 [docs/windows-install.md](docs/windows-install.md)。
+
+```bash
+npm run build
+npm run start:desktop          # 本机桌面运行时（浏览器打开提示的端口）
+npm run desktop                # Electron 托盘壳（开发）
+npm run dist:win               # 打出 release/*Setup*.exe
+```
+
 ## 目录结构
 
 ```
-server/        API 与邮件同步（index.js 入口，sync.js 同步，priority.js 分诊，ai.js 智能能力）
+server/        API 与邮件同步（index.js 入口；desktop_boot.js 为 Windows 本机引导）
+desktop/       Electron 托盘壳（main.cjs）
 web/           前端源码（src/components 为各界面组件，public 为图标与 PWA 清单）
 scripts/       本地演示数据、测试账号种子、端到端测试
 deploy/        一键部署脚本、服务器初始化脚本、Nginx 站点配置
+docs/          含 windows-install.md
 .env.example   环境变量模板（真实 .env 不入库）
 AGENTS.md      AI 助手协作约定
 ```

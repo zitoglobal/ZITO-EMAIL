@@ -3,10 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "description": "ZITO 智能邮箱",
+  "author": "ZITO Global",
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,magenta \"node --watch server/index.js\" \"vite\"",
     "build": "vite build",
     "start": "node server/index.js",
+    "start:desktop": "cross-env ZITO_DESKTOP=1 NODE_ENV=production node server/index.js",
+    "desktop": "npm run build && electron desktop/main.cjs",
+    "desktop:dev": "electron desktop/main.cjs",
+    "dist:win": "npm rebuild better-sqlite3 && npm run build && node scripts/gen-desktop-icon.mjs && node scripts/prepare-desktop-runtime.mjs && electron-builder --win --x64",
     "test": "node scripts/unit-test.mjs",
     "test:reply": "node scripts/test-expects-reply.mjs"
   },
@@ -29,9 +36,82 @@
     "@fontsource-variable/instrument-sans": "^5.3.0",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^6.0.5"
+  },
+  "build": {
+    "appId": "com.zitoglobal.email",
+    "productName": "ZITO Email",
+    "copyright": "Copyright © ZITO Global",
+    "directories": {
+      "output": "release",
+      "buildResources": "desktop"
+    },
+    "files": [
+      "desktop/**/*",
+      "server/**/*",
+      "dist/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "!desktop/runtime/**",
+      "!node_modules/**/{test,tests,docs,doc,example,examples}/**",
+      "!**/*.{md,ts,map}",
+      "!**/node_modules/electron/**",
+      "!**/node_modules/electron-builder/**",
+      "!**/node_modules/vite/**",
+      "!**/node_modules/react/**",
+      "!**/node_modules/react-dom/**",
+      "!**/node_modules/@vitejs/**",
+      "!**/node_modules/lucide-react/**",
+      "!**/node_modules/concurrently/**",
+      "!**/node_modules/cross-env/**"
+    ],
+    "asar": false,
+    "npmRebuild": false,
+    "extraResources": [
+      {
+        "from": "desktop/runtime",
+        "to": "node"
+      }
+    ],
+    "extraMetadata": {
+      "main": "desktop/main.cjs"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "desktop/icon.png",
+      "artifactName": "ZITO-Email-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ZITO Email",
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
+      "language": "2052"
+    }
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.25.12": true,
+    "electron@33.4.11": true
   }
 }

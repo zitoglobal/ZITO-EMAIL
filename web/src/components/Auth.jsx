@@ -18,10 +18,12 @@ export function HeroBrand() {
 export default function Auth({ onAuthed }) {
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ email: '', password: '', name: '', code: '', totp: '' });
+  const [form, setForm] = useState({ email: '', password: '', name: '', code: '', totp: '', aiApiKey: '' });
   const [totpTicket, setTotpTicket] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [pendingUser, setPendingUser] = useState(null);
+  const [desktopAiStep, setDesktopAiStep] = useState(false);
 
   useEffect(() => {
     api('/auth/status')
@@ -34,11 +36,31 @@ export default function Auth({ onAuthed }) {
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
+  async function finishDesktopSetup(skip) {
+    setError('');
+    setLoading(true);
+    try {
+      await api('/desktop/setup', {
+        method: 'POST',
+        body: skip ? { aiApiKey: '' } : { aiApiKey: form.aiApiKey.trim() },
+      });
+      if (pendingUser) onAuthed(pendingUser);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function submit(e) {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
+      if (desktopAiStep) {
+        await finishDesktopSetup(false);
+        return;
+      }
       if (totpTicket) {
         const res = await api('/auth/login/totp', { method: 'POST', body: { ticket: totpTicket, code: form.totp } });
         onAuthed(res.user, { via: res.via, recoveryLeft: res.recoveryLeft });
@@ -48,6 +70,11 @@ export default function Auth({ onAuthed }) {
       if (res.needsTotp && res.ticket) {
         setTotpTicket(res.ticket);
         setForm((f) => ({ ...f, totp: '' }));
+        return;
+      }
+      if (status?.desktop && mode === 'register' && !status.hasUsers) {
+        setPendingUser(res.user);
+        setDesktopAiStep(true);
         return;
       }
       onAuthed(res.user);
@@ -85,19 +112,47 @@ export default function Auth({ onAuthed }) {
           <BrandIcon size={40} />
           <div>
             <div className="login-title">
-              {totpStep ? '二次验证' : first ? '创建管理员账号' : mode === 'login' ? '登录 ZITO 智能邮箱' : '注册账号'}
+              {desktopAiStep
+                ? '可选：云端 AI'
+                : totpStep
+                  ? '二次验证'
+                  : first
+                    ? '创建管理员账号'
+                    : mode === 'login'
+                      ? '登录 ZITO 智能邮箱'
+                      : '注册账号'}
             </div>
             <div className="login-sub">
-              {totpStep
-                ? '请输入验证器动态码，或一条备用恢复码'
-                : first
-                  ? '首个注册的账号将成为管理员'
-                  : '登录后即可绑定并管理多个邮箱'}
+              {desktopAiStep
+                ? '本机安装版可稍后在设置中配置；填写 API Key 即可使用摘要与回复建议'
+                : totpStep
+                  ? '请输入验证器动态码，或一条备用恢复码'
+                  : first
+                    ? status?.desktop
+                      ? 'Windows 本机版：首个账号为管理员，数据保存在本机'
+                      : '首个注册的账号将成为管理员'
+                    : '登录后即可绑定并管理多个邮箱'}
             </div>
           </div>
         </div>
 
-        {!totpStep && mode === 'register' && (
+        {desktopAiStep && (
+          <label className="field">
+            <span>AI API Key（可留空跳过）</span>
+            <div className="input-icon">
+              <Sparkles size={16} />
+              <input
+                autoFocus
+                value={form.aiApiKey}
+                onChange={set('aiApiKey')}
+                placeholder="Token Plan / 兼容 OpenAI 的 Key"
+                autoComplete="off"
+              />
+            </div>
+          </label>
+        )}
+
+        {!desktopAiStep && !totpStep && mode === 'register' && (
           <label className="field">
             <span>姓名</span>
             <div className="input-icon">
@@ -106,7 +161,7 @@ export default function Auth({ onAuthed }) {
             </div>
           </label>
         )}
-        {!totpStep && (
+        {!desktopAiStep && !totpStep && (
           <>
             <label className="field">
               <span>账号</span>
@@ -132,7 +187,7 @@ export default function Auth({ onAuthed }) {
             </label>
           </>
         )}
-        {totpStep && (
+        {!desktopAiStep && totpStep && (
           <label className="field">
             <span>验证码</span>
             <div className="input-icon">
@@ -148,7 +203,7 @@ export default function Auth({ onAuthed }) {
             </div>
           </label>
         )}
-        {!totpStep && mode === 'register' && !first && status?.signup === 'code' && (
+        {!desktopAiStep && !totpStep && mode === 'register' && !first && status?.signup === 'code' && (
           <label className="field">
             <span>邀请码</span>
             <div className="input-icon">
@@ -162,10 +217,24 @@ export default function Auth({ onAuthed }) {
 
         <button className="btn-primary block" disabled={loading || !status}>
           {loading && <Loader2 size={16} className="spin" />}
-          {totpStep ? '验证并登录' : mode === 'login' ? '登录' : first ? '创建并进入' : '注册'}
+          {desktopAiStep
+            ? '保存并进入'
+            : totpStep
+              ? '验证并登录'
+              : mode === 'login'
+                ? '登录'
+                : first
+                  ? '创建并进入'
+                  : '注册'}
         </button>
 
-        {totpStep && (
+        {desktopAiStep && (
+          <button type="button" className="link-btn" disabled={loading} onClick={() => finishDesktopSetup(true)}>
+            跳过，稍后再说
+          </button>
+        )}
+
+        {!desktopAiStep && totpStep && (
           <button
             type="button"
             className="link-btn"
@@ -179,12 +248,12 @@ export default function Auth({ onAuthed }) {
           </button>
         )}
 
-        {!totpStep && !first && canRegister && (
+        {!desktopAiStep && !totpStep && !first && canRegister && (
           <button type="button" className="link-btn" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}>
             {mode === 'login' ? '没有账号？注册' : '已有账号？登录'}
           </button>
         )}
-        {!totpStep && !first && !canRegister && mode === 'login' && <div className="login-foot">没有账号？请联系管理员开通</div>}
+        {!desktopAiStep && !totpStep && !first && !canRegister && mode === 'login' && <div className="login-foot">没有账号？请联系管理员开通</div>}
         <div className="login-foot"><ShieldCheck size={13} /> 平台密码与邮箱授权码分开保存，授权码经 AES-256 加密</div>
       </form>
       </div>
