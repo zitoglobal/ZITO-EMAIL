@@ -20,7 +20,7 @@ import {
 import { matchCondition, matchRule } from '../server/mail_rules.js';
 import {
   scopeFromAddress, resolveScopes, isValidStage, stageMeta, STAGES, suggestStageAfterSend,
-  FOLLOW_SEQ_DAYS, quoteSnippet,
+  FOLLOW_SEQ_DAYS, quoteSnippet, scopeMailMatch,
 } from '../server/deals.js';
 import { APPAREL_EMAIL_TEMPLATES, ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS as CLIENT_FOLLOW_SEQ } from '../web/src/apparelPresets.js';
 import { isBlockedHostname } from '../server/net_guard.js';
@@ -276,6 +276,26 @@ assert(
 // ---------- deals scope / stages ----------
 assert('scope company', scopeFromAddress('buyer@acme-apparel.com')?.key === 'c:@acme-apparel.com');
 assert('scope gmail personal', scopeFromAddress('buyer@gmail.com')?.key === 'a:buyer@gmail.com');
+assert(
+  'scopeMailMatch person a:',
+  scopeMailMatch('a:buyer@acme.com')?.kind === 'address'
+    && scopeMailMatch('a:buyer@acme.com')?.value === 'buyer@acme.com'
+);
+assert(
+  'scopeMailMatch legacy p:',
+  scopeMailMatch('p:buyer@acme.com')?.kind === 'address'
+    && scopeMailMatch('p:buyer@acme.com')?.value === 'buyer@acme.com'
+);
+assert(
+  'scopeMailMatch company c:@domain',
+  scopeMailMatch('c:@acme-apparel.com')?.kind === 'domain'
+    && scopeMailMatch('c:@acme-apparel.com')?.value === 'acme-apparel.com'
+    && scopeMailMatch('c:@acme-apparel.com')?.like === '%@acme-apparel.com'
+);
+assert(
+  'scopeMailMatch no double at',
+  scopeMailMatch('c:@acme.com')?.like === '%@acme.com'
+);
 assert('scope robot null', scopeFromAddress('noreply@shop.com') == null);
 assert(
   'scope person override',

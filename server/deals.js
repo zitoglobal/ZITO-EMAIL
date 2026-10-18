@@ -426,6 +426,26 @@ function logEvent(dealId, scopeKey, actorUserId, action, detail = '') {
   ).run(dealId || null, scopeKey, actorUserId, action, String(detail || '').slice(0, 200), now());
 }
 
+/**
+ * 将 scope_key 转为「本箱有往来」查询条件。
+ * 个人键为 a:email（历史偶发 p:）；公司键为 c:@domain。
+ */
+export function scopeMailMatch(scopeKey) {
+  const sk = String(scopeKey || '');
+  if (sk.startsWith('a:') || sk.startsWith('p:')) {
+    const addr = sk.slice(2).toLowerCase();
+    if (!addr || !addr.includes('@')) return null;
+    return { kind: 'address', value: addr };
+  }
+  if (sk.startsWith('c:')) {
+    let dom = sk.slice(2).toLowerCase();
+    if (dom.startsWith('@')) dom = dom.slice(1);
+    if (!dom) return null;
+    return { kind: 'domain', value: dom, like: `%@${dom}` };
+  }
+  return null;
+}
+
 function canViewDealEvents(viewerId, scopeKeys, dealRow) {
   const viewer = userRow(viewerId);
   if (!viewer) return false;
@@ -439,23 +459,23 @@ function canViewDealEvents(viewerId, scopeKeys, dealRow) {
     if (owns) return true;
   }
   for (const sk of scopeKeys) {
-    if (sk.startsWith('p:')) {
-      const addr = sk.slice(2).toLowerCase();
+    const m = scopeMailMatch(sk);
+    if (!m) continue;
+    if (m.kind === 'address') {
       const hit = db
         .prepare(
           `SELECT 1 AS ok FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
            WHERE b.user_id = ? AND lower(m.from_addr) = ? LIMIT 1`
         )
-        .get(viewerId, addr);
+        .get(viewerId, m.value);
       if (hit) return true;
-    } else if (sk.startsWith('c:')) {
-      const dom = sk.slice(2).toLowerCase();
+    } else if (m.kind === 'domain') {
       const hit = db
         .prepare(
           `SELECT 1 AS ok FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
            WHERE b.user_id = ? AND lower(m.from_addr) LIKE ? LIMIT 1`
         )
-        .get(viewerId, `%@${dom}`);
+        .get(viewerId, m.like);
       if (hit) return true;
     }
   }
