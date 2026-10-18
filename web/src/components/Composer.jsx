@@ -126,6 +126,8 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
   const [showQuote, setShowQuote] = useState(false);
   const [aiOpen, setAiOpen] = useState(!!initial.aiInstruction || !!initial.openAi);
   const [aiPrompt, setAiPrompt] = useState(initial.aiInstruction || '');
+  const [quoteSnippet, setQuoteSnippet] = useState(initial.quoteSnippet || '');
+  const [dealId, setDealId] = useState(initial.dealId || null);
   const [tone, setTone] = useState('professional');
   const [lang, setLang] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
@@ -347,12 +349,56 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     touch();
   }
 
-  function insertQuoteSnippet() {
-    const snip = initial.quoteSnippet || '';
-    if (!snip) return notify('当前客户暂无报价要点，请先在成交条填写', 'error');
-    editor.current.focus();
-    insertHtmlAtCursor(`<pre class="zm-quote-snip">${snip.replace(/</g, '&lt;')}</pre><br>`, editor.current);
-    touch();
+  useEffect(() => {
+    setQuoteSnippet(initial.quoteSnippet || '');
+    setDealId(initial.dealId || null);
+  }, [initial.quoteSnippet, initial.dealId]);
+
+  useEffect(() => {
+    const onDeal = (e) => {
+      const d = e.detail?.deal;
+      const reason = e.detail?.reason;
+      if (d?.id && (!dealId || d.id === dealId)) {
+        setDealId(d.id);
+        if (reason === 'commerce' || reason === 'style' || reason === 'claim' || reason === 'stage') {
+          api(`/deals/${d.id}/quote-snippet`)
+            .then((r) => setQuoteSnippet(r.quoteSnippet || ''))
+            .catch(() => {});
+        }
+      }
+    };
+    window.addEventListener('zm-deal', onDeal);
+    return () => window.removeEventListener('zm-deal', onDeal);
+  }, [dealId]);
+
+  async function fetchLiveSnippet() {
+    if (dealId) {
+      const r = await api(`/deals/${dealId}/quote-snippet`);
+      setQuoteSnippet(r.quoteSnippet || '');
+      return r.quoteSnippet || '';
+    }
+    const first = String(to || '')
+      .split(/[,;，；]/)[0]
+      ?.trim() || '';
+    const m = first.match(/<([^>]+)>/);
+    const addr = (m ? m[1] : first).trim();
+    if (!addr || !addr.includes('@')) return quoteSnippet || '';
+    const r = await api('/deals/lookup?address=' + encodeURIComponent(addr));
+    if (r.deal?.id) setDealId(r.deal.id);
+    setQuoteSnippet(r.quoteSnippet || '');
+    return r.quoteSnippet || '';
+  }
+
+  async function insertQuoteSnippet() {
+    try {
+      const snip = (await fetchLiveSnippet()) || quoteSnippet || '';
+      if (!snip) return notify('当前客户暂无报价要点，请先在成交条填写款号/报价', 'error');
+      editor.current.focus();
+      insertHtmlAtCursor(`<pre class="zm-quote-snip">${snip.replace(/</g, '&lt;')}</pre><br>`, editor.current);
+      touch();
+    } catch (e) {
+      notify(e.message || '拉取报价要点失败', 'error');
+    }
   }
 
   function groupedTemplates(list) {
@@ -683,11 +729,14 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
               </div>
             )}
           </div>
-          {initial.quoteSnippet && (
-            <button type="button" onClick={insertQuoteSnippet} title="插入当前报价要点">
-              <Quote size={15} />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={insertQuoteSnippet}
+            title={quoteSnippet ? '插入最新报价要点' : '从成交条拉取并插入报价要点'}
+            className={quoteSnippet ? '' : 'muted'}
+          >
+            <Quote size={15} />
+          </button>
         </div>
         {aiEnabled ? (
           <div className="ai-tools">

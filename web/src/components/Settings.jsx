@@ -490,16 +490,49 @@ function PushRow({ notify }) {
   );
 }
 
-function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudChange }) {
+function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudChange, onAiConfigured }) {
+  const [desktopInfo, setDesktopInfo] = useState(null);
+  const [aiKeyDraft, setAiKeyDraft] = useState('');
+  const [aiBaseDraft, setAiBaseDraft] = useState('');
+  const [aiSaving, setAiSaving] = useState(false);
   const set = (k) => (v) => {
     onSave({ [k]: v });
     if (k === 'notify' && v && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
     if (k === 'aiCloudOk') onAiCloudChange?.(!!v);
   };
+  useEffect(() => {
+    api('/desktop/status')
+      .then((d) => setDesktopInfo(d))
+      .catch(() => setDesktopInfo(null));
+  }, [aiEnabled, aiMeta?.configured]);
   const translateTarget = settings.translateTarget === 'English' || settings.translateTarget === '英文' ? 'English' : '简体中文';
   const cloudOk = settings.aiCloudOk !== false;
   const vendor = aiMeta?.vendorHost || '';
   const configured = aiMeta?.configured ?? aiEnabled;
+  const isDesktop = !!desktopInfo?.desktop;
+
+  async function saveDesktopAi(e) {
+    e?.preventDefault?.();
+    setAiSaving(true);
+    try {
+      const r = await api('/desktop/setup', {
+        method: 'POST',
+        body: {
+          aiApiKey: aiKeyDraft.trim(),
+          ...(aiBaseDraft.trim() ? { aiBaseUrl: aiBaseDraft.trim() } : {}),
+        },
+      });
+      setAiKeyDraft('');
+      notify(r.aiConfigured ? '本机 AI Key 已保存' : '已清除本机 AI Key', 'success');
+      setDesktopInfo((d) => (d ? { ...d, aiConfigured: !!r.aiConfigured } : d));
+      onAiConfigured?.(!!r.aiConfigured);
+    } catch (err) {
+      notify(err.message || '保存失败', 'error');
+    } finally {
+      setAiSaving(false);
+    }
+  }
+
   return (
     <>
       <div className={'ai-status-card ' + (aiEnabled ? 'on' : 'off')} id="ai-status">
@@ -508,16 +541,50 @@ function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudCha
             ? '智能功能已开启 · 邮件会发往云端模型'
             : configured && !cloudOk
               ? '云端 AI 已按你的选择关闭'
-              : '智能功能未开通 · 请联系管理员配置服务器 AI 密钥'}
+              : isDesktop
+                ? '智能功能未开通 · 可在下方填写本机 AI API Key'
+                : '智能功能未开通 · 请联系管理员配置服务器 AI 密钥'}
         </b>
         <small>
           {aiEnabled
             ? `摘要、翻译、润色、分诊等会把主题与正文发送至 ${vendor || '已配置的 AI 服务'}，请勿对极度敏感邮件使用。`
             : configured && !cloudOk
               ? '关闭后摘要/翻译/分诊不可用，邮件不会外发。需要时再打开下方开关。'
-              : '密钥在服务端 .env，此处只读。'}
+              : isDesktop
+                ? 'Windows 本机版：密钥写入本机配置，不依赖服务器 .env。'
+                : '密钥在服务端 .env，此处只读。'}
         </small>
       </div>
+      {isDesktop && (
+        <form className="desktop-ai-setup" onSubmit={saveDesktopAi} style={{ marginBottom: 16 }}>
+          <h4><Sparkles size={15} /> 本机 AI 配置</h4>
+          <p className="set-hint">
+            当前{desktopInfo.aiConfigured ? '已配置' : '未配置'}。填写后立即生效；留空保存可清除密钥。
+          </p>
+          <label className="field">
+            <span>API Key</span>
+            <input
+              type="password"
+              value={aiKeyDraft}
+              onChange={(e) => setAiKeyDraft(e.target.value)}
+              placeholder={desktopInfo.aiConfigured ? '已保存（输入新密钥以更换）' : 'Token Plan / OpenAI 兼容 Key'}
+              autoComplete="off"
+            />
+          </label>
+          <label className="field">
+            <span>API Base URL（可选）</span>
+            <input
+              value={aiBaseDraft}
+              onChange={(e) => setAiBaseDraft(e.target.value)}
+              placeholder="默认使用内置兼容端点"
+              autoComplete="off"
+            />
+          </label>
+          <button type="submit" className="btn-primary" disabled={aiSaving}>
+            {aiSaving ? <Loader2 size={14} className="spin" /> : null} 保存本机 AI
+          </button>
+        </form>
+      )}
       {configured && (
         <Toggle
           icon={Sparkles}
@@ -1458,7 +1525,7 @@ function LabelsPanel({ notify, onChanged }) {
   );
 }
 
-export default function Settings({ user, mailboxes, tab: initialTab, focusMailbox, onClose, notify, onUserChange, onSettings, onMailboxesChanged, onAddMailbox, onLogout, aiEnabled, aiMeta, onAiCloudChange, onLabelsChanged }) {
+export default function Settings({ user, mailboxes, tab: initialTab, focusMailbox, onClose, notify, onUserChange, onSettings, onMailboxesChanged, onAddMailbox, onLogout, aiEnabled, aiMeta, onAiCloudChange, onAiRefresh, onLabelsChanged }) {
   const [tab, setTab] = useState(initialTab || 'mailboxes');
   const tabs = TABS.filter(([k]) => k !== 'team' || user.role === 'admin');
 
@@ -1495,6 +1562,9 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
                 aiEnabled={aiEnabled}
                 aiMeta={aiMeta}
                 onAiCloudChange={onAiCloudChange}
+                onAiConfigured={async () => {
+                  await onAiRefresh?.();
+                }}
                 notify={notify}
               />
             )}

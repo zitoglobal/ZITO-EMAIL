@@ -286,9 +286,14 @@ app.get('/api/desktop/status', (req, res) => {
 
 app.post(
   '/api/desktop/setup',
+  (req, res, next) => {
+    if (!IS_DESKTOP) return next(Object.assign(new Error('非桌面模式'), { status: 404 }));
+    // 首装无用户时可匿名写；已有用户必须登录（设置页补录 AI Key）
+    if (users.userCount() > 0) return auth(req, res, next);
+    return next();
+  },
   wrap(async (req, res) => {
-    if (!IS_DESKTOP) throw httpError(404, '非桌面模式');
-    rateLimit('desktop-setup:' + req.ip, 20, 3600_000);
+    rateLimit('desktop-setup:' + (req.user?.id || req.ip), 20, 3600_000);
     const body = req.body || {};
     const patch = { setupComplete: true };
     if ('aiApiKey' in body) {
@@ -305,6 +310,7 @@ app.post(
       const url = String(body.aiBaseUrl || '').trim();
       patch.aiBaseUrl = url;
       if (url) process.env.AI_BASE_URL = url;
+      else delete process.env.AI_BASE_URL;
     }
     writeDesktopConfig(patch);
     res.json({

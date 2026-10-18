@@ -70,7 +70,18 @@ export function registerDealsRoutes(app, ctx) {
     '/api/deals/lookup',
     auth,
     wrap(async (req, res) => {
-      res.json(deals.lookup(req.user.id, { address: req.query.address, threadId: req.query.threadId }));
+      const pack = deals.lookup(req.user.id, { address: req.query.address, threadId: req.query.threadId });
+      res.json({ ...pack, quoteSnippet: deals.quoteSnippet(pack.deal) });
+    })
+  );
+  app.get(
+    '/api/deals/:id/quote-snippet',
+    auth,
+    wrap(async (req, res) => {
+      const id = Number(req.params.id);
+      deals.assertDealReadable(req.user.id, id);
+      const deal = deals.getPublicDeal(req.user.id, id);
+      res.json({ quoteSnippet: deals.quoteSnippet(deal), deal });
     })
   );
   app.get('/api/deals/stages', auth, (_req, res) => res.json({ stages: deals.STAGES }));

@@ -1755,6 +1755,15 @@ export default function App() {
             aiEnabled={ai}
             aiMeta={aiMeta}
             onAiCloudChange={(ok) => setAi(!!(aiMeta?.configured && ok))}
+            onAiRefresh={async () => {
+              try {
+                const d = await api('/me');
+                setAi(!!d.ai);
+                if (d.aiMeta) setAiMeta(d.aiMeta);
+              } catch {
+                /* ignore */
+              }
+            }}
             onLabelsChanged={(list) => setLabels(list || [])}
           />
         </LazyPane>
