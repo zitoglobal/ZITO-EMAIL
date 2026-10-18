@@ -298,11 +298,25 @@ export function deleteSample(userId, dealId, sampleId) {
   return { ok: true };
 }
 
-/** 生成可粘贴进邮件的报价要点纯文本 */
-export function quoteSnippet(deal) {
+/** 生成可粘贴进邮件的报价要点纯文本（含多款号） */
+export function quoteSnippet(deal, { styles } = {}) {
   if (!deal) return '';
   const lines = ['【报价要点】'];
-  if (deal.styleNo) lines.push(`Style: ${deal.styleNo}`);
+  const styleRows = Array.isArray(styles)
+    ? styles
+    : deal.id
+      ? listStyles(deal.id)
+      : [];
+  if (styleRows.length) {
+    for (const s of styleRows.slice(0, 8)) {
+      const bits = [s.styleNo];
+      if (s.colorway) bits.push(s.colorway);
+      if (s.sizeRange) bits.push(s.sizeRange);
+      lines.push(`Style: ${bits.join(' / ')}`);
+    }
+  } else if (deal.styleNo) {
+    lines.push(`Style: ${deal.styleNo}`);
+  }
   if (deal.amount != null) lines.push(`Amount: ${deal.currency || 'USD'} ${deal.amount}`);
   if (deal.moq) lines.push(`MOQ: ${deal.moq}`);
   if (deal.leadDays != null) lines.push(`Lead time: ${deal.leadDays} days`);
@@ -312,6 +326,34 @@ export function quoteSnippet(deal) {
   }
   if (lines.length === 1) return '';
   return lines.join('\n');
+}
+
+/** 拆分/合并时拷贝外贸标量字段 */
+function copyCommerceToDeal(fromRow, toId, t) {
+  db.prepare(
+    `UPDATE deals SET style_no = ?, currency = ?, amount = ?, moq = ?, lead_days = ?,
+      incoterm = ?, quote_valid_until = ?, brand_id = ?, auto_follow_seq = ?, updated_at = ?
+     WHERE id = ?`
+  ).run(
+    fromRow.style_no || '',
+    fromRow.currency || 'USD',
+    fromRow.amount,
+    fromRow.moq || '',
+    fromRow.lead_days,
+    fromRow.incoterm || '',
+    fromRow.quote_valid_until,
+    fromRow.brand_id,
+    fromRow.auto_follow_seq != null ? fromRow.auto_follow_seq : 1,
+    t,
+    toId
+  );
+}
+
+/** 将款号/样品挂到目标 deal（避免 DELETE CASCADE 清空） */
+function reassignDealChildren(fromId, toId) {
+  if (!fromId || !toId || fromId === toId) return;
+  db.prepare('UPDATE deal_styles SET deal_id = ? WHERE deal_id = ?').run(toId, fromId);
+  db.prepare('UPDATE deal_samples SET deal_id = ? WHERE deal_id = ?').run(toId, fromId);
 }
 
 function logEvent(dealId, scopeKey, actorUserId, action, detail = '') {
@@ -552,6 +594,7 @@ export function release(userId, dealId) {
 
 /**
  * 将公司域认领拆到当前联系人个人键，并释放公司锁，便于同事跟同域其它采购。
+ * 事务内迁移报价标量 + 款号/样品，避免 DELETE CASCADE 清空成交记忆。
  */
 export function splitToPerson(userId, dealId) {
   const row = getDealById(dealId);
@@ -579,49 +622,67 @@ export function splitToPerson(userId, dealId) {
       { status: 409, deal: publicDeal(existingPerson, userId) }
     );
   }
-  let personId = existingPerson?.id;
-  if (existingPerson) {
-    db.prepare(
-      `UPDATE deals SET owner_user_id = ?, stage = ?, stage_updated_at = ?, note = ?,
-        next_follow_at = ?, last_thread_id = COALESCE(?, last_thread_id), last_address = ?,
-        claimed_at = ?, updated_at = ? WHERE id = ?`
-    ).run(
-      row.owner_user_id,
-      row.stage,
-      row.stage_updated_at || t,
-      row.note || '',
-      row.next_follow_at,
-      row.last_thread_id,
-      address,
-      row.claimed_at || t,
-      t,
-      existingPerson.id
-    );
-  } else {
-    const info = db
-      .prepare(
-        `INSERT INTO deals
-          (scope_key, scope_kind, owner_user_id, claimed_at, stage, stage_updated_at, note,
-           next_follow_at, last_thread_id, last_address, updated_at)
-         VALUES (?, 'address', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        person.key,
+
+  const run = db.transaction(() => {
+    let personId = existingPerson?.id;
+    if (existingPerson) {
+      db.prepare(
+        `UPDATE deals SET owner_user_id = ?, stage = ?, stage_updated_at = ?, note = ?,
+          next_follow_at = ?, last_thread_id = COALESCE(?, last_thread_id), last_address = ?,
+          claimed_at = ?, updated_at = ? WHERE id = ?`
+      ).run(
         row.owner_user_id,
-        row.claimed_at || t,
         row.stage,
         row.stage_updated_at || t,
         row.note || '',
         row.next_follow_at,
         row.last_thread_id,
         address,
-        t
+        row.claimed_at || t,
+        t,
+        existingPerson.id
       );
-    personId = Number(info.lastInsertRowid);
-  }
-  logEvent(personId, person.key, userId, 'split', `从 ${row.scope_key.slice(2)} 拆到个人`);
-  logEvent(row.id, row.scope_key, userId, 'release', '拆分后释放公司域认领');
-  db.prepare('DELETE FROM deals WHERE id = ?').run(dealId);
+      copyCommerceToDeal(row, existingPerson.id, t);
+    } else {
+      const info = db
+        .prepare(
+          `INSERT INTO deals
+            (scope_key, scope_kind, owner_user_id, claimed_at, stage, stage_updated_at, note,
+             next_follow_at, last_thread_id, last_address, updated_at,
+             style_no, currency, amount, moq, lead_days, incoterm, quote_valid_until, brand_id, auto_follow_seq)
+           VALUES (?, 'address', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          person.key,
+          row.owner_user_id,
+          row.claimed_at || t,
+          row.stage,
+          row.stage_updated_at || t,
+          row.note || '',
+          row.next_follow_at,
+          row.last_thread_id,
+          address,
+          t,
+          row.style_no || '',
+          row.currency || 'USD',
+          row.amount,
+          row.moq || '',
+          row.lead_days,
+          row.incoterm || '',
+          row.quote_valid_until,
+          row.brand_id,
+          row.auto_follow_seq != null ? row.auto_follow_seq : 1
+        );
+      personId = Number(info.lastInsertRowid);
+    }
+    reassignDealChildren(row.id, personId);
+    logEvent(personId, person.key, userId, 'split', `从 ${row.scope_key.slice(2)} 拆到个人`);
+    logEvent(row.id, row.scope_key, userId, 'release', '拆分后释放公司域认领');
+    db.prepare('DELETE FROM deals WHERE id = ?').run(dealId);
+    return personId;
+  });
+
+  const personId = run();
   return publicDeal(getDealById(personId), userId);
 }
 

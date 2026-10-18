@@ -8,7 +8,6 @@ import MailList from './components/MailList.jsx';
 import Reader from './components/Reader.jsx';
 import Composer from './components/Composer.jsx';
 import Focus from './components/Focus.jsx';
-import Waiting from './components/Waiting.jsx';
 import ColumnSplitter from './components/ColumnSplitter.jsx';
 import { SMART_VIEWS, dayStart, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
 import { buildComposeState, signatureHtml, toForm } from './compose.js';
@@ -114,6 +113,10 @@ export default function App() {
   const [groupMode, setGroupModeState] = useState(() => localStorage.getItem('zm_group') || 'newest');
   const [aiBusy, setAiBusy] = useState(false);
   const [waitingTab, setWaitingTab] = useState('mine');
+  /** Insights / 深链 → Focus 桶：all|today|reply|overdue|follow */
+  const [focusBucket, setFocusBucket] = useState(null);
+  const [dealsFollowFilter, setDealsFollowFilter] = useState(null);
+  const [dealsStageFilter, setDealsStageFilter] = useState(null);
   const [customerOpen, setCustomerOpen] = useState(false); // drawer when rail hidden
   const [customerCtx, setCustomerCtx] = useState(null); // { address, sender, slaHours }
   const [viewportW, setViewportW] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1440));
@@ -1197,9 +1200,10 @@ export default function App() {
       const item = s.selectedItem || s.currentMsg;
       if (gPending.current && Date.now() - gPending.current < 1500) {
         gPending.current = 0;
-        const target = { t: 'today', w: 'waiting', i: 'inbox', u: 'unread', s: 'flagged', d: 'deals', a: 'insights' }[e.key];
+        const target = { t: 'today', w: 'today', i: 'inbox', u: 'unread', s: 'flagged', d: 'deals', a: 'insights', q: 'team' }[e.key];
         if (target) {
           e.preventDefault();
+          if (e.key === 'w') setFocusBucket('reply');
           setView({ mailboxId: 'all', box: target });
           return;
         }
@@ -1445,7 +1449,7 @@ export default function App() {
             onChanged={loadState}
           />
         </LazyPane>
-      ) : view.box === 'today' ? (
+      ) : view.box === 'today' || view.box === 'waiting' ? (
         <Focus
           user={user}
           data={focusData}
@@ -1472,33 +1476,15 @@ export default function App() {
           notify={notify}
           onAiAction={runAiAction}
           aiActionBusy={aiActionBusy}
-        />
-      ) : view.box === 'waiting' ? (
-        <Waiting
-          data={focusData}
-          messages={list.messages}
-          loading={loading}
-          error={listError}
-          selectedId={selectedId}
-          onSelect={selectMessage}
-          onAction={doAction}
-          mailboxMap={mailboxMap}
-          onRefresh={refresh}
-          refreshing={refreshing}
-          onFollowUp={followUp}
-          onMuteFollow={muteFollow}
-          onMenu={() => setSidebarOpen(true)}
-          tab={waitingTab}
-          setTab={setWaitingTab}
-          notify={notify}
-          checked={checked}
-          setChecked={setChecked}
-          aiEnabled={ai}
-          onAiTriage={aiTriage}
-          aiBusy={aiBusy}
-          onAiAction={runAiAction}
-          aiActionBusy={aiActionBusy}
-          onGoToday={() => setView({ mailboxId: 'all', box: 'today' })}
+          forcedBucket={
+            view.box === 'waiting'
+              ? waitingTab === 'them'
+                ? 'follow'
+                : waitingTab === 'overdue'
+                  ? 'overdue'
+                  : 'reply'
+              : focusBucket || undefined
+          }
         />
       ) : view.box === 'team' ? (
         <LazyPane label="加载团队公海">
@@ -1518,11 +1504,13 @@ export default function App() {
             key={dealsVersion}
             onMenu={() => setSidebarOpen(true)}
             notify={notify}
+            initialFollowFilter={dealsFollowFilter || undefined}
+            initialStage={dealsStageFilter || undefined}
             onOpenDeal={(d) => {
               if (d.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
             }}
             onOpenDealMail={(id, d) => {
-              openMessage(id, { box: 'inbox' });
+              openMessage(id, { box: 'today' });
               if (d?.lastAddress) openCustomer(d.lastAddress, { name: d.scopeLabel, address: d.lastAddress });
             }}
             onComposeOutreach={(hint) => openCompose('new', null, hint || {})}
@@ -1533,9 +1521,23 @@ export default function App() {
           <Insights
             onMenu={() => setSidebarOpen(true)}
             isAdmin={user.role === 'admin'}
-            onGo={(box, tab) => {
-              if (box === 'waiting' && tab) setWaitingTab(tab);
-              setView({ mailboxId: 'all', box: box || 'today' });
+            onGo={(box, tabOrOpts) => {
+              if (box === 'waiting') {
+                const tab = typeof tabOrOpts === 'string' ? tabOrOpts : tabOrOpts?.tab;
+                if (tab) setWaitingTab(tab);
+                setFocusBucket(tab === 'them' ? 'follow' : tab === 'overdue' ? 'overdue' : 'reply');
+                setView({ mailboxId: 'all', box: 'today' });
+              } else if (box === 'deals') {
+                const ff = typeof tabOrOpts === 'object' && tabOrOpts?.followFilter;
+                if (ff) setDealsFollowFilter(ff);
+                if (typeof tabOrOpts === 'object' && tabOrOpts?.stage) setDealsStageFilter(tabOrOpts.stage);
+                setView({ mailboxId: 'all', box: 'deals' });
+              } else if (box === 'today' && typeof tabOrOpts === 'string') {
+                setFocusBucket(tabOrOpts);
+                setView({ mailboxId: 'all', box: 'today' });
+              } else {
+                setView({ mailboxId: 'all', box: box || 'today' });
+              }
               setSidebarOpen(false);
             }}
             onOpenMessage={(id) => openMessage(id, { box: 'today' })}

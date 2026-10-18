@@ -890,6 +890,26 @@ function markSeen(row) {
   imap.setFlags(repo.getMailboxById(row.mailbox_id), row.folder, [row.uid], { seen: true }).catch(() => {});
 }
 
+/** Sent/草稿：from 是自己，成交 lookup 与内部备注应用对方地址 */
+function peerAddressForDealLookup(userId, row) {
+  const own = new Set(
+    repo.listMailboxes(userId).map((m) => String(m.email || '').toLowerCase()).filter(Boolean)
+  );
+  const from = String(row.from_addr || '').trim().toLowerCase();
+  if (from && !own.has(from)) return from;
+  let tos = [];
+  try {
+    tos = JSON.parse(row.to_json || '[]');
+  } catch {
+    tos = [];
+  }
+  for (const a of tos) {
+    const addr = String(a?.address || '').trim().toLowerCase();
+    if (addr && addr.includes('@') && !own.has(addr)) return addr;
+  }
+  return from || null;
+}
+
 app.get(
   '/api/messages/:id',
   auth,
@@ -918,8 +938,9 @@ app.get(
           (_, i) => `src="/api/messages/${row.id}/attachments/${i}?inline=1"`
         )
       : body.html;
+    const peerAddr = peerAddressForDealLookup(req.user.id, row);
     const dealPack = (() => {
-      const d = deals.lookup(req.user.id, { address: row.from_addr, threadId: row.thread_id });
+      const d = deals.lookup(req.user.id, { address: peerAddr || row.from_addr, threadId: row.thread_id });
       return {
         deal: d.deal,
         dealScope: d.scope,
@@ -928,18 +949,20 @@ app.get(
         canSplitDeal: !!d.canSplit,
         canClaimPerson: !!d.canClaimPerson,
         quoteSnippet: deals.quoteSnippet(d.deal),
+        peerAddress: peerAddr || row.from_addr || null,
       };
     })();
+    const noteAddr = peerAddr || row.from_addr;
     res.json({
       ...withLabels,
       ...body.meta,
       html: safeHtml,
       text: body.text,
       signals: body.signals ?? withLabels.signals,
-      knownSender: repo.isKnownContact(req.user.id, row.from_addr),
-      sender: priority.senderInfo(req.user.id, row.from_addr),
+      knownSender: repo.isKnownContact(req.user.id, noteAddr),
+      sender: priority.senderInfo(req.user.id, noteAddr || row.from_addr),
       conflict: priority.conflictHints(req.user.id, { fromAddr: row.from_addr, threadId: row.thread_id }),
-      internalNotes: threadNotes.listNotes({ threadId: row.thread_id, address: row.from_addr, limit: 20 }),
+      internalNotes: threadNotes.listNotes({ threadId: row.thread_id, address: noteAddr, limit: 20 }),
       ...dealPack,
     });
   })

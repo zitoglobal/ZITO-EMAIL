@@ -108,6 +108,19 @@ export default function DealBar({
 
   if (!visible) return null;
 
+  function bumpDeal(nextDeal, reason) {
+    onChange?.(nextDeal);
+    try {
+      window.dispatchEvent(
+        new CustomEvent('zm-deal', {
+          detail: { dealId: nextDeal?.id || deal?.id, reason, deal: nextDeal },
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function claim(force = false, scopeKind) {
     setBusy(scopeKind === 'address' ? 'claim-person' : 'claim');
     try {
@@ -115,7 +128,7 @@ export default function DealBar({
         method: 'POST',
         body: { address, threadId, messageId: messageId || undefined, force, scopeKind },
       });
-      onChange?.(d.deal);
+      bumpDeal(d.deal, 'claim');
       const label =
         scopeKind === 'address'
           ? `已认领联系人 ${d.deal.scopeLabel}`
@@ -125,7 +138,7 @@ export default function DealBar({
       notify(label, 'success');
     } catch (e) {
       if (e.status === 409 && e.deal) {
-        onChange?.(e.deal);
+        bumpDeal(e.deal, 'claim-conflict');
         notify(e.message, 'error');
       } else notify(e.message, 'error');
     } finally {
@@ -137,7 +150,7 @@ export default function DealBar({
     if (!deal?.id) return;
     if (
       !window.confirm(
-        `将「${deal.scopeLabel}」拆到个人「${address}」？\n公司域认领会释放，同事可跟同域其它采购。`
+        `将「${deal.scopeLabel}」拆到个人「${address}」？\n公司域认领会释放，同事可跟同域其它采购；报价与样品会保留到个人认领。`
       )
     ) {
       return;
@@ -145,7 +158,7 @@ export default function DealBar({
     setBusy('split');
     try {
       const d = await api(`/deals/${deal.id}/split`, { method: 'POST', body: {} });
-      onChange?.(d.deal);
+      bumpDeal(d.deal, 'split');
       notify(`已拆到个人 ${d.deal.scopeLabel}`, 'success');
     } catch (e) {
       notify(e.message, 'error');
@@ -160,7 +173,7 @@ export default function DealBar({
     setBusy('release');
     try {
       await api(`/deals/${deal.id}/release`, { method: 'POST', body: {} });
-      onChange?.(null);
+      bumpDeal(null, 'release');
       notify('已释放认领');
     } catch (e) {
       notify(e.message, 'error');
@@ -177,7 +190,7 @@ export default function DealBar({
         method: 'PATCH',
         body: { stage, messageId: messageId || undefined },
       });
-      onChange?.(d.deal);
+      bumpDeal(d.deal, 'stage');
       const tag = d.stageLabel?.name ? `，并贴标签「${d.stageLabel.name}」` : '';
       notify(`阶段已更新为 ${d.deal.stageLabel}${tag}`);
     } catch (e) {
@@ -197,7 +210,7 @@ export default function DealBar({
     setBusy('note');
     try {
       const d = await api(`/deals/${deal.id}`, { method: 'PATCH', body: { note } });
-      onChange?.(d.deal);
+      bumpDeal(d.deal, 'note');
       setEditingNote(false);
       notify(note ? '备注已保存' : '备注已清空');
     } catch (e) {
@@ -212,12 +225,25 @@ export default function DealBar({
     setBusy('follow');
     try {
       const d = await api(`/deals/${deal.id}`, { method: 'PATCH', body: { nextFollowAt: ts } });
-      onChange?.(d.deal);
+      bumpDeal(d.deal, 'follow');
       notify(ts ? `下次跟进：${formatShortDateTime(ts)}` : '已清除跟进日');
     } catch (e) {
       notify(e.message, 'error');
     } finally {
       setBusy('');
+    }
+  }
+
+  function bumpDeal(nextDeal, reason) {
+    onChange?.(nextDeal);
+    try {
+      window.dispatchEvent(
+        new CustomEvent('zm-deal', {
+          detail: { dealId: nextDeal?.id || deal?.id, reason, deal: nextDeal },
+        })
+      );
+    } catch {
+      /* ignore */
     }
   }
 
@@ -237,7 +263,7 @@ export default function DealBar({
           : null,
       };
       const d = await api(`/deals/${deal.id}`, { method: 'PATCH', body });
-      onChange?.(d.deal);
+      bumpDeal(d.deal, 'commerce');
       notify('报价要点已保存', 'success');
     } catch (e) {
       notify(e.message, 'error');
@@ -251,6 +277,7 @@ export default function DealBar({
     setBusy('sample');
     try {
       await api(`/deals/${deal.id}/samples`, { method: 'POST', body: sampleDraft });
+      bumpDeal(deal, 'sample');
       notify('样品记录已添加', 'success');
       setSampleDraft({ sampleType: 'sms', trackingNo: '', status: 'sent' });
     } catch (e) {
@@ -404,7 +431,7 @@ export default function DealBar({
                     onChange={async (e) => {
                       try {
                         const d = await api(`/deals/${deal.id}`, { method: 'PATCH', body: { autoFollowSeq: e.target.checked } });
-                        onChange?.(d.deal);
+                        bumpDeal(d.deal, 'follow-seq');
                       } catch (err) {
                         notify(err.message, 'error');
                       }

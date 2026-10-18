@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Inbox, Send, FileText, Trash2, Archive, ShieldAlert, Star, Folder, PenSquare, Settings, Sparkles, ChevronRight, Plus, LogOut,
-  MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, Hourglass, LayoutPanelLeft,
+  MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, LayoutPanelLeft,
   Columns3,   Briefcase, BookOpen, Tag, Bookmark, MoreHorizontal, Pencil, Trash, ChevronDown, BarChart3, Users,
 } from 'lucide-react';
 import { avatarColor, folderDepth, folderLabel, initials, sortFolders } from '../utils.js';
@@ -13,10 +13,9 @@ const MODE_ICONS = { standard: Columns3, sales: Briefcase, focus: BookOpen };
 
 const ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Trash': Trash2, '\\Archive': Archive, '\\Junk': ShieldAlert, '\\Flagged': Star, '\\All': Layers };
 
-/** L0 工作 — always visible (and icon-rail) */
+/** L0 工作 — always visible (and icon-rail)；等待已并入今日待办桶 */
 const WORK = [
   { box: 'today', label: '今日待办', icon: ListTodo },
-  { box: 'waiting', label: '等待', icon: Hourglass },
   { box: 'team', label: '团队公海', icon: Users },
   { box: 'deals', label: '我的客户', icon: Briefcase },
   { box: 'insights', label: '销售洞察', icon: BarChart3 },
@@ -37,10 +36,9 @@ const MAILBOX_MORE = [
   { box: 'drafts', label: '草稿箱', icon: FileText, multiOnly: true },
 ];
 
-/** Focus icon-rail order: 今日·等待·收件箱·未读·星标 (+ settings bottom; compose is rail-top) */
+/** Focus icon-rail：今日·公海·客户·收件箱·未读 */
 const RAIL_ITEMS = [
   { box: 'today', label: '今日待办', icon: ListTodo },
-  { box: 'waiting', label: '等待', icon: Hourglass },
   { box: 'team', label: '团队公海', icon: Users },
   { box: 'deals', label: '我的客户', icon: Briefcase },
   { box: 'inbox', label: '所有收件箱', icon: Inbox },

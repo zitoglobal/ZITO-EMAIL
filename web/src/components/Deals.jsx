@@ -22,16 +22,26 @@ function followPresets() {
 /**
  * 「我的客户」轻列表 — 按业务阶段扫管线（邮箱内 deals，非独立 CRM）
  */
-export default function Deals({ onMenu, notify, onOpenDeal, onOpenDealMail, onComposeOutreach }) {
+export default function Deals({
+  onMenu, notify, onOpenDeal, onOpenDealMail, onComposeOutreach,
+  initialFollowFilter, initialStage,
+}) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [deals, setDeals] = useState([]);
   const [stages, setStages] = useState([]);
   const [owner, setOwner] = useState('mine');
-  const [stage, setStage] = useState('all');
-  const [followFilter, setFollowFilter] = useState('all'); // all | due | planned
+  const [stage, setStage] = useState(initialStage || 'all');
+  const [followFilter, setFollowFilter] = useState(initialFollowFilter || 'all'); // all | due | planned
   const [busyId, setBusyId] = useState(null);
+
+  useEffect(() => {
+    if (initialFollowFilter) setFollowFilter(initialFollowFilter);
+  }, [initialFollowFilter]);
+  useEffect(() => {
+    if (initialStage) setStage(initialStage);
+  }, [initialStage]);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);

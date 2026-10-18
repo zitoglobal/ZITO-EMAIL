@@ -28,6 +28,8 @@ function loadExpanded() {
 export default function Focus({
   user, data, messages, loading, error, selectedId, onSelect, onAction, mailboxMap, onRefresh, refreshing, aiEnabled, onAiTriage, aiBusy,
   groupMode, setGroupMode, onFollowUp, onMuteFollow, onMenu, checked, setChecked, salesDensity = false, notify, onAiAction, aiActionBusy,
+  /** 深链/旧「等待」入口：all | today | reply | overdue | follow */
+  forcedBucket,
 }) {
   const body = useRef();
   const reply = messages.filter((m) => m._section === 'reply');
@@ -50,8 +52,14 @@ export default function Focus({
   const [claimFilter, setClaimFilter] = useState(() => loadClaimFilter());
   const [claimBusy, setClaimBusy] = useState(false);
   /** all | today | reply | overdue | follow — 顶部统计真正筛选列表 */
-  const [bucket, setBucket] = useState('all');
+  const [bucket, setBucket] = useState(() => forcedBucket || 'all');
   const lastChecked = useRef(null);
+
+  useEffect(() => {
+    if (forcedBucket && ['all', 'today', 'reply', 'overdue', 'follow'].includes(forcedBucket)) {
+      setBucket(forcedBucket);
+    }
+  }, [forcedBucket]);
 
   const filteredReply = useMemo(() => filterByClaim(reply, claimFilter), [reply, claimFilter]);
   const filteredFollow = useMemo(() => filterByClaim(follow, claimFilter), [follow, claimFilter]);

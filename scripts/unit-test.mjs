@@ -22,7 +22,7 @@ import {
   scopeFromAddress, resolveScopes, isValidStage, stageMeta, STAGES, suggestStageAfterSend,
   FOLLOW_SEQ_DAYS, quoteSnippet,
 } from '../server/deals.js';
-import { ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS as CLIENT_FOLLOW_SEQ } from '../web/src/apparelPresets.js';
+import { APPAREL_EMAIL_TEMPLATES, ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS as CLIENT_FOLLOW_SEQ } from '../web/src/apparelPresets.js';
 import { isBlockedHostname } from '../server/net_guard.js';
 import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
@@ -344,7 +344,13 @@ assert(
   quoteSnippet({ styleNo: 'ZS-01', currency: 'USD', amount: 12.5, moq: '500', leadDays: 45, incoterm: 'FOB' }).includes('Style: ZS-01')
     && quoteSnippet({ styleNo: 'ZS-01', currency: 'USD', amount: 12.5, moq: '500', leadDays: 45, incoterm: 'FOB' }).includes('FOB')
 );
+assert(
+  'quoteSnippet multi styles',
+  quoteSnippet({ amount: 9 }, { styles: [{ styleNo: 'A1', colorway: 'Navy' }, { styleNo: 'B2' }] }).includes('Style: A1 / Navy')
+    && quoteSnippet({ amount: 9 }, { styles: [{ styleNo: 'A1', colorway: 'Navy' }, { styleNo: 'B2' }] }).includes('Style: B2')
+);
 assert('ASSET_KIND techpack label', ASSET_KIND_LABEL.techpack === 'Tech pack');
+assert('apparel template has stage', APPAREL_EMAIL_TEMPLATES.some((t) => t.stage === 'quote'));
 
 // ---------- conversationKey ----------
 assert('conv key prefers thread', conversationKey({ thread_id: 't1', in_reply_to: 'p1', message_id: 'm1', id: 9 }) === 't1');

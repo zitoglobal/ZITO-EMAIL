@@ -44,6 +44,7 @@ export const APPAREL_GLOSSARY_EXTRA = [
 export const APPAREL_EMAIL_TEMPLATES = [
   {
     name: '询盘确认 + 要规格',
+    stage: 'inquiry',
     subject: 'Re: Your inquiry — specs & MOQ',
     body: `Hi {{name}},
 
@@ -61,6 +62,7 @@ Best regards`,
   },
   {
     name: '报价跟进',
+    stage: 'quote',
     subject: 'Following up on our quotation',
     body: `Hi {{name}},
 
@@ -72,6 +74,7 @@ Best regards`,
   },
   {
     name: '样品寄出通知',
+    stage: 'sample',
     subject: 'Sample shipped — tracking enclosed',
     body: `Hi {{name}},
 
@@ -83,6 +86,7 @@ Best regards`,
   },
   {
     name: '样品修改确认',
+    stage: 'sample',
     subject: 'Sample comments received — revision plan',
     body: `Hi {{name}},
 
@@ -97,6 +101,7 @@ Best regards`,
   },
   {
     name: '大货细节锁定',
+    stage: 'bulk',
     subject: 'Bulk order checklist — please confirm',
     body: `Hi {{name}},
 
@@ -114,6 +119,7 @@ Best regards`,
   },
   {
     name: 'PI / 定金提醒',
+    stage: 'payment',
     subject: 'PI & deposit — ready when you are',
     body: `Hi {{name}},
 
@@ -125,6 +131,7 @@ Best regards`,
   },
   {
     name: '出货文件齐全',
+    stage: 'won',
     subject: 'Shipment docs — BL / packing list / invoice',
     body: `Hi {{name}},
 

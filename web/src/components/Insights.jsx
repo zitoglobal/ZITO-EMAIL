@@ -191,7 +191,7 @@ export default function Insights({ onMenu, isAdmin, onGo, onOpenMessage, onOpenS
               {(data.funnel?.stages || data.stages || []).map((s) => {
                 const maxF = Math.max(1, ...(data.funnel?.stages || data.stages || []).map((x) => x.count));
                 return (
-                  <li key={s.id} className="clickable-row" onClick={() => onGo?.('deals')}>
+                  <li key={s.id} className="clickable-row" onClick={() => onGo?.('deals', { stage: s.id })}>
                     <span className="bar-label" style={{ color: s.color }}>{s.label}</span>
                     <span className="bar-track"><i style={{ width: `${(s.count / maxF) * 100}%`, background: s.color }} /></span>
                     <span className="bar-n">{s.count}</span>
@@ -211,11 +211,11 @@ export default function Insights({ onMenu, isAdmin, onGo, onOpenMessage, onOpenS
 
             <h3 className="insights-h">我的跟进日</h3>
             <div className="insights-follow">
-              <button type="button" className="linkish" onClick={() => onGo?.('waiting', 'them')}>
+              <button type="button" className="linkish" onClick={() => onGo?.('deals', { followFilter: 'due' })}>
                 已到期 <b>{data.follow?.due || 0}</b>
               </button>
               <span className="dot">·</span>
-              <button type="button" className="linkish" onClick={() => onGo?.('waiting', 'them')}>
+              <button type="button" className="linkish" onClick={() => onGo?.('deals', { followFilter: 'planned' })}>
                 7 日内 <b>{data.follow?.upcoming7d || 0}</b>
               </button>
             </div>

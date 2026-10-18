@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Crown, Bell, BellOff, Hourglass, Users, Reply, Clock, Plus, Loader2, UserPlus, CalendarClock, Send, ArrowDownLeft, ArrowUpRight, Sparkles, Package, FolderOpen, Trash2 } from 'lucide-react';
 import { api } from '../api.js';
 import { ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS, SAMPLE_STATUS_LABEL, SAMPLE_TYPE_LABEL } from '../apparelPresets.js';
@@ -138,29 +138,53 @@ export default function CustomerPanel({
   }, [peerAddr]);
 
   const dealId = timeline?.deal?.id || listItem?.deal?.id;
-  useEffect(() => {
-    if (!dealId) {
+
+  const reloadArtifacts = useCallback((id) => {
+    if (!id) {
       setStyles([]);
       setSamples([]);
-      return undefined;
+      return;
     }
-    let alive = true;
     Promise.all([
-      api(`/deals/${dealId}/styles`),
-      api(`/deals/${dealId}/samples`),
+      api(`/deals/${id}/styles`),
+      api(`/deals/${id}/samples`),
     ])
       .then(([st, sa]) => {
-        if (!alive) return;
         setStyles(st.styles || []);
         setSamples(sa.samples || []);
       })
       .catch(() => {
-        if (!alive) return;
         setStyles([]);
         setSamples([]);
       });
-    return () => { alive = false; };
-  }, [dealId]);
+  }, []);
+
+  useEffect(() => {
+    reloadArtifacts(dealId);
+  }, [dealId, reloadArtifacts]);
+
+  useEffect(() => {
+    if (!peerAddr) return undefined;
+    const onBump = (e) => {
+      const reason = e.detail?.reason;
+      const id = e.detail?.dealId || dealId;
+      if (reason === 'sample' || reason === 'commerce' || reason === 'split' || reason === 'stage' || reason === 'follow') {
+        reloadArtifacts(id);
+      }
+      if (reason === 'commerce' || reason === 'split' || reason === 'stage' || reason === 'follow' || reason === 'claim') {
+        api('/customer/timeline?address=' + encodeURIComponent(peerAddr) + '&limit=18')
+          .then((d) => setTimeline(d))
+          .catch(() => {});
+      }
+      if (peerAddr) {
+        api('/customer-assets?address=' + encodeURIComponent(peerAddr) + '&limit=30')
+          .then((d) => setAssets(d.assets || []))
+          .catch(() => {});
+      }
+    };
+    window.addEventListener('zm-deal', onBump);
+    return () => window.removeEventListener('zm-deal', onBump);
+  }, [peerAddr, dealId, reloadArtifacts]);
 
   function scheduleNoteSave(value) {
     setNote(value);

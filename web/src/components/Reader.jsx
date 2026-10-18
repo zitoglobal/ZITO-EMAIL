@@ -391,6 +391,9 @@ function Attachments({ msg, setLightbox, peerAddress, canLibrary, onNotify }) {
           contentType: a.contentType || '',
         },
       });
+      try {
+        window.dispatchEvent(new CustomEvent('zm-deal', { detail: { reason: 'asset', address: peerAddress } }));
+      } catch { /* ignore */ }
       onNotify?.(`已收入资料库（${ASSET_KIND_LABEL[assetKind] || assetKind}）`, 'success');
     } catch (err) {
       onNotify?.(err.message || '收入失败', 'error');
