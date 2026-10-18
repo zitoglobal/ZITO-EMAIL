@@ -1,4 +1,5 @@
 import { db, now } from './db.js';
+import { getBrand } from './brands.js';
 
 /** 避免与 priority.js 循环依赖：域名工具在此内联一份 */
 const FREE_DOMAINS = new Set([
@@ -120,6 +121,17 @@ function assertDealWrite(userId, dealId) {
   return row;
 }
 
+/** 认领人 / 管理员 / 同 scope 有往来的同事可读款号·样品 */
+export function assertDealReadable(userId, dealId) {
+  const row = getDealById(dealId);
+  if (!row) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
+  const keys = [row.scope_key];
+  if (!canViewDealEvents(userId, keys, row)) {
+    throw Object.assign(new Error('无权查看该成交记录'), { status: 403 });
+  }
+  return row;
+}
+
 function applyFollowSeq(userId, row, stage, { force = false } = {}) {
   if (row.auto_follow_seq === 0) return;
   const days = FOLLOW_SEQ_DAYS[stage];
@@ -172,7 +184,12 @@ export function updateCommerce(userId, dealId, patch = {}) {
   }
   let brandId = row.brand_id;
   if ('brandId' in patch) {
-    brandId = patch.brandId == null || patch.brandId === '' ? null : Number(patch.brandId);
+    if (patch.brandId == null || patch.brandId === '') brandId = null;
+    else {
+      const br = getBrand(userId, Number(patch.brandId));
+      if (!br) throw Object.assign(new Error('品牌不存在'), { status: 400 });
+      brandId = br.id;
+    }
   }
   let autoFollowSeq = row.auto_follow_seq;
   if ('autoFollowSeq' in patch) autoFollowSeq = patch.autoFollowSeq ? 1 : 0;
@@ -190,19 +207,35 @@ export function updateCommerce(userId, dealId, patch = {}) {
   return publicDeal(getDealById(dealId), userId);
 }
 
+function mapStyleRow(r) {
+  return {
+    id: r.id,
+    dealId: r.deal_id,
+    styleNo: r.style_no,
+    colorway: r.colorway,
+    sizeRange: r.size_range,
+    note: r.note,
+    unitPrice: r.unit_price != null ? Number(r.unit_price) : null,
+    moq: r.moq || '',
+    currency: r.currency || 'USD',
+    updatedAt: r.updated_at,
+  };
+}
+
 export function listStyles(dealId) {
   return db
     .prepare('SELECT * FROM deal_styles WHERE deal_id = ? ORDER BY updated_at DESC, id DESC')
     .all(dealId)
-    .map((r) => ({
-      id: r.id,
-      dealId: r.deal_id,
-      styleNo: r.style_no,
-      colorway: r.colorway,
-      sizeRange: r.size_range,
-      note: r.note,
-      updatedAt: r.updated_at,
-    }));
+    .map(mapStyleRow);
+}
+
+function parseStylePrice(body) {
+  if (!('unitPrice' in body) && !('unit_price' in body)) return undefined;
+  const raw = 'unitPrice' in body ? body.unitPrice : body.unit_price;
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) throw Object.assign(new Error('单价无效'), { status: 400 });
+  return n;
 }
 
 export function upsertStyle(userId, dealId, body = {}) {
@@ -213,20 +246,29 @@ export function upsertStyle(userId, dealId, body = {}) {
   const colorway = String(body.colorway || '').trim().slice(0, 120);
   const sizeRange = String(body.sizeRange || '').trim().slice(0, 120);
   const note = String(body.note || '').trim().slice(0, 200);
+  const moq = String(body.moq || '').trim().slice(0, 80);
+  const currency = String(body.currency || 'USD').trim().toUpperCase().slice(0, 8) || 'USD';
+  const unitPrice = parseStylePrice(body);
   if (body.id) {
-    const ex = db.prepare('SELECT id FROM deal_styles WHERE id = ? AND deal_id = ?').get(body.id, dealId);
+    const ex = db.prepare('SELECT * FROM deal_styles WHERE id = ? AND deal_id = ?').get(body.id, dealId);
     if (!ex) throw Object.assign(new Error('款号不存在'), { status: 404 });
+    const price = unitPrice === undefined ? ex.unit_price : unitPrice;
+    const nextMoq = 'moq' in body ? moq : ex.moq || '';
+    const nextCur = 'currency' in body ? currency : ex.currency || 'USD';
     db.prepare(
-      `UPDATE deal_styles SET style_no = ?, colorway = ?, size_range = ?, note = ?, updated_at = ? WHERE id = ?`
-    ).run(styleNo, colorway, sizeRange, note, t, body.id);
+      `UPDATE deal_styles SET style_no = ?, colorway = ?, size_range = ?, note = ?,
+        unit_price = ?, moq = ?, currency = ?, updated_at = ? WHERE id = ?`
+    ).run(styleNo, colorway, sizeRange, note, price, nextMoq, nextCur, t, body.id);
     return listStyles(dealId).find((s) => s.id === body.id);
   }
+  const price = unitPrice === undefined ? null : unitPrice;
   const id = Number(
     db
       .prepare(
-        `INSERT INTO deal_styles (deal_id, style_no, colorway, size_range, note, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO deal_styles (deal_id, style_no, colorway, size_range, note, updated_at, unit_price, moq, currency)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(dealId, styleNo, colorway, sizeRange, note, t).lastInsertRowid
+      .run(dealId, styleNo, colorway, sizeRange, note, t, price, moq, currency).lastInsertRowid
   );
   db.prepare('UPDATE deals SET style_no = CASE WHEN style_no = \'\' THEN ? ELSE style_no END, updated_at = ? WHERE id = ?').run(
     styleNo,
@@ -330,13 +372,16 @@ export function quoteSnippet(deal, { styles } = {}) {
       const bits = [s.styleNo];
       if (s.colorway) bits.push(s.colorway);
       if (s.sizeRange) bits.push(s.sizeRange);
-      lines.push(`Style: ${bits.join(' / ')}`);
+      let line = `Style: ${bits.filter(Boolean).join(' / ')}`;
+      if (s.unitPrice != null) line += ` · ${s.currency || deal.currency || 'USD'} ${s.unitPrice}`;
+      if (s.moq) line += ` · MOQ ${s.moq}`;
+      lines.push(line);
     }
   } else if (deal.styleNo) {
     lines.push(`Style: ${deal.styleNo}`);
   }
   if (deal.amount != null) lines.push(`Amount: ${deal.currency || 'USD'} ${deal.amount}`);
-  if (deal.moq) lines.push(`MOQ: ${deal.moq}`);
+  if (deal.moq && !styleRows.some((s) => s.moq)) lines.push(`MOQ: ${deal.moq}`);
   if (deal.leadDays != null) lines.push(`Lead time: ${deal.leadDays} days`);
   if (deal.incoterm) lines.push(`Incoterm: ${deal.incoterm}`);
   if (deal.quoteValidUntil) {

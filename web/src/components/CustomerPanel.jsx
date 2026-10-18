@@ -57,7 +57,7 @@ export default function CustomerPanel({
   const [styles, setStyles] = useState([]);
   const [samples, setSamples] = useState([]);
   const [assets, setAssets] = useState([]);
-  const [styleDraft, setStyleDraft] = useState('');
+  const [styleDraft, setStyleDraft] = useState({ styleNo: '', colorway: '', unitPrice: '', moq: '', currency: 'USD' });
   const noteTimer = useRef(null);
 
   const peerAddr = useMemo(() => peerAddressOf(address, sender, listItem), [address, sender, listItem]);
@@ -446,6 +446,10 @@ export default function CustomerPanel({
                   {(s.colorway || s.sizeRange) && (
                     <small className="muted">{[s.colorway, s.sizeRange].filter(Boolean).join(' · ')}</small>
                   )}
+                  {s.unitPrice != null && (
+                    <span className="pill soft">{s.currency || 'USD'} {s.unitPrice}</span>
+                  )}
+                  {s.moq && <small className="muted">MOQ {s.moq}</small>}
                   {dealId && (
                     <button
                       type="button"
@@ -467,22 +471,52 @@ export default function CustomerPanel({
             </ul>
             {dealId && (
               <form
-                className="glossary-add compact"
+                className="glossary-add compact style-add-form"
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  if (!styleDraft.trim()) return;
+                  if (!styleDraft.styleNo.trim()) return;
                   setBusy('style');
                   try {
-                    const r = await api(`/deals/${dealId}/styles`, { method: 'POST', body: { styleNo: styleDraft.trim() } });
+                    const r = await api(`/deals/${dealId}/styles`, {
+                      method: 'POST',
+                      body: {
+                        styleNo: styleDraft.styleNo.trim(),
+                        colorway: styleDraft.colorway.trim(),
+                        unitPrice: styleDraft.unitPrice === '' ? null : Number(styleDraft.unitPrice),
+                        moq: styleDraft.moq.trim(),
+                        currency: styleDraft.currency || 'USD',
+                      },
+                    });
                     setStyles(r.styles || []);
-                    setStyleDraft('');
+                    setStyleDraft({ styleNo: '', colorway: '', unitPrice: '', moq: '', currency: styleDraft.currency || 'USD' });
+                    window.dispatchEvent(new CustomEvent('zm-deal', { detail: { reason: 'style' } }));
                   } finally {
                     setBusy('');
                   }
                 }}
               >
-                <input value={styleDraft} onChange={(e) => setStyleDraft(e.target.value)} placeholder="新款号 Style No." />
-                <button type="submit" className="btn-ghost xs" disabled={busy === 'style' || !styleDraft.trim()}>添加</button>
+                <input
+                  value={styleDraft.styleNo}
+                  onChange={(e) => setStyleDraft((d) => ({ ...d, styleNo: e.target.value }))}
+                  placeholder="款号 Style"
+                />
+                <input
+                  value={styleDraft.colorway}
+                  onChange={(e) => setStyleDraft((d) => ({ ...d, colorway: e.target.value }))}
+                  placeholder="色组"
+                />
+                <input
+                  value={styleDraft.unitPrice}
+                  onChange={(e) => setStyleDraft((d) => ({ ...d, unitPrice: e.target.value }))}
+                  placeholder="单价"
+                  inputMode="decimal"
+                />
+                <input
+                  value={styleDraft.moq}
+                  onChange={(e) => setStyleDraft((d) => ({ ...d, moq: e.target.value }))}
+                  placeholder="MOQ"
+                />
+                <button type="submit" className="btn-ghost xs" disabled={busy === 'style' || !styleDraft.styleNo.trim()}>添加</button>
               </form>
             )}
 

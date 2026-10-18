@@ -43,6 +43,7 @@ export default function DealBar({
     styleNo: '', currency: 'USD', amount: '', moq: '', leadDays: '', incoterm: '', quoteValidUntil: '',
   });
   const [sampleDraft, setSampleDraft] = useState({ sampleType: 'sms', trackingNo: '', status: 'planned' });
+  const [styleQuick, setStyleQuick] = useState({ styleNo: '', colorway: '', unitPrice: '', moq: '', currency: 'USD' });
   const hasCompany = !!(scopes?.company || scope?.kind === 'company' || deal?.scopeKind === 'company');
   const visible = !!(scope || deal || scopes?.person);
 
@@ -259,6 +260,30 @@ export default function DealBar({
     }
   }
 
+  async function quickStyle() {
+    if (!deal?.id || !styleQuick.styleNo.trim()) return;
+    setBusy('style');
+    try {
+      await api(`/deals/${deal.id}/styles`, {
+        method: 'POST',
+        body: {
+          styleNo: styleQuick.styleNo.trim(),
+          colorway: styleQuick.colorway.trim(),
+          unitPrice: styleQuick.unitPrice === '' ? null : Number(styleQuick.unitPrice),
+          moq: styleQuick.moq.trim(),
+          currency: styleQuick.currency || commerce.currency || 'USD',
+        },
+      });
+      setStyleQuick({ styleNo: '', colorway: '', unitPrice: '', moq: '', currency: styleQuick.currency || 'USD' });
+      bumpDeal(deal, 'style');
+      notify('已添加款号', 'success');
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function quickSample() {
     if (!deal?.id) return;
     setBusy('sample');
@@ -433,6 +458,32 @@ export default function DealBar({
                   />
                   自动跟进序列
                 </label>
+              </div>
+              <div className="deal-style-quick" aria-label="多款快捷添加">
+                <input
+                  value={styleQuick.styleNo}
+                  onChange={(e) => setStyleQuick((s) => ({ ...s, styleNo: e.target.value }))}
+                  placeholder="多款：Style No."
+                />
+                <input
+                  value={styleQuick.colorway}
+                  onChange={(e) => setStyleQuick((s) => ({ ...s, colorway: e.target.value }))}
+                  placeholder="色组"
+                />
+                <input
+                  value={styleQuick.unitPrice}
+                  onChange={(e) => setStyleQuick((s) => ({ ...s, unitPrice: e.target.value }))}
+                  placeholder="单价"
+                  inputMode="decimal"
+                />
+                <input
+                  value={styleQuick.moq}
+                  onChange={(e) => setStyleQuick((s) => ({ ...s, moq: e.target.value }))}
+                  placeholder="MOQ"
+                />
+                <button type="button" className="sl-btn" disabled={busy === 'style' || !styleQuick.styleNo.trim()} onClick={quickStyle}>
+                  {busy === 'style' ? <Loader2 size={12} className="spin" /> : null} 加款
+                </button>
               </div>
               <div className="deal-sample-row">
                 <select value={sampleDraft.sampleType} onChange={(e) => setSampleDraft((s) => ({ ...s, sampleType: e.target.value }))}>

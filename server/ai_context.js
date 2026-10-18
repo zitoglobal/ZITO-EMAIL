@@ -54,6 +54,14 @@ export function bizContextForRow(userId, row, settings = {}) {
   const at = Date.now();
   const waitingHours = row.date ? Math.round(((at - row.date) / 3600_000) * 10) / 10 : null;
   const overdue = waitingHours != null && waitingHours >= slaHours;
+  const styles = deal?.id ? deals.listStyles(deal.id).slice(0, 6) : [];
+  const styleLines = styles.map((s) => {
+    const bits = [s.styleNo];
+    if (s.colorway) bits.push(s.colorway);
+    if (s.unitPrice != null) bits.push(`${s.currency || deal.currency || 'USD'} ${s.unitPrice}`);
+    if (s.moq) bits.push(`MOQ ${s.moq}`);
+    return bits.filter(Boolean).join(' / ');
+  });
   return {
     address: addr,
     tier,
@@ -69,6 +77,14 @@ export function bizContextForRow(userId, row, settings = {}) {
     dealOwner: deal && !deal.mine ? deal.owner?.name || deal.owner?.email || '同事' : deal?.mine ? '我' : null,
     unclaimed: !deal,
     stageHint: deal?.stage ? STAGE_HINT[deal.stage] || null : STAGE_HINT.inquiry,
+    styleNo: deal?.styleNo || '',
+    currency: deal?.currency || 'USD',
+    amount: deal?.amount ?? null,
+    moq: deal?.moq || '',
+    leadDays: deal?.leadDays ?? null,
+    incoterm: deal?.incoterm || '',
+    quoteValidUntil: deal?.quoteValidUntil || null,
+    styleLines,
   };
 }
 
@@ -86,6 +102,17 @@ export function formatBizContext(ctx) {
     lines.push(`已等待：${ctx.waitingHours}h（SLA ${ctx.slaHours}h）${ctx.overdue ? ' · 已超时，语气可更主动但仍专业' : ''}`);
   }
   if (ctx.signalLabels?.length) lines.push(`业务信号：${ctx.signalLabels.join('、')}`);
+  if (ctx.styleLines?.length) lines.push(`款号报价：${ctx.styleLines.join('；')}`);
+  else if (ctx.styleNo) lines.push(`主款号：${ctx.styleNo}`);
+  const commerceBits = [];
+  if (ctx.amount != null) commerceBits.push(`${ctx.currency || 'USD'} ${ctx.amount}`);
+  if (ctx.moq) commerceBits.push(`MOQ ${ctx.moq}`);
+  if (ctx.leadDays != null) commerceBits.push(`交期 ${ctx.leadDays} 天`);
+  if (ctx.incoterm) commerceBits.push(ctx.incoterm);
+  if (ctx.quoteValidUntil) {
+    commerceBits.push(`有效至 ${new Date(ctx.quoteValidUntil).toLocaleDateString('en-CA')}`);
+  }
+  if (commerceBits.length) lines.push(`成交要点：${commerceBits.join(' · ')}`);
   if (ctx.stageHint) lines.push(`阶段建议：${ctx.stageHint}`);
   return `\n\n【业务上下文 — 撰写时必须遵守，勿编造上下文中没有的事实】\n${lines.join('\n')}`;
 }

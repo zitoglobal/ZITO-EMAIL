@@ -532,11 +532,11 @@ function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudCha
       <Choice
         icon={LayoutPanelLeft}
         label="布局模式"
-        value={settings.layoutMode || 'standard'}
+        value={settings.layoutMode || 'sales'}
         onChange={set('layoutMode')}
         options={LAYOUT_MODES.map((m) => [m.id, m.label])}
       />
-      <p className="hint-line">标准：经典三栏；销售台：右侧常驻客户栏（窗口≥1180px）；专注读信：侧栏收成图标轨。栏宽可拖拽，双击分隔条恢复默认。</p>
+      <p className="hint-line">默认销售台（右侧常驻客户栏，窗口≥1180px）；标准：经典三栏；专注读信：侧栏收成图标轨。栏宽可拖拽，双击分隔条恢复默认。</p>
       <Choice icon={Image} label="外部图片" value={settings.remoteImages} onChange={set('remoteImages')} options={[['always', '总是显示'], ['contacts', '仅联系人'], ['never', '询问']]} />
       <Choice icon={Undo2} label="撤销发送时长" value={settings.undoSeconds} onChange={set('undoSeconds')} options={[[0, '关闭'], [5, '5 秒'], [10, '10 秒'], [20, '20 秒'], [30, '30 秒']]} />
       <Toggle icon={MessagesSquare} label="会话视图" desc="把同一主题的往来邮件合并展示" checked={settings.conversationView} onChange={set('conversationView')} />

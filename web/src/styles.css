@@ -2845,12 +2845,19 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .deal-commerce-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
 .deal-seq-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .deal-seq-hint { font-weight: 500; }
+.deal-style-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.deal-style-quick input {
+  height: 30px; border-radius: 6px; border: 1px solid var(--hairline);
+  padding: 0 8px; background: var(--panel); color: var(--text); font-size: 12px;
+  min-width: 72px; flex: 1;
+}
 .deal-sample-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .deal-sample-row select, .deal-sample-row input {
   height: 30px; border-radius: 6px; border: 1px solid var(--hairline);
   padding: 0 8px; background: var(--panel); color: var(--text); font-size: 12px;
 }
 .deal-sample-row input { flex: 1; min-width: 100px; }
+.style-add-form input { min-width: 64px; flex: 1; }
 .internal-notes {
   margin: 8px 0 0; padding: 10px 12px; border-radius: 10px;
   background: color-mix(in srgb, #64748b 10%, var(--panel));

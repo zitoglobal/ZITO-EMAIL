@@ -349,6 +349,38 @@ assert(
   quoteSnippet({ amount: 9 }, { styles: [{ styleNo: 'A1', colorway: 'Navy' }, { styleNo: 'B2' }] }).includes('Style: A1 / Navy')
     && quoteSnippet({ amount: 9 }, { styles: [{ styleNo: 'A1', colorway: 'Navy' }, { styleNo: 'B2' }] }).includes('Style: B2')
 );
+assert(
+  'quoteSnippet style price moq',
+  quoteSnippet(
+    { currency: 'USD', amount: 100 },
+    { styles: [{ styleNo: 'ZS-9', colorway: 'Black', unitPrice: 3.2, moq: '500', currency: 'USD' }] }
+  ).includes('USD 3.2')
+    && quoteSnippet(
+      { currency: 'USD', amount: 100 },
+      { styles: [{ styleNo: 'ZS-9', colorway: 'Black', unitPrice: 3.2, moq: '500', currency: 'USD' }] }
+    ).includes('MOQ 500')
+);
+assert(
+  'formatBizContext commerce',
+  formatBizContext({
+    stageLabel: '报价中',
+    dealMine: true,
+    styleLines: ['ZS-1 / Navy / USD 4'],
+    amount: 12,
+    currency: 'USD',
+    moq: '300',
+    stageHint: 'x',
+  }).includes('款号报价：ZS-1 / Navy / USD 4')
+    && formatBizContext({
+      stageLabel: '报价中',
+      dealMine: true,
+      styleLines: ['ZS-1 / Navy / USD 4'],
+      amount: 12,
+      currency: 'USD',
+      moq: '300',
+      stageHint: 'x',
+    }).includes('成交要点：USD 12 · MOQ 300')
+);
 assert('ASSET_KIND techpack label', ASSET_KIND_LABEL.techpack === 'Tech pack');
 assert('apparel template has stage', APPAREL_EMAIL_TEMPLATES.some((t) => t.stage === 'quote'));
 assert('FOLLOW_SEQ force days sample', FOLLOW_SEQ_DAYS.sample === 7 && FOLLOW_SEQ_DAYS.bulk === 5);

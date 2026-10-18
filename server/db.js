@@ -418,6 +418,7 @@ CREATE TABLE IF NOT EXISTS brands (
   name TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT '#0a66ff',
   created_at INTEGER NOT NULL,
+  team INTEGER NOT NULL DEFAULT 0,
   UNIQUE(user_id, code)
 );
 CREATE INDEX IF NOT EXISTS idx_brands_user ON brands(user_id);
@@ -429,7 +430,10 @@ CREATE TABLE IF NOT EXISTS deal_styles (
   colorway TEXT NOT NULL DEFAULT '',
   size_range TEXT NOT NULL DEFAULT '',
   note TEXT NOT NULL DEFAULT '',
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  unit_price REAL,
+  moq TEXT NOT NULL DEFAULT '',
+  currency TEXT NOT NULL DEFAULT 'USD'
 );
 CREATE INDEX IF NOT EXISTS idx_deal_styles_deal ON deal_styles(deal_id);
 
@@ -480,6 +484,13 @@ CREATE INDEX IF NOT EXISTS idx_thread_notes_addr ON thread_notes(address, create
   if (!tplCols.has('brand_id')) db.exec('ALTER TABLE templates ADD COLUMN brand_id INTEGER');
   if (!tplCols.has('shared')) db.exec('ALTER TABLE templates ADD COLUMN shared INTEGER NOT NULL DEFAULT 0');
   if (!tplCols.has('stage')) db.exec('ALTER TABLE templates ADD COLUMN stage TEXT NOT NULL DEFAULT \'\'');
+  const brandCols = new Set(db.prepare('PRAGMA table_info(brands)').all().map((c) => c.name));
+  if (!brandCols.has('team')) db.exec('ALTER TABLE brands ADD COLUMN team INTEGER NOT NULL DEFAULT 0');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_brands_team_code ON brands(team, code)');
+  const styleCols = new Set(db.prepare('PRAGMA table_info(deal_styles)').all().map((c) => c.name));
+  if (!styleCols.has('unit_price')) db.exec('ALTER TABLE deal_styles ADD COLUMN unit_price REAL');
+  if (!styleCols.has('moq')) db.exec("ALTER TABLE deal_styles ADD COLUMN moq TEXT NOT NULL DEFAULT ''");
+  if (!styleCols.has('currency')) db.exec("ALTER TABLE deal_styles ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'");
 }
 
 // FTS5 全文（主题/摘要/发件人/正文）

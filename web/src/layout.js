@@ -28,7 +28,7 @@ export function clamp(n, min, max) {
 }
 
 export function normalizeLayoutMode(mode) {
-  return LAYOUT_MODES.some((m) => m.id === mode) ? mode : 'standard';
+  return LAYOUT_MODES.some((m) => m.id === mode) ? mode : 'sales';
 }
 
 export function normalizeWidths(raw = {}) {

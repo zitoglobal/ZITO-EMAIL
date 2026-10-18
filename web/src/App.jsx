@@ -121,7 +121,7 @@ export default function App() {
   const [customerCtx, setCustomerCtx] = useState(null); // { address, sender, slaHours }
   const [viewportW, setViewportW] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1440));
   const localLayout = useMemo(() => loadLayoutLocal(), []);
-  const [layoutMode, setLayoutModeState] = useState(() => localLayout?.mode || 'standard');
+  const [layoutMode, setLayoutModeState] = useState(() => localLayout?.mode || 'sales');
   const [layoutWidths, setLayoutWidths] = useState(() => localLayout?.widths || {
     sidebar: LAYOUT_LIMITS.sidebar.def,
     list: LAYOUT_LIMITS.list.def,

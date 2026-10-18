@@ -45,15 +45,15 @@ const DEFAULT_SETTINGS = {
    */
   aiCloudOk: true,
   glossary: [],
-  /** 布局：standard 标准三栏 / sales 销售台 / focus 专注读信 */
-  layoutMode: 'standard',
+  /** 布局：standard 标准三栏 / sales 销售台 / focus 专注读信（成衣默认销售台） */
+  layoutMode: 'sales',
   layoutSidebar: 252,
   layoutList: 360,
   layoutCustomer: 280,
 };
 
 function sanitizeLayout(merged) {
-  if ('layoutMode' in merged) merged.layoutMode = LAYOUT_MODES.has(merged.layoutMode) ? merged.layoutMode : 'standard';
+  if ('layoutMode' in merged) merged.layoutMode = LAYOUT_MODES.has(merged.layoutMode) ? merged.layoutMode : 'sales';
   if ('layoutSidebar' in merged) merged.layoutSidebar = clampInt(merged.layoutSidebar, 180, 320, 252);
   if ('layoutList' in merged) merged.layoutList = clampInt(merged.layoutList, 280, 520, 360);
   if ('layoutCustomer' in merged) merged.layoutCustomer = clampInt(merged.layoutCustomer, 240, 380, 280);

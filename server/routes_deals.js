@@ -235,7 +235,7 @@ export function registerDealsRoutes(app, ctx) {
     auth,
     wrap(async (req, res) => {
       const id = Number(req.params.id);
-      deals.getDealById(id) || (() => { throw Object.assign(new Error('认领记录不存在'), { status: 404 }); })();
+      deals.assertDealReadable(req.user.id, id);
       res.json({ styles: deals.listStyles(id) });
     })
   );
@@ -261,7 +261,7 @@ export function registerDealsRoutes(app, ctx) {
     auth,
     wrap(async (req, res) => {
       const id = Number(req.params.id);
-      if (!deals.getDealById(id)) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
+      deals.assertDealReadable(req.user.id, id);
       res.json({ samples: deals.listSamples(id) });
     })
   );

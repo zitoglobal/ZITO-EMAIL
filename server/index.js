@@ -2174,6 +2174,11 @@ setInterval(remindOverdue, 10 * 60_000).unref();
 const server = app.listen(PORT, BIND_HOST, () => {
   console.log(`[zito-mail] 服务已启动 http://${BIND_HOST === '0.0.0.0' ? 'localhost' : BIND_HOST}:${PORT} (bind ${BIND_HOST})`);
   try {
+    brands.ensureTeamBrands();
+  } catch (e) {
+    console.warn('[brands] ensureTeamBrands', e.message);
+  }
+  try {
     oauth.logStartupHints();
   } catch (_) {}
 });
