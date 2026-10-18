@@ -24,6 +24,10 @@ import * as savedSearches from './saved_searches.js';
 import * as mailRules from './mail_rules.js';
 import * as contacts from './contacts.js';
 import * as deals from './deals.js';
+import * as brands from './brands.js';
+import * as customerAssets from './customer_assets.js';
+import * as threadNotes from './thread_notes.js';
+import * as deliverability from './deliverability.js';
 import { assertSafeMailHosts } from './net_guard.js';
 import { sanitizeMailHtml } from './sanitize_mail.js';
 import * as totp from './totp.js';
@@ -427,7 +431,21 @@ app.get(
 registerFocusRoutes(app, { auth, wrap, httpError, mailboxOf, priority, labels, users, emit });
 
 /** 团队认领 + 业务阶段（邮箱内，不对接已下线 CRM） */
-registerDealsRoutes(app, { auth, wrap, rateLimit, deals, labels, emit, users, push, db, teamQueue });
+registerDealsRoutes(app, {
+  auth,
+  wrap,
+  rateLimit,
+  deals,
+  labels,
+  emit,
+  users,
+  push,
+  db,
+  teamQueue,
+  customerAssets,
+  brands,
+  threadNotes,
+});
 
 app.patch(
   '/api/me',
@@ -597,6 +615,14 @@ app.patch(
     const patch = {};
     if (b.name !== undefined) patch.name = String(b.name).trim();
     if (b.color !== undefined && /^#[0-9a-f]{6}$/i.test(b.color)) patch.color = b.color;
+    if ('brandId' in b) {
+      if (b.brandId == null || b.brandId === '') patch.brand_id = null;
+      else {
+        const br = brands.getBrand(req.user.id, Number(b.brandId));
+        if (!br) throw httpError(400, '品牌不存在');
+        patch.brand_id = br.id;
+      }
+    }
     if (b.signature !== undefined) {
       // 富文本签名可含压缩后的 data:image Logo；上限约 400KB 字符
       const sig = String(b.signature);
@@ -892,6 +918,18 @@ app.get(
           (_, i) => `src="/api/messages/${row.id}/attachments/${i}?inline=1"`
         )
       : body.html;
+    const dealPack = (() => {
+      const d = deals.lookup(req.user.id, { address: row.from_addr, threadId: row.thread_id });
+      return {
+        deal: d.deal,
+        dealScope: d.scope,
+        dealScopes: d.scopes,
+        dealStages: d.stages,
+        canSplitDeal: !!d.canSplit,
+        canClaimPerson: !!d.canClaimPerson,
+        quoteSnippet: deals.quoteSnippet(d.deal),
+      };
+    })();
     res.json({
       ...withLabels,
       ...body.meta,
@@ -901,17 +939,8 @@ app.get(
       knownSender: repo.isKnownContact(req.user.id, row.from_addr),
       sender: priority.senderInfo(req.user.id, row.from_addr),
       conflict: priority.conflictHints(req.user.id, { fromAddr: row.from_addr, threadId: row.thread_id }),
-      ...(() => {
-        const d = deals.lookup(req.user.id, { address: row.from_addr, threadId: row.thread_id });
-        return {
-          deal: d.deal,
-          dealScope: d.scope,
-          dealScopes: d.scopes,
-          dealStages: d.stages,
-          canSplitDeal: !!d.canSplit,
-          canClaimPerson: !!d.canClaimPerson,
-        };
-      })(),
+      internalNotes: threadNotes.listNotes({ threadId: row.thread_id, address: row.from_addr, limit: 20 }),
+      ...dealPack,
     });
   })
 );
@@ -1713,16 +1742,28 @@ app.post(
 );
 
 
-app.get('/api/templates', auth, (req, res) => res.json({ templates: repo.listTemplates(req.user.id) }));
+app.get('/api/templates', auth, (req, res) => {
+  res.json({ templates: repo.listTemplates(req.user.id, { role: req.user.role }) });
+});
 app.post(
   '/api/templates',
   auth,
-  wrap(async (req, res) => res.json({ id: repo.saveTemplate(req.user.id, req.body || {}) }))
+  wrap(async (req, res) =>
+    res.json({ id: repo.saveTemplate(req.user.id, req.body || {}, { role: req.user.role }) })
+  )
 );
 app.delete('/api/templates/:tid', auth, (req, res) => {
-  repo.deleteTemplate(req.user.id, Number(req.params.tid));
+  repo.deleteTemplate(req.user.id, Number(req.params.tid), { role: req.user.role });
   res.json({ ok: true });
 });
+
+app.get(
+  '/api/deliverability',
+  auth,
+  wrap(async (req, res) => {
+    res.json(await deliverability.reportForUser(req.user.id));
+  })
+);
 
 // ---------- AI ----------
 async function mailForAi(req, id) {
@@ -2060,12 +2101,14 @@ function remindUser(u) {
     if (r) {
       if (isOnline(u.id)) emit(u.id, 'remind', r);
       if (settings.notify) {
+        const first = r.items?.[0];
         push
           .notifyUser(u.id, {
             title: r.escalate ? '超时升级提醒' : '客户邮件待回复',
-            body: r.subject || `${r.count || ''} 封待处理`,
-            url: '/',
+            body: first?.subject || `${r.count || ''} 封待处理`,
+            url: first?.id ? `/?box=today&messageId=${first.id}` : '/?box=today',
             tag: 'zm-remind',
+            messageId: first?.id || null,
           })
           .catch(() => {});
       }

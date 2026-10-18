@@ -94,6 +94,7 @@ export function buildComposeState(mode, msg, ctx, extra = {}) {
     replyTo: forward ? undefined : { id: msg.id, threadId: msg.threadId || null },
     sourceId: msg.id,
     forward: forward && msg.attachments?.length ? { id: msg.id, attachments: msg.attachments } : undefined,
+    quoteSnippet: msg.quoteSnippet || '',
     ...extra,
   };
 }

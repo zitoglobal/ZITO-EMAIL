@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Hand, Unlock, Loader2, GitBranch, History, StickyNote, CalendarClock, Split } from 'lucide-react';
+import { Hand, Unlock, Loader2, GitBranch, History, StickyNote, CalendarClock, Split, ChevronDown, Package } from 'lucide-react';
 import { api, qs } from '../api.js';
-import { stageChecklist } from '../apparelPresets.js';
+import { FOLLOW_SEQ_DAYS, SAMPLE_STATUS_LABEL, SAMPLE_TYPE_LABEL, stageChecklist } from '../apparelPresets.js';
 import { formatShortDateTime } from '../utils.js';
 
 const ACTION_LABEL = {
@@ -11,7 +11,10 @@ const ACTION_LABEL = {
   takeover: '接管',
   assign: '指派',
   follow: '跟进日',
+  follow_seq: '跟进序列',
   split: '拆到个人',
+  commerce: '报价',
+  sample: '样品',
 };
 
 /**
@@ -35,13 +38,46 @@ export default function DealBar({
   const [showLog, setShowLog] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
+  const [showCommerce, setShowCommerce] = useState(false);
+  const [commerce, setCommerce] = useState({
+    styleNo: '', currency: 'USD', amount: '', moq: '', leadDays: '', incoterm: '', quoteValidUntil: '',
+  });
+  const [sampleDraft, setSampleDraft] = useState({ sampleType: 'sms', trackingNo: '', status: 'planned' });
   const hasCompany = !!(scopes?.company || scope?.kind === 'company' || deal?.scopeKind === 'company');
   const visible = !!(scope || deal || scopes?.person);
 
   useEffect(() => {
     setNoteDraft(deal?.note || '');
     setEditingNote(false);
-  }, [deal?.id, deal?.note]);
+    setCommerce({
+      styleNo: deal?.styleNo || '',
+      currency: deal?.currency || 'USD',
+      amount: deal?.amount != null ? String(deal.amount) : '',
+      moq: deal?.moq || '',
+      leadDays: deal?.leadDays != null ? String(deal.leadDays) : '',
+      incoterm: deal?.incoterm || '',
+      quoteValidUntil: deal?.quoteValidUntil
+        ? new Date(deal.quoteValidUntil).toISOString().slice(0, 10)
+        : '',
+    });
+  }, [deal?.id, deal?.note, deal?.styleNo, deal?.amount, deal?.moq, deal?.leadDays, deal?.incoterm, deal?.quoteValidUntil, deal?.currency]);
+
+  useEffect(() => {
+    const onHotkey = (e) => {
+      const action = e.detail?.action;
+      if (action === 'stage') {
+        setShowCommerce(false);
+        document.getElementById('deal-stages-focus')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        document.querySelector('#deal-stages-focus .deal-stage')?.focus?.();
+      }
+      if (action === 'follow') {
+        document.getElementById('deal-follow-focus')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        document.querySelector('#deal-follow-focus .deal-follow-chip')?.focus?.();
+      }
+    };
+    window.addEventListener('zm-deal-hotkey', onHotkey);
+    return () => window.removeEventListener('zm-deal-hotkey', onHotkey);
+  }, []);
 
   useEffect(() => {
     if (!visible) {
@@ -185,6 +221,45 @@ export default function DealBar({
     }
   }
 
+  async function saveCommerce() {
+    if (!deal?.id) return;
+    setBusy('commerce');
+    try {
+      const body = {
+        styleNo: commerce.styleNo,
+        currency: commerce.currency || 'USD',
+        amount: commerce.amount === '' ? null : Number(commerce.amount),
+        moq: commerce.moq,
+        leadDays: commerce.leadDays === '' ? null : Number(commerce.leadDays),
+        incoterm: commerce.incoterm,
+        quoteValidUntil: commerce.quoteValidUntil
+          ? new Date(commerce.quoteValidUntil + 'T12:00:00').getTime()
+          : null,
+      };
+      const d = await api(`/deals/${deal.id}`, { method: 'PATCH', body });
+      onChange?.(d.deal);
+      notify('报价要点已保存', 'success');
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function quickSample() {
+    if (!deal?.id) return;
+    setBusy('sample');
+    try {
+      await api(`/deals/${deal.id}/samples`, { method: 'POST', body: sampleDraft });
+      notify('样品记录已添加', 'success');
+      setSampleDraft({ sampleType: 'sms', trackingNo: '', status: 'sent' });
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setBusy('');
+    }
+  }
+
   const followPresets = () => {
     const d = new Date();
     d.setHours(9, 0, 0, 0);
@@ -254,7 +329,7 @@ export default function DealBar({
       </div>
 
       {canEdit && (
-        <div className="deal-follow-row" title="客户级下次跟进日">
+        <div id="deal-follow-focus" className="deal-follow-row" title="客户级下次跟进日（快捷键 Shift+F）">
           <CalendarClock size={12} />
           {followPresets().map((p) => (
             <button key={p.label} type="button" className="deal-follow-chip" disabled={!!busy} onClick={() => setFollowAt(p.at)}>
@@ -270,7 +345,7 @@ export default function DealBar({
       )}
 
       {deal && (deal.mine || deal.canRelease) && list.length > 0 && (
-        <div className="deal-stages" role="group" aria-label="业务阶段">
+        <div id="deal-stages-focus" className="deal-stages" role="group" aria-label="业务阶段（快捷键 Shift+S）">
           {list.map((s) => (
             <button
               key={s.id}
@@ -290,6 +365,70 @@ export default function DealBar({
       {deal?.mine && stageChecklist(deal.stage) && (
         <div className="deal-stage-tip" title="服装外贸阶段核对清单">
           {stageChecklist(deal.stage)}
+          {FOLLOW_SEQ_DAYS[deal.stage] && deal.autoFollowSeq !== false && (
+            <span className="deal-seq-hint"> · 序列：本阶段后 {FOLLOW_SEQ_DAYS[deal.stage]} 天跟进</span>
+          )}
+        </div>
+      )}
+
+      {canEdit && (
+        <div className="deal-commerce">
+          <button type="button" className="deal-commerce-toggle" onClick={() => setShowCommerce((v) => !v)}>
+            <Package size={12} /> 报价 / 样品
+            <ChevronDown size={12} className={showCommerce ? 'rot' : ''} />
+          </button>
+          {showCommerce && (
+            <div className="deal-commerce-body">
+              <div className="deal-commerce-grid">
+                <label>款号<input value={commerce.styleNo} onChange={(e) => setCommerce((c) => ({ ...c, styleNo: e.target.value }))} placeholder="Style No." /></label>
+                <label>币种<input value={commerce.currency} onChange={(e) => setCommerce((c) => ({ ...c, currency: e.target.value }))} placeholder="USD" /></label>
+                <label>金额<input value={commerce.amount} onChange={(e) => setCommerce((c) => ({ ...c, amount: e.target.value }))} placeholder="0" inputMode="decimal" /></label>
+                <label>MOQ<input value={commerce.moq} onChange={(e) => setCommerce((c) => ({ ...c, moq: e.target.value }))} placeholder="500 pcs" /></label>
+                <label>交期(天)<input value={commerce.leadDays} onChange={(e) => setCommerce((c) => ({ ...c, leadDays: e.target.value }))} placeholder="45" inputMode="numeric" /></label>
+                <label>贸易术语
+                  <select value={commerce.incoterm} onChange={(e) => setCommerce((c) => ({ ...c, incoterm: e.target.value }))}>
+                    <option value="">—</option>
+                    {['FOB', 'CIF', 'CFR', 'EXW', 'DDP', 'DAP', 'FCA'].map((x) => <option key={x} value={x}>{x}</option>)}
+                  </select>
+                </label>
+                <label>报价有效期<input type="date" value={commerce.quoteValidUntil} onChange={(e) => setCommerce((c) => ({ ...c, quoteValidUntil: e.target.value }))} /></label>
+              </div>
+              <div className="deal-commerce-actions">
+                <button type="button" className="sl-btn vip" disabled={busy === 'commerce'} onClick={saveCommerce}>
+                  {busy === 'commerce' ? <Loader2 size={12} className="spin" /> : null} 保存报价
+                </button>
+                <label className="deal-seq-toggle">
+                  <input
+                    type="checkbox"
+                    checked={deal.autoFollowSeq !== false}
+                    onChange={async (e) => {
+                      try {
+                        const d = await api(`/deals/${deal.id}`, { method: 'PATCH', body: { autoFollowSeq: e.target.checked } });
+                        onChange?.(d.deal);
+                      } catch (err) {
+                        notify(err.message, 'error');
+                      }
+                    }}
+                  />
+                  自动跟进序列
+                </label>
+              </div>
+              <div className="deal-sample-row">
+                <select value={sampleDraft.sampleType} onChange={(e) => setSampleDraft((s) => ({ ...s, sampleType: e.target.value }))}>
+                  {Object.entries(SAMPLE_TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <select value={sampleDraft.status} onChange={(e) => setSampleDraft((s) => ({ ...s, status: e.target.value }))}>
+                  {Object.entries(SAMPLE_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <input
+                  value={sampleDraft.trackingNo}
+                  onChange={(e) => setSampleDraft((s) => ({ ...s, trackingNo: e.target.value }))}
+                  placeholder="快递单号"
+                />
+                <button type="button" className="sl-btn" disabled={busy === 'sample'} onClick={quickSample}>记样品</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

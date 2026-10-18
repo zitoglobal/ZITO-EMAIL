@@ -387,13 +387,99 @@ CREATE INDEX IF NOT EXISTS idx_deal_events_scope ON deal_events(scope_key, creat
 CREATE INDEX IF NOT EXISTS idx_deal_events_deal ON deal_events(deal_id, created_at DESC);
 `);
 
-// deals / contact_persons：客户级下次跟进日
+// deals / contact_persons：客户级下次跟进日 + 外贸成交字段
 {
   const dealCols = new Set(db.prepare('PRAGMA table_info(deals)').all().map((c) => c.name));
   if (!dealCols.has('next_follow_at')) db.exec('ALTER TABLE deals ADD COLUMN next_follow_at INTEGER');
+  for (const [col, ddl] of [
+    ['style_no', 'ALTER TABLE deals ADD COLUMN style_no TEXT NOT NULL DEFAULT \'\''],
+    ['currency', 'ALTER TABLE deals ADD COLUMN currency TEXT NOT NULL DEFAULT \'USD\''],
+    ['amount', 'ALTER TABLE deals ADD COLUMN amount REAL'],
+    ['moq', 'ALTER TABLE deals ADD COLUMN moq TEXT NOT NULL DEFAULT \'\''],
+    ['lead_days', 'ALTER TABLE deals ADD COLUMN lead_days INTEGER'],
+    ['incoterm', 'ALTER TABLE deals ADD COLUMN incoterm TEXT NOT NULL DEFAULT \'\''],
+    ['quote_valid_until', 'ALTER TABLE deals ADD COLUMN quote_valid_until INTEGER'],
+    ['brand_id', 'ALTER TABLE deals ADD COLUMN brand_id INTEGER'],
+    ['auto_follow_seq', 'ALTER TABLE deals ADD COLUMN auto_follow_seq INTEGER NOT NULL DEFAULT 1'],
+  ]) {
+    if (!dealCols.has(col)) db.exec(ddl);
+  }
   db.exec('CREATE INDEX IF NOT EXISTS idx_deals_next_follow ON deals(next_follow_at) WHERE next_follow_at IS NOT NULL');
   const personCols = new Set(db.prepare('PRAGMA table_info(contact_persons)').all().map((c) => c.name));
   if (!personCols.has('next_follow_at')) db.exec('ALTER TABLE contact_persons ADD COLUMN next_follow_at INTEGER');
+}
+
+// 品牌 / 款号 / 样品 / 资料库 / 内部备注
+db.exec(`
+CREATE TABLE IF NOT EXISTS brands (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#0a66ff',
+  created_at INTEGER NOT NULL,
+  UNIQUE(user_id, code)
+);
+CREATE INDEX IF NOT EXISTS idx_brands_user ON brands(user_id);
+
+CREATE TABLE IF NOT EXISTS deal_styles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  deal_id INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+  style_no TEXT NOT NULL DEFAULT '',
+  colorway TEXT NOT NULL DEFAULT '',
+  size_range TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deal_styles_deal ON deal_styles(deal_id);
+
+CREATE TABLE IF NOT EXISTS deal_samples (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  deal_id INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+  sample_type TEXT NOT NULL DEFAULT 'sms',
+  tracking_no TEXT NOT NULL DEFAULT '',
+  carrier TEXT NOT NULL DEFAULT '',
+  sent_at INTEGER,
+  status TEXT NOT NULL DEFAULT 'planned',
+  note TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deal_samples_deal ON deal_samples(deal_id);
+
+CREATE TABLE IF NOT EXISTS customer_assets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  scope_key TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'other',
+  title TEXT NOT NULL DEFAULT '',
+  message_id INTEGER NOT NULL,
+  att_index INTEGER NOT NULL,
+  filename TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT '',
+  style_no TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_customer_assets_scope ON customer_assets(user_id, scope_key, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS thread_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_notes_thread ON thread_notes(thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_notes_addr ON thread_notes(address, created_at DESC);
+`);
+
+{
+  const mbCols = new Set(db.prepare('PRAGMA table_info(mailboxes)').all().map((c) => c.name));
+  if (!mbCols.has('brand_id')) db.exec('ALTER TABLE mailboxes ADD COLUMN brand_id INTEGER');
+  const tplCols = new Set(db.prepare('PRAGMA table_info(templates)').all().map((c) => c.name));
+  if (!tplCols.has('brand_id')) db.exec('ALTER TABLE templates ADD COLUMN brand_id INTEGER');
+  if (!tplCols.has('shared')) db.exec('ALTER TABLE templates ADD COLUMN shared INTEGER NOT NULL DEFAULT 0');
+  if (!tplCols.has('stage')) db.exec('ALTER TABLE templates ADD COLUMN stage TEXT NOT NULL DEFAULT \'\'');
 }
 
 // FTS5 全文（主题/摘要/发件人/正文）

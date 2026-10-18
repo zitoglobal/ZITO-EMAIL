@@ -14,6 +14,7 @@ export function publicMailbox(m) {
     email: m.email,
     name: m.name,
     color: m.color,
+    brandId: m.brand_id || null,
     provider: m.provider,
     providerName: m.provider_name,
     signature: m.signature,
@@ -839,17 +840,64 @@ export const addContacts = (userId, list, weight = 1) => contactsCrm.touchAddres
 export const searchContacts = (userId, q) => contactsCrm.searchContactsFlat(userId, q);
 export const isKnownContact = (userId, address) => contactsCrm.isKnownContact(userId, address);
 
-// ---------- 模板 ----------
-export const listTemplates = (userId) => db.prepare('SELECT * FROM templates WHERE user_id = ? ORDER BY name').all(userId);
-export function saveTemplate(userId, { id, name, subject, body }) {
+// ---------- 模板（个人 + 团队共享） ----------
+function publicTemplate(r, viewerId) {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    name: r.name,
+    subject: r.subject,
+    body: r.body,
+    brandId: r.brand_id || null,
+    shared: !!r.shared,
+    stage: r.stage || '',
+    mine: r.user_id === viewerId,
+    createdAt: r.created_at,
+  };
+}
+
+export function listTemplates(userId, { role } = {}) {
+  const rows = db
+    .prepare(
+      `SELECT * FROM templates
+       WHERE user_id = ? OR shared = 1
+       ORDER BY shared DESC, name`
+    )
+    .all(userId);
+  return rows.map((r) => publicTemplate(r, userId));
+}
+
+export function saveTemplate(userId, { id, name, subject, body, brandId, shared, stage } = {}, { role } = {}) {
   if (!String(name || '').trim()) throw new Error('请填写模板名称');
+  const share = shared ? 1 : 0;
+  if (share && role !== 'admin') throw Object.assign(new Error('仅管理员可设为团队共享模板'), { status: 403 });
+  const bid = brandId != null && brandId !== '' ? Number(brandId) : null;
+  const st = String(stage || '').trim().slice(0, 40);
   if (id) {
-    db.prepare('UPDATE templates SET name = ?, subject = ?, body = ? WHERE id = ? AND user_id = ?').run(name, subject || '', body || '', id, userId);
+    const ex = db.prepare('SELECT * FROM templates WHERE id = ?').get(id);
+    if (!ex) throw Object.assign(new Error('模板不存在'), { status: 404 });
+    if (ex.user_id !== userId && role !== 'admin') throw Object.assign(new Error('无权改此模板'), { status: 403 });
+    db.prepare(
+      `UPDATE templates SET name = ?, subject = ?, body = ?, brand_id = ?, shared = ?, stage = ? WHERE id = ?`
+    ).run(name, subject || '', body || '', bid, share, st, id);
     return id;
   }
-  return Number(db.prepare('INSERT INTO templates (user_id, name, subject, body, created_at) VALUES (?, ?, ?, ?, ?)').run(userId, name, subject || '', body || '', now()).lastInsertRowid);
+  return Number(
+    db
+      .prepare(
+        `INSERT INTO templates (user_id, name, subject, body, created_at, brand_id, shared, stage)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(userId, name, subject || '', body || '', now(), bid, share, st).lastInsertRowid
+  );
 }
-export const deleteTemplate = (userId, id) => db.prepare('DELETE FROM templates WHERE id = ? AND user_id = ?').run(id, userId);
+
+export function deleteTemplate(userId, id, { role } = {}) {
+  const ex = db.prepare('SELECT * FROM templates WHERE id = ?').get(id);
+  if (!ex) return;
+  if (ex.user_id !== userId && role !== 'admin') throw Object.assign(new Error('无权删除'), { status: 403 });
+  db.prepare('DELETE FROM templates WHERE id = ?').run(id);
+}
 
 // ---------- 定时发送 ----------
 export function addOutbox(userId, mailboxId, payload, filesDir, sendAt) {

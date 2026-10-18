@@ -3,7 +3,7 @@ import {
   Reply, ReplyAll, Forward, Trash2, Archive, Star, Mail, Sparkles, Languages, Paperclip, Download, ArrowLeft, Loader2,
   AlertTriangle, CheckCircle2, ListChecks, FolderInput, Eye, Clock, Pin, ShieldAlert, ShieldCheck, MoreHorizontal, ImageOff,
   BellOff, Send, Maximize2, FileText, Printer, Crown, Bell, Hourglass, Tag, Users, X, FileSpreadsheet, FileImage, File,
-  ExternalLink,
+  ExternalLink, FolderPlus, StickyNote,
 } from 'lucide-react';
 import { api, qs } from '../api.js';
 import {
@@ -18,6 +18,7 @@ import TimeMenu from './TimeMenu.jsx';
 import LabelMenu from './LabelMenu.jsx';
 import DealBar from './DealBar.jsx';
 import { ICON, Icon } from '../uiIcons.jsx';
+import { ASSET_KIND_LABEL } from '../apparelPresets.js';
 
 const URGENCY = { high: ['紧急', 'high'], medium: ['一般', 'medium'], low: ['不急', 'low'] };
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
@@ -352,7 +353,7 @@ function MediaLightbox({ items, index, onClose, onIndex, msgId }) {
   );
 }
 
-function Attachments({ msg, setLightbox }) {
+function Attachments({ msg, setLightbox, peerAddress, canLibrary, onNotify }) {
   if (!msg.attachments?.length) return null;
 
   const openPreview = (a) => {
@@ -369,6 +370,33 @@ function Attachments({ msg, setLightbox }) {
     setLightbox({ items: list, index: Math.max(0, idx), msgId: msg.id });
   };
 
+  async function saveToLibrary(a, e) {
+    e?.stopPropagation();
+    if (!canLibrary || !peerAddress) {
+      onNotify?.('请先认领客户后再收入资料库', 'error');
+      return;
+    }
+    const kind = attKind(a);
+    const assetKind = kind === 'pdf' || kind === 'image' ? 'techpack' : kind === 'sheet' ? 'sizechart' : 'other';
+    try {
+      await api('/customer-assets', {
+        method: 'POST',
+        body: {
+          messageId: msg.id,
+          attIndex: a.index,
+          address: peerAddress,
+          kind: assetKind,
+          title: a.filename,
+          filename: a.filename,
+          contentType: a.contentType || '',
+        },
+      });
+      onNotify?.(`已收入资料库（${ASSET_KIND_LABEL[assetKind] || assetKind}）`, 'success');
+    } catch (err) {
+      onNotify?.(err.message || '收入失败', 'error');
+    }
+  }
+
   return (
     <div className="attachments">
       <div className="att-title"><Paperclip size={14} /> {msg.attachments.length} 个附件</div>
@@ -379,6 +407,7 @@ function Attachments({ msg, setLightbox }) {
           const meta = attMeta(kind);
           const Icon = meta.Icon;
           const ext = (String(a.filename || '').split('.').pop() || 'file').slice(0, 4).toUpperCase();
+          const libraryOk = canLibrary && (kind === 'image' || kind === 'pdf' || kind === 'sheet' || kind === 'word' || kind === 'csv' || kind === 'file');
           return (
             <div
               key={a.index}
@@ -404,6 +433,17 @@ function Attachments({ msg, setLightbox }) {
                   {!meta.preview && (kind === 'word' || kind === 'sheet' || kind === 'slides') ? ' · 下载后用 Office 打开' : ''}
                 </div>
               </div>
+              {libraryOk && (
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={(e) => saveToLibrary(a, e)}
+                  title="收入资料库"
+                  aria-label={`收入资料库 ${a.filename}`}
+                >
+                  <FolderPlus size={15} />
+                </button>
+              )}
               {meta.preview && (
                 <button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); openPreview(a); }} title="预览" aria-label={`预览 ${a.filename}`}>
                   <Eye size={15} />
@@ -414,6 +454,69 @@ function Attachments({ msg, setLightbox }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/** 内部备注：同事可见，永不进入外发 MIME */
+function InternalNotes({ threadId, address, notes: initialNotes = [], onNotify }) {
+  const [notes, setNotes] = useState(initialNotes);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setNotes(initialNotes || []);
+  }, [initialNotes, threadId, address]);
+
+  async function addNote(e) {
+    e?.preventDefault();
+    const body = draft.trim();
+    if (!body) return;
+    setBusy(true);
+    try {
+      const r = await api('/thread-notes', {
+        method: 'POST',
+        body: { threadId, address, body },
+      });
+      setNotes((list) => [r.note, ...list]);
+      setDraft('');
+    } catch (err) {
+      onNotify?.(err.message || '保存失败', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="internal-notes" aria-label="内部备注">
+      <div className="internal-notes-head">
+        <StickyNote size={13} />
+        <b>内部备注</b>
+        <span className="pill warn">不发送给客户</span>
+      </div>
+      <ul className="internal-notes-list">
+        {notes.map((n) => (
+          <li key={n.id}>
+            <p>{n.body}</p>
+            <small className="muted">
+              {n.author?.name || '同事'}
+              {n.createdAt ? ` · ${formatListDate(n.createdAt)}` : ''}
+            </small>
+          </li>
+        ))}
+        {!notes.length && <li className="muted"><small>仅团队可见，不会出现在发出的邮件里</small></li>}
+      </ul>
+      <form className="internal-notes-form" onSubmit={addNote}>
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value.slice(0, 500))}
+          placeholder="给同事留一句（如：等色卡确认再报价）"
+          maxLength={500}
+        />
+        <button type="submit" className="btn-ghost xs" disabled={busy || !draft.trim()}>
+          {busy ? <Loader2 size={12} className="spin" /> : '添加'}
+        </button>
+      </form>
     </div>
   );
 }
@@ -519,6 +622,14 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
           onChange={(deal) => onDealChange?.(item.id, deal)}
         />
       )}
+      {m && primary && (
+        <InternalNotes
+          threadId={item.threadId || m.threadId}
+          address={item.from?.address}
+          notes={m.internalNotes || []}
+          onNotify={onNotify}
+        />
+      )}
       {m && primary && <RelationCard info={m.sender && { ...m.sender, address: item.from?.address }} onRule={onRule} slaHours={slaHours} onOpenCustomer={onOpenCustomer} />}
 
       {loading && <div className="reader-loading sm"><Loader2 size={16} className="spin" /> 正在加载…</div>}
@@ -581,7 +692,13 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
               <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} collapseQuotes onImageClick={onImageClick} onBrokenChange={onBrokenChange} />
             )}
           </BodyGuard>
-          <Attachments msg={m} setLightbox={setLightbox} />
+          <Attachments
+            msg={m}
+            setLightbox={setLightbox}
+            peerAddress={item.from?.address}
+            canLibrary={!!(m.deal || m.dealScope)}
+            onNotify={onNotify}
+          />
           {lightbox && lightbox.msgId === m.id && (
             <MediaLightbox
               items={lightbox.items}

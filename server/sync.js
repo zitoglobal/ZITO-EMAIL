@@ -380,9 +380,10 @@ class Engine {
                   fresh.length > 1
                     ? `${mb.email || ''} 收到 ${fresh.length} 封新邮件`
                     : `${first.from?.name || first.from?.address || ''}：${first.subject || '(无主题)'}`,
-                url: '/',
+                url: first?.id ? `/?box=today&messageId=${first.id}` : '/?box=today',
                 tag: 'zm-' + mb.id,
                 urgency: important ? 'high' : 'normal',
+                messageId: first?.id || null,
               })
               .catch(() => {});
           }

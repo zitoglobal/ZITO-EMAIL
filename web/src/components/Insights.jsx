@@ -182,17 +182,32 @@ export default function Insights({ onMenu, isAdmin, onGo, onOpenMessage, onOpenS
             </ul>
 
             <h3 className="insights-h">
-              <button type="button" className="linkish" onClick={() => onGo?.('deals')}>阶段管线</button>
+              <button type="button" className="linkish" onClick={() => onGo?.('deals')}>成衣漏斗</button>
+              {data.funnel?.wonRate != null && (
+                <small className="muted" style={{ marginLeft: 8 }}>近管线成交率 {data.funnel.wonRate}%</small>
+              )}
             </h3>
-            <ul className="insights-bars">
-              {(data.stages || []).map((s) => (
-                <li key={s.id} className="clickable-row" onClick={() => onGo?.('deals')}>
-                  <span className="bar-label" style={{ color: s.color }}>{s.label}</span>
-                  <span className="bar-track"><i style={{ width: `${(s.count / maxStage) * 100}%`, background: s.color }} /></span>
-                  <span className="bar-n">{s.count}</span>
-                </li>
-              ))}
+            <ul className="insights-bars funnel">
+              {(data.funnel?.stages || data.stages || []).map((s) => {
+                const maxF = Math.max(1, ...(data.funnel?.stages || data.stages || []).map((x) => x.count));
+                return (
+                  <li key={s.id} className="clickable-row" onClick={() => onGo?.('deals')}>
+                    <span className="bar-label" style={{ color: s.color }}>{s.label}</span>
+                    <span className="bar-track"><i style={{ width: `${(s.count / maxF) * 100}%`, background: s.color }} /></span>
+                    <span className="bar-n">{s.count}</span>
+                  </li>
+                );
+              })}
             </ul>
+            {data.funnel?.transitions30d && (
+              <div className="insights-funnel-trans muted">
+                近 30 天进入：报价 {data.funnel.transitions30d.toQuote || 0}
+                · 样品 {data.funnel.transitions30d.toSample || 0}
+                · 大货 {data.funnel.transitions30d.toBulk || 0}
+                · 成交 {data.funnel.transitions30d.toWon || 0}
+                · 丢单 {data.funnel.transitions30d.toLost || 0}
+              </div>
+            )}
 
             <h3 className="insights-h">我的跟进日</h3>
             <div className="insights-follow">

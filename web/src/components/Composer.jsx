@@ -11,6 +11,10 @@ import { signatureHtml, signaturePlain, toPayload } from '../compose.js';
 import { ICON_MD, Icon } from '../uiIcons.jsx';
 import TimeMenu from './TimeMenu.jsx';
 
+const STAGE_LABEL = {
+  inquiry: '询盘', quote: '报价中', sample: '样品', bulk: '大货', payment: '付款', won: '成交', lost: '丢单',
+};
+
 const TONES = [
   ['professional', '专业'],
   ['friendly', '友好'],
@@ -343,6 +347,43 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     touch();
   }
 
+  function insertQuoteSnippet() {
+    const snip = initial.quoteSnippet || '';
+    if (!snip) return notify('当前客户暂无报价要点，请先在成交条填写', 'error');
+    editor.current.focus();
+    insertHtmlAtCursor(`<pre class="zm-quote-snip">${snip.replace(/</g, '&lt;')}</pre><br>`, editor.current);
+    touch();
+  }
+
+  function groupedTemplates(list) {
+    if (!list?.length) return [];
+    const brandId = mailbox?.brandId || null;
+    const sorted = [...list].sort((a, b) => {
+      const aBrand = brandId && a.brandId === brandId ? 0 : a.brandId ? 1 : 2;
+      const bBrand = brandId && b.brandId === brandId ? 0 : b.brandId ? 1 : 2;
+      if (aBrand !== bBrand) return aBrand - bBrand;
+      const aStage = a.stage || '';
+      const bStage = b.stage || '';
+      if (aStage !== bStage) return aStage.localeCompare(bStage);
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+    const groups = [];
+    let cur = null;
+    for (const t of sorted) {
+      const key = `${t.brandId || 'any'}:${t.stage || 'any'}`;
+      if (!cur || cur.key !== key) {
+        const bits = [];
+        if (t.brandId && brandId && t.brandId === brandId) bits.push('当前品牌');
+        else if (t.brandId) bits.push('其它品牌');
+        if (t.stage) bits.push(STAGE_LABEL[t.stage] || t.stage);
+        cur = { key, label: bits.join(' · ') || '通用', items: [] };
+        groups.push(cur);
+      }
+      cur.items.push(t);
+    }
+    return groups;
+  }
+
   async function saveAsTemplate() {
     setMenu(null);
     const name = window.prompt('模板名称', subject || '新模板');
@@ -618,17 +659,30 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
                 <div className="dropdown-title">插入模板</div>
                 {!templates && <div className="dropdown-tip"><Loader2 size={12} className="spin" /> 加载中…</div>}
                 {templates?.length === 0 && <div className="dropdown-tip">还没有模板</div>}
-                {templates?.map((t) => (
-                  <button key={t.id} onClick={() => applyTemplate(t)}>
-                    <span>{t.name}</span>
-                    {t.subject && <small>{t.subject}</small>}
-                  </button>
+                {groupedTemplates(templates).map((g) => (
+                  <React.Fragment key={g.key}>
+                    {g.label && <div className="dropdown-tip">{g.label}</div>}
+                    {g.items.map((t) => (
+                      <button key={t.id} onClick={() => applyTemplate(t)}>
+                        <span>
+                          {t.name}
+                          {t.shared ? <em className="tpl-team">团队</em> : null}
+                        </span>
+                        {t.subject && <small>{t.subject}</small>}
+                      </button>
+                    ))}
+                  </React.Fragment>
                 ))}
                 <div className="menu-sep" />
                 <button onClick={saveAsTemplate}><Save size={13} /> 把当前内容存为模板</button>
               </div>
             )}
           </div>
+          {initial.quoteSnippet && (
+            <button type="button" onClick={insertQuoteSnippet} title="插入当前报价要点">
+              <Quote size={15} />
+            </button>
+          )}
         </div>
         {aiEnabled ? (
           <div className="ai-tools">

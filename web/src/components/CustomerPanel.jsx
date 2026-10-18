@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, Crown, Bell, BellOff, Hourglass, Users, Reply, Clock, Plus, Loader2, UserPlus, CalendarClock, Send, ArrowDownLeft, ArrowUpRight, Sparkles } from 'lucide-react';
+import { X, Crown, Bell, BellOff, Hourglass, Users, Reply, Clock, Plus, Loader2, UserPlus, CalendarClock, Send, ArrowDownLeft, ArrowUpRight, Sparkles, Package, FolderOpen, Trash2 } from 'lucide-react';
 import { api } from '../api.js';
+import { ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS, SAMPLE_STATUS_LABEL, SAMPLE_TYPE_LABEL } from '../apparelPresets.js';
 import { avatarColor, displayName, formatListDate, formatShortDateTime, initials, relativeTime, waitText } from '../utils.js';
 
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事', muted: '已静音', bulk: '' };
@@ -53,6 +54,10 @@ export default function CustomerPanel({
   const [noteSaving, setNoteSaving] = useState(false);
   const [addrInput, setAddrInput] = useState('');
   const [busy, setBusy] = useState('');
+  const [styles, setStyles] = useState([]);
+  const [samples, setSamples] = useState([]);
+  const [assets, setAssets] = useState([]);
+  const [styleDraft, setStyleDraft] = useState('');
   const noteTimer = useRef(null);
 
   const peerAddr = useMemo(() => peerAddressOf(address, sender, listItem), [address, sender, listItem]);
@@ -122,11 +127,40 @@ export default function CustomerPanel({
       .then((d) => alive && setTagCatalog(d.tags || []))
       .catch(() => {});
 
+    api('/customer-assets?address=' + encodeURIComponent(peerAddr) + '&limit=30')
+      .then((d) => alive && setAssets(d.assets || []))
+      .catch(() => alive && setAssets([]));
+
     return () => {
       alive = false;
       if (noteTimer.current) clearTimeout(noteTimer.current);
     };
   }, [peerAddr]);
+
+  const dealId = timeline?.deal?.id || listItem?.deal?.id;
+  useEffect(() => {
+    if (!dealId) {
+      setStyles([]);
+      setSamples([]);
+      return undefined;
+    }
+    let alive = true;
+    Promise.all([
+      api(`/deals/${dealId}/styles`),
+      api(`/deals/${dealId}/samples`),
+    ])
+      .then(([st, sa]) => {
+        if (!alive) return;
+        setStyles(st.styles || []);
+        setSamples(sa.samples || []);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setStyles([]);
+        setSamples([]);
+      });
+    return () => { alive = false; };
+  }, [dealId]);
 
   function scheduleNoteSave(value) {
     setNote(value);
@@ -359,6 +393,117 @@ export default function CustomerPanel({
             </div>
           )}
         </div>
+
+        {(deal || styles.length || samples.length || assets.length) && (
+          <div className="customer-sec customer-commerce" aria-label="成交工件">
+            {deal && (deal.amount != null || deal.styleNo || deal.moq) && (
+              <>
+                <div className="customer-section-title"><Package size={12} /> 报价要点</div>
+                <div className="cd-commerce-summary">
+                  {deal.styleNo && <span className="pill">款 {deal.styleNo}</span>}
+                  {deal.amount != null && <span className="pill">{deal.currency || 'USD'} {deal.amount}</span>}
+                  {deal.moq && <span className="muted">MOQ {deal.moq}</span>}
+                  {deal.incoterm && <span className="muted">{deal.incoterm}</span>}
+                  {deal.leadDays != null && <span className="muted">{deal.leadDays} 天</span>}
+                  {FOLLOW_SEQ_DAYS[deal.stage] && deal.autoFollowSeq !== false && (
+                    <small className="muted deal-seq-hint">序列：本阶段后 {FOLLOW_SEQ_DAYS[deal.stage]} 天</small>
+                  )}
+                </div>
+              </>
+            )}
+
+            <div className="customer-section-title" style={{ marginTop: deal?.amount != null || deal?.styleNo ? 10 : 0 }}>
+              款号
+            </div>
+            <ul className="customer-style-list">
+              {styles.map((s) => (
+                <li key={s.id}>
+                  <b>{s.styleNo}</b>
+                  {(s.colorway || s.sizeRange) && (
+                    <small className="muted">{[s.colorway, s.sizeRange].filter(Boolean).join(' · ')}</small>
+                  )}
+                  {dealId && (
+                    <button
+                      type="button"
+                      className="icon-btn xs"
+                      title="删除"
+                      onClick={async () => {
+                        try {
+                          await api(`/deals/${dealId}/styles/${s.id}`, { method: 'DELETE' });
+                          setStyles((list) => list.filter((x) => x.id !== s.id));
+                        } catch { /* ignore */ }
+                      }}
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  )}
+                </li>
+              ))}
+              {!styles.length && <li className="muted"><small>暂无款号，可在成交条添加</small></li>}
+            </ul>
+            {dealId && (
+              <form
+                className="glossary-add compact"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!styleDraft.trim()) return;
+                  setBusy('style');
+                  try {
+                    const r = await api(`/deals/${dealId}/styles`, { method: 'POST', body: { styleNo: styleDraft.trim() } });
+                    setStyles(r.styles || []);
+                    setStyleDraft('');
+                  } finally {
+                    setBusy('');
+                  }
+                }}
+              >
+                <input value={styleDraft} onChange={(e) => setStyleDraft(e.target.value)} placeholder="新款号 Style No." />
+                <button type="submit" className="btn-ghost xs" disabled={busy === 'style' || !styleDraft.trim()}>添加</button>
+              </form>
+            )}
+
+            <div className="customer-section-title" style={{ marginTop: 10 }}>样品</div>
+            <ul className="customer-sample-list">
+              {samples.map((s) => (
+                <li key={s.id}>
+                  <span className="pill">{SAMPLE_TYPE_LABEL[s.sampleType] || s.sampleType}</span>
+                  <span className="pill soft">{SAMPLE_STATUS_LABEL[s.status] || s.status}</span>
+                  {s.trackingNo && <small>{s.trackingNo}</small>}
+                  {s.sentAt && <small className="muted">{formatShortDateTime(s.sentAt)}</small>}
+                </li>
+              ))}
+              {!samples.length && <li className="muted"><small>暂无样品记录</small></li>}
+            </ul>
+
+            <div className="customer-section-title" style={{ marginTop: 10 }}>
+              <FolderOpen size={12} /> 资料库
+            </div>
+            <ul className="customer-asset-list">
+              {assets.map((a) => (
+                <li key={a.id}>
+                  <a href={a.previewUrl || a.downloadUrl} target="_blank" rel="noreferrer" title={a.filename}>
+                    <b>{a.title || a.filename}</b>
+                    <small className="muted">{ASSET_KIND_LABEL[a.kind] || a.kind}{a.styleNo ? ` · ${a.styleNo}` : ''}</small>
+                  </a>
+                  <button
+                    type="button"
+                    className="icon-btn xs"
+                    title="从资料库移除"
+                    onClick={async () => {
+                      try {
+                        await api(`/customer-assets/${a.id}`, { method: 'DELETE' });
+                        setAssets((list) => list.filter((x) => x.id !== a.id));
+                      } catch { /* ignore */ }
+                    }}
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                </li>
+              ))}
+              {!assets.length && <li className="muted"><small>读信附件可「收入资料库」</small></li>}
+            </ul>
+          </div>
+        )}
 
         {person && (
           <div className="customer-sec">

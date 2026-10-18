@@ -63,7 +63,7 @@ function notifyMailboxOwnerOnClaim({ db, emit, push, deal, claimer, body }) {
 }
 
 export function registerDealsRoutes(app, ctx) {
-  const { auth, wrap, rateLimit, deals, labels, emit, users, push, db, teamQueue } = ctx;
+  const { auth, wrap, rateLimit, deals, labels, emit, users, push, db, teamQueue, customerAssets, brands, threadNotes } = ctx;
   const bump = () => broadcastDeal(emit, users, teamQueue);
 
   app.get(
@@ -202,26 +202,161 @@ export function registerDealsRoutes(app, ctx) {
       const id = Number(req.params.id);
       let deal = null;
       let stageLabel = null;
-      if (req.body?.stage != null) {
-        deal = deals.setStage(req.user.id, id, req.body.stage);
-        const mid = Number(req.body.messageId);
+      const body = req.body || {};
+      if (body.stage != null) {
+        deal = deals.setStage(req.user.id, id, body.stage);
+        const mid = Number(body.messageId);
         if (Number.isInteger(mid)) {
           try {
-            stageLabel = labels.applyStageLabel(req.user.id, mid, req.body.stage).label;
+            stageLabel = labels.applyStageLabel(req.user.id, mid, body.stage).label;
           } catch (e) {
             console.warn('[deals] stage label', e.message);
           }
         }
       }
-      if (req.body?.note != null) deal = deals.setNote(req.user.id, id, req.body.note);
-      if ('nextFollowAt' in (req.body || {})) deal = deals.setNextFollowAt(req.user.id, id, req.body.nextFollowAt);
+      if (body.note != null) deal = deals.setNote(req.user.id, id, body.note);
+      if ('nextFollowAt' in body) deal = deals.setNextFollowAt(req.user.id, id, body.nextFollowAt);
+      const commerceKeys = [
+        'styleNo', 'currency', 'amount', 'moq', 'leadDays', 'incoterm', 'quoteValidUntil', 'brandId', 'autoFollowSeq',
+      ];
+      if (commerceKeys.some((k) => k in body)) deal = deals.updateCommerce(req.user.id, id, body);
       if (!deal) {
         const row = deals.getDealById(id);
         if (!row) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
         deal = deals.lookup(req.user.id, { address: row.last_address }).deal;
       }
       bump();
-      res.json({ deal, stageLabel });
+      res.json({ deal, stageLabel, quoteSnippet: deals.quoteSnippet(deal) });
+    })
+  );
+
+  app.get(
+    '/api/deals/:id/styles',
+    auth,
+    wrap(async (req, res) => {
+      const id = Number(req.params.id);
+      deals.getDealById(id) || (() => { throw Object.assign(new Error('认领记录不存在'), { status: 404 }); })();
+      res.json({ styles: deals.listStyles(id) });
+    })
+  );
+  app.post(
+    '/api/deals/:id/styles',
+    auth,
+    wrap(async (req, res) => {
+      const style = deals.upsertStyle(req.user.id, Number(req.params.id), req.body || {});
+      bump();
+      res.json({ style, styles: deals.listStyles(Number(req.params.id)) });
+    })
+  );
+  app.delete(
+    '/api/deals/:id/styles/:sid',
+    auth,
+    wrap(async (req, res) => {
+      res.json(deals.deleteStyle(req.user.id, Number(req.params.id), Number(req.params.sid)));
+    })
+  );
+
+  app.get(
+    '/api/deals/:id/samples',
+    auth,
+    wrap(async (req, res) => {
+      const id = Number(req.params.id);
+      if (!deals.getDealById(id)) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
+      res.json({ samples: deals.listSamples(id) });
+    })
+  );
+  app.post(
+    '/api/deals/:id/samples',
+    auth,
+    wrap(async (req, res) => {
+      const sample = deals.upsertSample(req.user.id, Number(req.params.id), req.body || {});
+      bump();
+      res.json({ sample, samples: deals.listSamples(Number(req.params.id)) });
+    })
+  );
+  app.delete(
+    '/api/deals/:id/samples/:sid',
+    auth,
+    wrap(async (req, res) => {
+      res.json(deals.deleteSample(req.user.id, Number(req.params.id), Number(req.params.sid)));
+    })
+  );
+
+  app.get(
+    '/api/customer-assets',
+    auth,
+    wrap(async (req, res) => {
+      res.json({
+        assets: customerAssets.listAssets(req.user.id, {
+          address: req.query.address,
+          scopeKey: req.query.scopeKey,
+          limit: Number(req.query.limit) || 50,
+        }),
+      });
+    })
+  );
+  app.post(
+    '/api/customer-assets',
+    auth,
+    wrap(async (req, res) => {
+      res.json({ asset: customerAssets.addAsset(req.user.id, req.body || {}) });
+    })
+  );
+  app.delete(
+    '/api/customer-assets/:id',
+    auth,
+    wrap(async (req, res) => {
+      res.json(customerAssets.deleteAsset(req.user.id, Number(req.params.id)));
+    })
+  );
+
+  app.get(
+    '/api/brands',
+    auth,
+    wrap(async (req, res) => {
+      res.json({ brands: brands.listBrands(req.user.id) });
+    })
+  );
+  app.post(
+    '/api/brands',
+    auth,
+    wrap(async (req, res) => {
+      res.json({ brand: brands.createBrand(req.user.id, req.body || {}) });
+    })
+  );
+  app.patch(
+    '/api/mailboxes/:id/brand',
+    auth,
+    wrap(async (req, res) => {
+      res.json(brands.setMailboxBrand(req.user.id, req.params.id, req.body?.brandId));
+    })
+  );
+
+  app.get(
+    '/api/thread-notes',
+    auth,
+    wrap(async (req, res) => {
+      res.json({
+        notes: threadNotes.listNotes({
+          threadId: req.query.threadId,
+          address: req.query.address,
+          limit: Number(req.query.limit) || 30,
+        }),
+      });
+    })
+  );
+  app.post(
+    '/api/thread-notes',
+    auth,
+    wrap(async (req, res) => {
+      res.json({ note: threadNotes.addNote(req.user.id, req.body || {}) });
+    })
+  );
+  app.delete(
+    '/api/thread-notes/:id',
+    auth,
+    wrap(async (req, res) => {
+      res.json(threadNotes.deleteNote(req.user.id, Number(req.params.id), { admin: req.user.role === 'admin' }));
     })
   );
 }

@@ -36,8 +36,13 @@ export function useAppBoot({ applyState, setUser, setAi, setAiMeta, setBoot, set
             window.history.replaceState({}, '', window.location.pathname);
           } else if (['team', 'today', 'waiting', 'deals', 'insights', 'inbox', 'unread', 'flagged', 'sent', 'snoozed'].includes(sp.get('box'))) {
             setViewState({ mailboxId: 'all', box: sp.get('box') });
-            const keepCompose = sp.get('compose') === '1';
-            window.history.replaceState({}, '', keepCompose ? `${window.location.pathname}?compose=1` : window.location.pathname);
+            const keep = new URLSearchParams();
+            if (sp.get('compose') === '1') keep.set('compose', '1');
+            const mid = sp.get('messageId') || sp.get('id');
+            if (mid) keep.set('messageId', mid);
+            if (sp.get('box')) keep.set('box', sp.get('box'));
+            const q = keep.toString();
+            window.history.replaceState({}, '', q ? `${window.location.pathname}?${q}` : window.location.pathname);
           }
         } catch {
           /* ignore */

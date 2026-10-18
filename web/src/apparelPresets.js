@@ -3,6 +3,24 @@
  * （与 server/glossary、classify 互补，供设置页与 DealBar 使用）
  */
 
+/** 改阶段后默认跟进天数（与 server/deals.FOLLOW_SEQ_DAYS 对齐） */
+export const FOLLOW_SEQ_DAYS = { quote: 3, sample: 7, bulk: 5, payment: 3 };
+
+export const SAMPLE_TYPE_LABEL = { sms: 'SMS', fit: 'Fit', pp: 'PP', other: '其它' };
+export const SAMPLE_STATUS_LABEL = {
+  planned: '计划中',
+  sent: '已寄出',
+  received: '已收样',
+  approved: '已批准',
+  rejected: '需修改',
+};
+export const ASSET_KIND_LABEL = {
+  techpack: 'Tech pack',
+  swatch: '色卡/面料',
+  sizechart: '尺寸表',
+  other: '其它资料',
+};
+
 export const APPAREL_GLOSSARY_EXTRA = [
   { src: 'Tech pack', dst: '工艺单 / 技术包' },
   { src: 'BOM', dst: '物料清单' },

@@ -831,11 +831,18 @@ export default function App() {
     pushComposer(buildComposeState(mode, msg, composeCtx, extra));
   }
 
-  /* 服务号菜单深链：?compose=1 → 打开写信 */
+  /* 深链：?compose=1 写信；?box=&messageId= Push / 服务号点达读信 */
   useEffect(() => {
     if (boot !== 'ready' || !user) return;
     try {
       const sp = new URLSearchParams(window.location.search);
+      const mid = Number(sp.get('messageId') || sp.get('id'));
+      const box = sp.get('box') || 'today';
+      if (Number.isInteger(mid) && mid > 0) {
+        openMessage(mid, { box: ['today', 'waiting', 'inbox', 'unread', 'team'].includes(box) ? box : 'today' });
+        window.history.replaceState({}, '', window.location.pathname);
+        return;
+      }
       if (sp.get('compose') !== '1') return;
       window.history.replaceState({}, '', window.location.pathname);
       openCompose();
@@ -1210,6 +1217,7 @@ export default function App() {
         r: () => s.currentMsg && openCompose('reply', s.currentMsg),
         a: () => s.currentMsg && openCompose('replyAll', s.currentMsg),
         f: () => s.currentMsg && openCompose('forward', s.currentMsg),
+        F: () => window.dispatchEvent(new CustomEvent('zm-deal-hotkey', { detail: { action: 'follow' } })),
         d: () => {
           const it = s.selectedItem;
           if (it?._section === 'follow') doAction([sel], 'nofollow');
@@ -1221,6 +1229,7 @@ export default function App() {
         '!': () => doAction([sel], 'spam'),
         b: () => doAction([sel], 'snooze', { until: snoozePresets()[1].at }),
         s: () => item && doAction([sel], item.flagged ? 'unflag' : 'flag'),
+        S: () => window.dispatchEvent(new CustomEvent('zm-deal-hotkey', { detail: { action: 'stage' } })),
         p: () => item && doAction([sel], item.pinned ? 'unpin' : 'pin'),
         u: () => doAction([sel], 'unread'),
         x: () => setChecked((c) => {

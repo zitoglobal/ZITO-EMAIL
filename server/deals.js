@@ -61,6 +61,18 @@ function userRow(id) {
   return db.prepare('SELECT id, name, email, role FROM users WHERE id = ?').get(id);
 }
 
+/** 改阶段后默认跟进偏移（天）；won/lost/inquiry 不自动开序列 */
+export const FOLLOW_SEQ_DAYS = {
+  quote: 3,
+  sample: 7,
+  bulk: 5,
+  payment: 3,
+};
+
+const SAMPLE_TYPES = new Set(['sms', 'fit', 'pp', 'other']);
+const SAMPLE_STATUS = new Set(['planned', 'sent', 'received', 'approved', 'rejected']);
+const INCOTERMS = new Set(['', 'FOB', 'CIF', 'CFR', 'EXW', 'DDP', 'DAP', 'FCA']);
+
 function publicDeal(row, viewerId) {
   if (!row) return null;
   const owner = userRow(row.owner_user_id);
@@ -81,6 +93,15 @@ function publicDeal(row, viewerId) {
     lastAddress: row.last_address || null,
     /** 当前用户邮箱内可打开的最近线索邮件（列表附加，见 attachLastMessageIds） */
     lastMessageId: row._lastMessageId != null ? row._lastMessageId : null,
+    styleNo: row.style_no || '',
+    currency: row.currency || 'USD',
+    amount: row.amount != null ? Number(row.amount) : null,
+    moq: row.moq || '',
+    leadDays: row.lead_days != null ? Number(row.lead_days) : null,
+    incoterm: row.incoterm || '',
+    quoteValidUntil: row.quote_valid_until || null,
+    brandId: row.brand_id || null,
+    autoFollowSeq: row.auto_follow_seq !== 0,
     owner: owner
       ? { id: owner.id, name: owner.name || owner.email, email: owner.email, role: owner.role }
       : { id: row.owner_user_id, name: '未知同事', email: '', role: 'member' },
@@ -88,6 +109,209 @@ function publicDeal(row, viewerId) {
     canRelease: row.owner_user_id === viewerId || userRow(viewerId)?.role === 'admin',
     canTakeover: row.owner_user_id !== viewerId && userRow(viewerId)?.role === 'admin',
   };
+}
+
+function assertDealWrite(userId, dealId) {
+  const row = getDealById(dealId);
+  if (!row) throw Object.assign(new Error('认领记录不存在'), { status: 404 });
+  if (row.owner_user_id !== userId && userRow(userId)?.role !== 'admin') {
+    throw Object.assign(new Error('只有认领人或管理员可以修改'), { status: 403 });
+  }
+  return row;
+}
+
+function applyFollowSeq(userId, row, stage) {
+  if (row.auto_follow_seq === 0) return;
+  const days = FOLLOW_SEQ_DAYS[stage];
+  if (!days) return;
+  const at = now();
+  const due = row.next_follow_at;
+  if (due != null && due > at) return; // 已有未到期跟进日则不覆盖
+  const nextAt = at + days * 24 * 3600 * 1000;
+  db.prepare('UPDATE deals SET next_follow_at = ?, updated_at = ? WHERE id = ?').run(nextAt, at, row.id);
+  logEvent(row.id, row.scope_key, userId, 'follow_seq', `${stageMeta(stage).label}后 ${days} 天跟进`);
+}
+
+/** 报价要点 / 外贸字段 */
+export function updateCommerce(userId, dealId, patch = {}) {
+  const row = assertDealWrite(userId, dealId);
+  const t = now();
+  const styleNo = patch.styleNo != null ? String(patch.styleNo).trim().slice(0, 80) : row.style_no;
+  const currency = patch.currency != null ? String(patch.currency).trim().toUpperCase().slice(0, 8) || 'USD' : row.currency;
+  let amount = row.amount;
+  if ('amount' in patch) {
+    if (patch.amount == null || patch.amount === '') amount = null;
+    else {
+      amount = Number(patch.amount);
+      if (!Number.isFinite(amount)) throw Object.assign(new Error('金额无效'), { status: 400 });
+    }
+  }
+  const moq = patch.moq != null ? String(patch.moq).trim().slice(0, 80) : row.moq;
+  let leadDays = row.lead_days;
+  if ('leadDays' in patch) {
+    if (patch.leadDays == null || patch.leadDays === '') leadDays = null;
+    else {
+      leadDays = Number(patch.leadDays);
+      if (!Number.isFinite(leadDays) || leadDays < 0) throw Object.assign(new Error('交期无效'), { status: 400 });
+    }
+  }
+  let incoterm = row.incoterm || '';
+  if (patch.incoterm != null) {
+    const ic = String(patch.incoterm).trim().toUpperCase();
+    if (!INCOTERMS.has(ic)) throw Object.assign(new Error('贸易术语无效'), { status: 400 });
+    incoterm = ic;
+  }
+  let quoteValidUntil = row.quote_valid_until;
+  if ('quoteValidUntil' in patch) {
+    if (patch.quoteValidUntil == null || patch.quoteValidUntil === '') quoteValidUntil = null;
+    else {
+      quoteValidUntil = Number(patch.quoteValidUntil);
+      if (!Number.isFinite(quoteValidUntil)) throw Object.assign(new Error('有效期无效'), { status: 400 });
+    }
+  }
+  let brandId = row.brand_id;
+  if ('brandId' in patch) {
+    brandId = patch.brandId == null || patch.brandId === '' ? null : Number(patch.brandId);
+  }
+  let autoFollowSeq = row.auto_follow_seq;
+  if ('autoFollowSeq' in patch) autoFollowSeq = patch.autoFollowSeq ? 1 : 0;
+
+  db.prepare(
+    `UPDATE deals SET style_no = ?, currency = ?, amount = ?, moq = ?, lead_days = ?, incoterm = ?,
+      quote_valid_until = ?, brand_id = ?, auto_follow_seq = ?, updated_at = ? WHERE id = ?`
+  ).run(styleNo || '', currency || 'USD', amount, moq || '', leadDays, incoterm || '', quoteValidUntil, brandId, autoFollowSeq, t, dealId);
+
+  const bits = [];
+  if (styleNo) bits.push(`款 ${styleNo}`);
+  if (amount != null) bits.push(`${currency || 'USD'} ${amount}`);
+  if (moq) bits.push(`MOQ ${moq}`);
+  if (bits.length) logEvent(dealId, row.scope_key, userId, 'commerce', bits.join(' · '));
+  return publicDeal(getDealById(dealId), userId);
+}
+
+export function listStyles(dealId) {
+  return db
+    .prepare('SELECT * FROM deal_styles WHERE deal_id = ? ORDER BY updated_at DESC, id DESC')
+    .all(dealId)
+    .map((r) => ({
+      id: r.id,
+      dealId: r.deal_id,
+      styleNo: r.style_no,
+      colorway: r.colorway,
+      sizeRange: r.size_range,
+      note: r.note,
+      updatedAt: r.updated_at,
+    }));
+}
+
+export function upsertStyle(userId, dealId, body = {}) {
+  assertDealWrite(userId, dealId);
+  const t = now();
+  const styleNo = String(body.styleNo || '').trim().slice(0, 80);
+  if (!styleNo) throw Object.assign(new Error('请填写款号'), { status: 400 });
+  const colorway = String(body.colorway || '').trim().slice(0, 120);
+  const sizeRange = String(body.sizeRange || '').trim().slice(0, 120);
+  const note = String(body.note || '').trim().slice(0, 200);
+  if (body.id) {
+    const ex = db.prepare('SELECT id FROM deal_styles WHERE id = ? AND deal_id = ?').get(body.id, dealId);
+    if (!ex) throw Object.assign(new Error('款号不存在'), { status: 404 });
+    db.prepare(
+      `UPDATE deal_styles SET style_no = ?, colorway = ?, size_range = ?, note = ?, updated_at = ? WHERE id = ?`
+    ).run(styleNo, colorway, sizeRange, note, t, body.id);
+    return listStyles(dealId).find((s) => s.id === body.id);
+  }
+  const id = Number(
+    db
+      .prepare(
+        `INSERT INTO deal_styles (deal_id, style_no, colorway, size_range, note, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(dealId, styleNo, colorway, sizeRange, note, t).lastInsertRowid
+  );
+  db.prepare('UPDATE deals SET style_no = CASE WHEN style_no = \'\' THEN ? ELSE style_no END, updated_at = ? WHERE id = ?').run(
+    styleNo,
+    t,
+    dealId
+  );
+  return listStyles(dealId).find((s) => s.id === id);
+}
+
+export function deleteStyle(userId, dealId, styleId) {
+  assertDealWrite(userId, dealId);
+  db.prepare('DELETE FROM deal_styles WHERE id = ? AND deal_id = ?').run(styleId, dealId);
+  return { ok: true };
+}
+
+export function listSamples(dealId) {
+  return db
+    .prepare('SELECT * FROM deal_samples WHERE deal_id = ? ORDER BY updated_at DESC, id DESC')
+    .all(dealId)
+    .map((r) => ({
+      id: r.id,
+      dealId: r.deal_id,
+      sampleType: r.sample_type,
+      trackingNo: r.tracking_no,
+      carrier: r.carrier,
+      sentAt: r.sent_at,
+      status: r.status,
+      note: r.note,
+      updatedAt: r.updated_at,
+    }));
+}
+
+export function upsertSample(userId, dealId, body = {}) {
+  assertDealWrite(userId, dealId);
+  const t = now();
+  const sampleType = SAMPLE_TYPES.has(body.sampleType) ? body.sampleType : 'sms';
+  const status = SAMPLE_STATUS.has(body.status) ? body.status : 'planned';
+  const trackingNo = String(body.trackingNo || '').trim().slice(0, 80);
+  const carrier = String(body.carrier || '').trim().slice(0, 40);
+  const note = String(body.note || '').trim().slice(0, 200);
+  let sentAt = body.sentAt != null && body.sentAt !== '' ? Number(body.sentAt) : null;
+  if (sentAt != null && !Number.isFinite(sentAt)) sentAt = null;
+  if (status === 'sent' && !sentAt) sentAt = t;
+
+  if (body.id) {
+    const ex = db.prepare('SELECT id FROM deal_samples WHERE id = ? AND deal_id = ?').get(body.id, dealId);
+    if (!ex) throw Object.assign(new Error('样品记录不存在'), { status: 404 });
+    db.prepare(
+      `UPDATE deal_samples SET sample_type = ?, tracking_no = ?, carrier = ?, sent_at = ?, status = ?, note = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(sampleType, trackingNo, carrier, sentAt, status, note, t, body.id);
+    return listSamples(dealId).find((s) => s.id === body.id);
+  }
+  const id = Number(
+    db
+      .prepare(
+        `INSERT INTO deal_samples (deal_id, sample_type, tracking_no, carrier, sent_at, status, note, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(dealId, sampleType, trackingNo, carrier, sentAt, status, note, t).lastInsertRowid
+  );
+  const row = assertDealWrite(userId, dealId);
+  logEvent(dealId, row.scope_key, userId, 'sample', `${sampleType.toUpperCase()} · ${status}${trackingNo ? ` · ${trackingNo}` : ''}`);
+  return listSamples(dealId).find((s) => s.id === id);
+}
+
+export function deleteSample(userId, dealId, sampleId) {
+  assertDealWrite(userId, dealId);
+  db.prepare('DELETE FROM deal_samples WHERE id = ? AND deal_id = ?').run(sampleId, dealId);
+  return { ok: true };
+}
+
+/** 生成可粘贴进邮件的报价要点纯文本 */
+export function quoteSnippet(deal) {
+  if (!deal) return '';
+  const lines = ['【报价要点】'];
+  if (deal.styleNo) lines.push(`Style: ${deal.styleNo}`);
+  if (deal.amount != null) lines.push(`Amount: ${deal.currency || 'USD'} ${deal.amount}`);
+  if (deal.moq) lines.push(`MOQ: ${deal.moq}`);
+  if (deal.leadDays != null) lines.push(`Lead time: ${deal.leadDays} days`);
+  if (deal.incoterm) lines.push(`Incoterm: ${deal.incoterm}`);
+  if (deal.quoteValidUntil) {
+    lines.push(`Valid until: ${new Date(deal.quoteValidUntil).toLocaleDateString('en-CA')}`);
+  }
+  if (lines.length === 1) return '';
+  return lines.join('\n');
 }
 
 function logEvent(dealId, scopeKey, actorUserId, action, detail = '') {
@@ -412,7 +636,10 @@ export function setStage(userId, dealId, stage) {
   const from = stageMeta(row.stage).label;
   const to = stageMeta(stage).label;
   db.prepare('UPDATE deals SET stage = ?, stage_updated_at = ?, updated_at = ? WHERE id = ?').run(stage, t, t, dealId);
-  if (row.stage !== stage) logEvent(dealId, row.scope_key, userId, 'stage', `${from} → ${to}`);
+  if (row.stage !== stage) {
+    logEvent(dealId, row.scope_key, userId, 'stage', `${from} → ${to}`);
+    applyFollowSeq(userId, { ...row, stage }, stage);
+  }
   return publicDeal(getDealById(dealId), userId);
 }
 

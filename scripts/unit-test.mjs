@@ -18,7 +18,11 @@ import {
   followGroupKey,
 } from '../server/priority.js';
 import { matchCondition, matchRule } from '../server/mail_rules.js';
-import { scopeFromAddress, resolveScopes, isValidStage, stageMeta, STAGES, suggestStageAfterSend } from '../server/deals.js';
+import {
+  scopeFromAddress, resolveScopes, isValidStage, stageMeta, STAGES, suggestStageAfterSend,
+  FOLLOW_SEQ_DAYS, quoteSnippet,
+} from '../server/deals.js';
+import { ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS as CLIENT_FOLLOW_SEQ } from '../web/src/apparelPresets.js';
 import { isBlockedHostname } from '../server/net_guard.js';
 import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
@@ -329,6 +333,18 @@ assert('suggest stage sample', suggestStageAfterSend('quote', 'Sample shipment',
 assert('suggest stage pp sample', suggestStageAfterSend('quote', 'PP sample for approval', '')?.stage === 'sample');
 assert('suggest stage tech pack inquiry', suggestStageAfterSend(null, 'Please send tech pack', '')?.stage === 'inquiry');
 assert('suggest no regress', suggestStageAfterSend('payment', 'Re: inquiry', '') == null);
+
+assert('FOLLOW_SEQ quote +3', FOLLOW_SEQ_DAYS.quote === 3);
+assert('FOLLOW_SEQ sample +7', FOLLOW_SEQ_DAYS.sample === 7);
+assert('FOLLOW_SEQ bulk +5', FOLLOW_SEQ_DAYS.bulk === 5);
+assert('FOLLOW_SEQ client aligned', CLIENT_FOLLOW_SEQ.quote === FOLLOW_SEQ_DAYS.quote && CLIENT_FOLLOW_SEQ.sample === FOLLOW_SEQ_DAYS.sample);
+assert('quoteSnippet empty deal', quoteSnippet(null) === '' && quoteSnippet({}) === '');
+assert(
+  'quoteSnippet commerce',
+  quoteSnippet({ styleNo: 'ZS-01', currency: 'USD', amount: 12.5, moq: '500', leadDays: 45, incoterm: 'FOB' }).includes('Style: ZS-01')
+    && quoteSnippet({ styleNo: 'ZS-01', currency: 'USD', amount: 12.5, moq: '500', leadDays: 45, incoterm: 'FOB' }).includes('FOB')
+);
+assert('ASSET_KIND techpack label', ASSET_KIND_LABEL.techpack === 'Tech pack');
 
 // ---------- conversationKey ----------
 assert('conv key prefers thread', conversationKey({ thread_id: 't1', in_reply_to: 'p1', message_id: 'm1', id: 9 }) === 't1');

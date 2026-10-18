@@ -63,6 +63,30 @@ export function teamInsights(viewerId, { dayStart } = {}) {
       count: r.n,
     }));
 
+  const since = now - 30 * DAY;
+  const funnelOrder = ['inquiry', 'quote', 'sample', 'bulk', 'payment', 'won', 'lost'];
+  const funnelCounts = Object.fromEntries(funnelOrder.map((id) => [id, stageMap[id] || 0]));
+  const stageEvents = db
+    .prepare(
+      `SELECT detail, COUNT(*) AS n FROM deal_events
+       WHERE action = 'stage' AND created_at >= ?
+       GROUP BY detail ORDER BY n DESC LIMIT 40`
+    )
+    .all(since);
+  const transitions = { toQuote: 0, toSample: 0, toBulk: 0, toWon: 0, toLost: 0 };
+  for (const e of stageEvents) {
+    const d = String(e.detail || '');
+    if (/→\s*报价/.test(d)) transitions.toQuote += e.n;
+    if (/→\s*样品/.test(d)) transitions.toSample += e.n;
+    if (/→\s*大货/.test(d)) transitions.toBulk += e.n;
+    if (/→\s*成交/.test(d)) transitions.toWon += e.n;
+    if (/→\s*丢单/.test(d)) transitions.toLost += e.n;
+  }
+  const openPipe = (funnelCounts.inquiry || 0) + (funnelCounts.quote || 0) + (funnelCounts.sample || 0) + (funnelCounts.bulk || 0) + (funnelCounts.payment || 0);
+  const wonRate = openPipe + (funnelCounts.won || 0) + (funnelCounts.lost || 0)
+    ? Math.round(((funnelCounts.won || 0) / Math.max(1, (funnelCounts.won || 0) + (funnelCounts.lost || 0) + openPipe)) * 1000) / 10
+    : 0;
+
   return {
     focus: {
       needReply: focus.stats?.needReply || 0,
@@ -78,6 +102,13 @@ export function teamInsights(viewerId, { dayStart } = {}) {
     stages,
     stageAge,
     follow: { due: dueFollow, upcoming7d: upcomingFollow },
+    funnel: {
+      counts: funnelCounts,
+      stages: STAGES.map((s) => ({ id: s.id, label: s.label, color: s.color, count: funnelCounts[s.id] || 0 })),
+      transitions30d: transitions,
+      wonRate,
+      openPipeline: openPipe,
+    },
     generatedAt: now,
   };
 }

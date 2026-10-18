@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   X, Trash2, Plus, Moon, Sun, Bell, Sparkles, RefreshCw, ArrowUp, ArrowDown, Server, Loader2, AlertCircle, CheckCircle2, Mail,
   SlidersHorizontal, FileStack, User, Users, Pencil, LogOut, Image, Undo2, MessagesSquare, Rows3, KeyRound, ListTodo, Hourglass, Send,
-  BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft, Tag, ShieldCheck, Hand, Smartphone,
+  BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft, Tag, ShieldCheck, Hand, Smartphone, Shield, Package,
 } from 'lucide-react';
 import { LAYOUT_MODES } from '../layout.js';
 import { api } from '../api.js';
@@ -16,6 +16,15 @@ import MailRulesPanel from './MailRulesPanel.jsx';
 import ContactsPanel from './ContactsPanel.jsx';
 import { disableWebPush, enableWebPush, pushStatus } from '../pushClient.js';
 import { APPAREL_EMAIL_TEMPLATES, APPAREL_GLOSSARY_EXTRA } from '../apparelPresets.js';
+
+const STAGE_OPTS = [
+  ['', '不限阶段'],
+  ['inquiry', '询盘'],
+  ['quote', '报价中'],
+  ['sample', '样品'],
+  ['bulk', '大货'],
+  ['payment', '付款'],
+];
 
 const TRADE_GLOSSARY_PRESET = [
   { src: 'MOQ', dst: '最小起订量' },
@@ -51,6 +60,7 @@ const TABS = [
   ['labels', '标签', Tag],
   ['preferences', '偏好设置', SlidersHorizontal],
   ['templates', '邮件模板', FileStack],
+  ['deliverability', '投递力', Shield],
   ['account', '账户与安全', User],
   ['team', '团队成员', Users],
 ];
@@ -77,18 +87,26 @@ function MailboxCard({ mb, index, total, onMove, onChanged, notify, focus }) {
   const [name, setName] = useState(mb.name || '');
   const [color, setColor] = useState(mb.color);
   const [signature, setSignature] = useState(mb.signature || '');
+  const [brandId, setBrandId] = useState(mb.brandId || '');
+  const [brands, setBrands] = useState([]);
   const [editConn, setEditConn] = useState(focus && mb.status === 'error');
   const [busy, setBusy] = useState('');
   const [sigBusy, setSigBusy] = useState(false);
   const sigRef = useRef(null);
   const sigFileRef = useRef(null);
-  const dirty = name !== (mb.name || '') || color !== mb.color || signature !== (mb.signature || '');
+  const dirty = name !== (mb.name || '') || color !== mb.color || signature !== (mb.signature || '')
+    || String(brandId || '') !== String(mb.brandId || '');
 
   useEffect(() => {
     if (sigRef.current) sigRef.current.innerHTML = signatureEditorHtml(mb.signature || '');
     setSignature(mb.signature || '');
+    setBrandId(mb.brandId || '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mb.id, mb.signature]);
+  }, [mb.id, mb.signature, mb.brandId]);
+
+  useEffect(() => {
+    api('/brands').then((d) => setBrands(d.brands || [])).catch(() => {});
+  }, []);
 
   function syncSigFromEditor() {
     const next = serializeSignatureEditor(sigRef.current);
@@ -119,6 +137,10 @@ function MailboxCard({ mb, index, total, onMove, onChanged, notify, focus }) {
     try {
       const sig = syncSigFromEditor();
       await api(`/mailboxes/${mb.id}`, { method: 'PATCH', body: { name, color, signature: sig } });
+      await api(`/mailboxes/${mb.id}/brand`, {
+        method: 'PATCH',
+        body: { brandId: brandId === '' ? null : Number(brandId) },
+      });
       setSignature(sig);
       notify('已保存');
       onChanged();
@@ -189,6 +211,15 @@ function MailboxCard({ mb, index, total, onMove, onChanged, notify, focus }) {
           </div>
         </div>
       </div>
+      <label className="field">
+        <span>绑定品牌（模板与发信身份按品牌切换）</span>
+        <select value={brandId || ''} onChange={(e) => setBrandId(e.target.value)}>
+          <option value="">不绑定</option>
+          {brands.map((b) => (
+            <option key={b.id} value={b.id}>{b.name}</option>
+          ))}
+        </select>
+      </label>
       <div className="field">
         <span>签名（写信时自动附加；可粘贴 / 插入 Logo 图片）</span>
         <div
@@ -675,20 +706,30 @@ function Triage({ settings, onSave, notify, mailboxes = [], isAdmin = false }) {
   );
 }
 
-function Templates({ notify }) {
+function Templates({ notify, isAdmin }) {
   const [list, setList] = useState(null);
   const [edit, setEdit] = useState(null);
   const [seeding, setSeeding] = useState(false);
+  const [brands, setBrands] = useState([]);
 
   const load = () => api('/templates').then((r) => setList(r.templates)).catch((e) => notify(e.message, 'error'));
   useEffect(() => {
     load();
+    api('/brands').then((d) => setBrands(d.brands || [])).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function save() {
     try {
-      await api('/templates', { method: 'POST', body: edit });
+      await api('/templates', {
+        method: 'POST',
+        body: {
+          ...edit,
+          brandId: edit.brandId === '' || edit.brandId == null ? null : Number(edit.brandId),
+          shared: !!edit.shared,
+          stage: edit.stage || '',
+        },
+      });
       setEdit(null);
       load();
       notify('模板已保存');
@@ -724,13 +765,36 @@ function Templates({ notify }) {
     }
   }
 
+  const brandName = (id) => brands.find((b) => b.id === id)?.name;
+
   return (
     <>
-      <p className="set-desc">常用回复、报价、开发信可以存成模板，写信时一键插入。正文中的 <code>{'{{name}}'}</code> 会自动替换为收件人称呼。</p>
+      <p className="set-desc">常用回复、报价、开发信可以存成模板，写信时一键插入。可按品牌 / 阶段分组；管理员可设为团队共享。正文中的 <code>{'{{name}}'}</code> 会自动替换为收件人称呼。</p>
       {edit ? (
         <div className="set-account">
           <label className="field"><span>模板名称</span><input value={edit.name || ''} onChange={(e) => setEdit({ ...edit, name: e.target.value })} autoFocus /></label>
           <label className="field"><span>主题（可选）</span><input value={edit.subject || ''} onChange={(e) => setEdit({ ...edit, subject: e.target.value })} /></label>
+          <div className="row-2">
+            <label className="field">
+              <span>品牌</span>
+              <select value={edit.brandId || ''} onChange={(e) => setEdit({ ...edit, brandId: e.target.value })}>
+                <option value="">通用</option>
+                {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>适用阶段</span>
+              <select value={edit.stage || ''} onChange={(e) => setEdit({ ...edit, stage: e.target.value })}>
+                {STAGE_OPTS.map(([v, l]) => <option key={v || 'any'} value={v}>{l}</option>)}
+              </select>
+            </label>
+          </div>
+          {isAdmin && (
+            <label className="check-row">
+              <input type="checkbox" checked={!!edit.shared} onChange={(e) => setEdit({ ...edit, shared: e.target.checked })} />
+              团队共享（同事可见）
+            </label>
+          )}
           <label className="field"><span>正文</span><textarea rows={8} value={edit.body || ''} onChange={(e) => setEdit({ ...edit, body: e.target.value })} placeholder={'Hi {{name}},\n\n...'} /></label>
           <div className="set-actions">
             <button className="btn-primary sm" onClick={save}>保存模板</button>
@@ -739,7 +803,7 @@ function Templates({ notify }) {
         </div>
       ) : (
         <div className="set-actions" style={{ marginBottom: 10 }}>
-          <button className="btn-ghost" onClick={() => setEdit({ name: '', subject: '', body: '' })}><Plus size={15} /> 新建模板</button>
+          <button className="btn-ghost" onClick={() => setEdit({ name: '', subject: '', body: '', brandId: '', stage: '', shared: false })}><Plus size={15} /> 新建模板</button>
           <button className="btn-ghost" disabled={seeding || list == null} onClick={seedApparel}>
             {seeding ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />} 导入服装外贸模板
           </button>
@@ -748,13 +812,78 @@ function Templates({ notify }) {
       {list?.map((t) => (
         <div key={t.id} className="tpl-row">
           <div>
-            <b>{t.name}</b>
-            <small>{t.subject || (t.body || '').slice(0, 60)}</small>
+            <b>
+              {t.name}
+              {t.shared ? <em className="tpl-team">团队</em> : null}
+            </b>
+            <small>
+              {[brandName(t.brandId), STAGE_OPTS.find(([v]) => v === t.stage)?.[1], t.subject || (t.body || '').slice(0, 40)]
+                .filter(Boolean)
+                .join(' · ')}
+            </small>
           </div>
           <button className="icon-btn" onClick={() => setEdit(t)} title="编辑"><Pencil size={14} /></button>
           <button className="icon-btn danger" onClick={() => del(t)} title="删除"><Trash2 size={14} /></button>
         </div>
       ))}
+    </>
+  );
+}
+
+function DeliverabilityPanel({ notify }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = () => {
+    setLoading(true);
+    api('/deliverability')
+      .then(setData)
+      .catch((e) => notify(e.message, 'error'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const levelLabel = { good: '良好', warn: '需关注', bad: '风险' };
+
+  return (
+    <>
+      <p className="set-desc">
+        检查发信域名的 SPF / DKIM / DMARC（DNS 探测，结果缓存约 6 小时）。不接 bounce 流水；修 DNS 后可点刷新。
+      </p>
+      <div className="set-actions" style={{ marginBottom: 12 }}>
+        <button type="button" className="btn-ghost sm" onClick={load} disabled={loading}>
+          <RefreshCw size={13} className={loading ? 'spin' : ''} /> 重新检查
+        </button>
+      </div>
+      {loading && !data && <div className="muted"><Loader2 size={14} className="spin" /> 正在查询 DNS…</div>}
+      {(data?.domains || []).map((d) => (
+        <div key={d.domain} className={'set-account deliver-card level-' + d.level}>
+          <div className="set-account-head">
+            <Package size={16} />
+            <div className="account-text">
+              <b>{d.domain}</b>
+              <small>{(d.mailboxes || []).map((m) => m.email).join(' · ')}</small>
+            </div>
+            <span className={'status-pill ' + (d.level === 'good' ? 'ok' : d.level === 'warn' ? 'warn' : 'error')}>
+              {levelLabel[d.level] || d.level}
+            </span>
+          </div>
+          <ul className="deliver-checks">
+            <li className={d.spf?.ok ? 'ok' : 'bad'}>SPF {d.spf?.ok ? '已配置' : '缺失'}{d.spf?.record ? ` · ${d.spf.record.slice(0, 80)}` : ''}</li>
+            <li className={d.dkim?.ok ? 'ok' : 'bad'}>DKIM {d.dkim?.ok ? `已探测（${d.dkim.selector}）` : '未探测到常见选择器'}</li>
+            <li className={d.dmarc?.ok ? 'ok' : 'bad'}>DMARC {d.dmarc?.ok ? '已配置' : '缺失'}{d.dmarc?.record ? ` · ${d.dmarc.record.slice(0, 60)}` : ''}</li>
+          </ul>
+          {(d.tips || []).length > 0 && (
+            <ul className="deliver-tips">
+              {d.tips.map((t) => <li key={t}>{t}</li>)}
+            </ul>
+          )}
+        </div>
+      ))}
+      {!loading && !(data?.domains || []).length && (
+        <p className="muted">请先绑定邮箱后再检查投递力。</p>
+      )}
     </>
   );
 }
@@ -1369,7 +1498,8 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
                 notify={notify}
               />
             )}
-            {tab === 'templates' && <Templates notify={notify} />}
+            {tab === 'templates' && <Templates notify={notify} isAdmin={user.role === 'admin'} />}
+            {tab === 'deliverability' && <DeliverabilityPanel notify={notify} />}
             {tab === 'account' && <Account user={user} onUserChange={onUserChange} onLogout={onLogout} notify={notify} />}
             {tab === 'team' && <Team me={user} notify={notify} />}
           </div>
