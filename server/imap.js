@@ -357,28 +357,56 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
 
 // ---------- 正文 ----------
 const parsedCache = new Map();
+const parsedInflight = new Map();
+const PARSED_CACHE_MAX = 24;
+const PARSED_CACHE_BYTES = 96 * 1024 * 1024; // 约 96MB，防产品样图邮件撑爆堆
 const cacheKey = (mb, folder, uid) => `${mb.id}|${folder}|${uid}`;
+
+function parsedBytes(p) {
+  let n = (p?.html?.length || 0) + (p?.text?.length || 0);
+  for (const a of p?.attachments || []) n += a.content?.length || a.size || 0;
+  return n;
+}
+
+function touchParsed(key, parsed) {
+  if (parsedCache.has(key)) parsedCache.delete(key);
+  parsedCache.set(key, parsed);
+  let total = 0;
+  for (const v of parsedCache.values()) total += parsedBytes(v);
+  while (parsedCache.size > PARSED_CACHE_MAX || (parsedCache.size > 1 && total > PARSED_CACHE_BYTES)) {
+    const oldest = parsedCache.keys().next().value;
+    const gone = parsedCache.get(oldest);
+    parsedCache.delete(oldest);
+    total -= parsedBytes(gone);
+  }
+}
 
 export async function fetchParsed(mb, folder, uid) {
   const key = cacheKey(mb, folder, uid);
   if (parsedCache.has(key)) {
     const v = parsedCache.get(key);
-    parsedCache.delete(key);
-    parsedCache.set(key, v);
+    touchParsed(key, v);
     return v;
   }
-  const parsed = await withBox(mb, folder, async (client) => {
+  if (parsedInflight.has(key)) return parsedInflight.get(key);
+  const pending = withBox(mb, folder, async (client) => {
     const msg = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true });
     if (!msg?.source) throw Object.assign(new Error('邮件不存在或已在其他客户端被删除'), { status: 404 });
     return simpleParser(msg.source);
-  });
-  parsedCache.set(key, parsed);
-  while (parsedCache.size > 30) parsedCache.delete(parsedCache.keys().next().value);
-  return parsed;
+  })
+    .then((parsed) => {
+      touchParsed(key, parsed);
+      return parsed;
+    })
+    .finally(() => parsedInflight.delete(key));
+  parsedInflight.set(key, pending);
+  return pending;
 }
 
 export function forgetParsed(mb, folder, uid) {
-  parsedCache.delete(cacheKey(mb, folder, uid));
+  const key = cacheKey(mb, folder, uid);
+  parsedCache.delete(key);
+  parsedInflight.delete(key);
 }
 
 /** 规范化 cid（去 <>、urldecode、去空白；比较时再 toLowerCase） */
@@ -470,6 +498,21 @@ export function resolveCidPlaceholders(html, messageId, attachments = []) {
   return out;
 }
 
+/** 1×1 透明 GIF：匹配失败的 cid 不再原样留下，避免缓存被判定 stale 而反复拉 IMAP */
+const CID_MISSING_PIXEL =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+/** 将仍未解析的 cid: 换成透明占位，并返回是否发生替换 */
+export function neutralizeOrphanCids(html) {
+  if (!html || !/cid:/i.test(html)) return { html, replaced: 0 };
+  let replaced = 0;
+  const out = mapCidRefs(html, () => {
+    replaced++;
+    return CID_MISSING_PIXEL;
+  });
+  return { html: out, replaced };
+}
+
 function unsubscribeOf(p) {
   const pick = (url, mail) => {
     const safeUrl = /^https?:\/\//i.test(url || '') ? url : null;
@@ -484,7 +527,7 @@ function unsubscribeOf(p) {
 }
 
 /** 正文缓存媒体管线版本：升版后强制重拉 IMAP 并重写 CID（修历史裂图） */
-export const MEDIA_BODY_VER = 2;
+export const MEDIA_BODY_VER = 3;
 
 export function serializeParsed(p) {
   const attachments = p.attachments || [];
@@ -498,15 +541,18 @@ export function serializeParsed(p) {
     : null;
   const attMeta = attachments.map((a, i) => {
     const isImg = /^image\//i.test(a.contentType || '');
-    const inline = a.contentDisposition === 'inline' && !!a.contentId && isImg;
+    const usedInBody = resolvedIndexes.has(i);
+    const hasCid = !!a.contentId && isImg;
     return {
       index: i,
       filename: a.filename || `附件${i + 1}`,
       contentType: a.contentType || 'application/octet-stream',
       size: a.size || a.content?.length || 0,
-      inline,
-      /** 正文已成功嵌入则不进附件列表；匹配失败的 orphan 仍展示以便下载 */
-      orphanInline: inline && !resolvedIndexes.has(i),
+      /** 正文已引用（含 Outlook attachment+Content-ID） */
+      inline: usedInBody && isImg,
+      usedInBody,
+      /** 有 Content-ID 但正文未匹配上 → 附件区可下载 */
+      orphanInline: hasCid && !usedInBody,
       contentId: a.contentId ? cleanCid(a.contentId) : '',
     };
   });
@@ -522,17 +568,19 @@ export function serializeParsed(p) {
       references: Array.isArray(p.references) ? p.references : p.references ? [p.references] : [],
       messageId: p.messageId || '',
       unsubscribe: unsubscribeOf(p),
-      attachments: attMeta.filter((a) => !a.inline || a.orphanInline),
+      /** 已嵌入正文的图不进附件列表，避免与 media strip 三路重复拉取 */
+      attachments: attMeta.filter((a) => !a.usedInBody),
       /** 全部 parts（含已内联），供前端「本信图片」画廊；不含二进制 */
       mediaParts: attMeta
         .filter((a) => /^image\//i.test(a.contentType) || a.contentType === 'application/pdf')
-        .map(({ index, filename, contentType, size, inline, orphanInline }) => ({
+        .map(({ index, filename, contentType, size, inline, orphanInline, usedInBody }) => ({
           index,
           filename,
           contentType,
           size,
           inline,
           orphanInline,
+          usedInBody,
         })),
     },
   };
@@ -542,6 +590,7 @@ export async function getAttachment(mb, folder, uid, index) {
   const p = await fetchParsed(mb, folder, uid);
   const a = p.attachments?.[Number(index)];
   if (!a) throw Object.assign(new Error('附件不存在'), { status: 404 });
+  if (a.content == null) throw Object.assign(new Error('附件内容不可用'), { status: 404 });
   return a;
 }
 

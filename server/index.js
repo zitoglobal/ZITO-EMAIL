@@ -816,6 +816,14 @@ async function deepSearch(userId, opts) {
 }
 
 // ---------- 邮件详情 ----------
+function contentDisposition(kind, name) {
+  const safe = String(name || 'file')
+    .replace(/[\r\n"\\]/g, '_')
+    .slice(0, 180);
+  const ascii = safe.replace(/[^\x20-\x7E]/g, '_') || 'file';
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
+}
+
 async function loadBody(row, { force = false } = {}) {
   const cached = !force ? repo.getBody(row.id) : null;
   if (cached) {
@@ -825,13 +833,15 @@ async function loadBody(row, { force = false } = {}) {
     } catch {
       meta = {};
     }
-    const stale =
-      meta.mediaVer !== imap.MEDIA_BODY_VER ||
-      /cid:/i.test(cached.html || '') ||
-      /__ZM_CID_\d+__/.test(cached.html || '');
+    // 仅 mediaVer 旧或占位符未展开时重拉；已 neutralize 的孤儿 cid 不再风暴式 IMAP
+    const stale = meta.mediaVer !== imap.MEDIA_BODY_VER || /__ZM_CID_\d+__/.test(cached.html || '');
     if (!stale) {
       const signals = repo.refreshSignals(row.id, row.subject, cached.text || row.snippet || '');
-      const html = imap.resolveCidPlaceholders(cached.html, row.id);
+      let html = imap.resolveCidPlaceholders(cached.html, row.id);
+      if (/cid:/i.test(html || '')) {
+        const n = imap.neutralizeOrphanCids(html);
+        html = n.html;
+      }
       return { html, text: cached.text, meta, signals };
     }
   }
@@ -839,6 +849,9 @@ async function loadBody(row, { force = false } = {}) {
   const parsed = await imap.fetchParsed(mb, row.folder, row.uid);
   const body = imap.serializeParsed(parsed);
   body.html = imap.resolveCidPlaceholders(body.html, row.id, parsed.attachments || []);
+  const neut = imap.neutralizeOrphanCids(body.html);
+  body.html = neut.html;
+  body.meta = { ...body.meta, cidUnresolved: neut.replaced };
   repo.saveBody(row.id, body);
   const signals = repo.refreshSignals(row.id, row.subject, body.text || row.snippet || '');
   return { ...body, signals };
@@ -940,7 +953,7 @@ app.get(
     if (inline && isText && !/charset=/i.test(type)) contentType = `${baseType}; charset=utf-8`;
     if (!inline && isText) contentType = 'application/octet-stream';
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.setHeader('Content-Disposition', contentDisposition(inline ? 'inline' : 'attachment', name));
     // PDF 不设 sandbox CSP，便于浏览器内置阅读器；其它 inline 收紧
     if (!(inline && isPdf)) {
       res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'");
@@ -960,7 +973,7 @@ app.get(
     const source = await imap.withBox(mb, row.folder, async (c) => (await c.fetchOne(String(row.uid), { source: true }, { uid: true }))?.source);
     if (!source) throw httpError(404, '邮件不存在');
     res.setHeader('Content-Type', 'message/rfc822');
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent((row.subject || 'mail').slice(0, 60))}.eml`);
+    res.setHeader('Content-Disposition', contentDisposition('attachment', `${(row.subject || 'mail').slice(0, 60)}.eml`));
     res.send(source);
   })
 );

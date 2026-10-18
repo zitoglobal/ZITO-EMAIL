@@ -1,4 +1,4 @@
-import React, { Component, useCallback, useEffect, useRef, useState } from 'react';
+import React, { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Star, Mail, Sparkles, Languages, Paperclip, Download, ArrowLeft, Loader2,
   AlertTriangle, CheckCircle2, ListChecks, FolderInput, Eye, Clock, Pin, ShieldAlert, ShieldCheck, MoreHorizontal, ImageOff,
@@ -425,14 +425,35 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
   const loading = expanded && !detail;
   const isDraft = item.specialUse === '\\Drafts';
 
+  const mediaPartsRef = detail && !detail.error ? detail.mediaParts : null;
+  const imageParts = useMemo(
+    () => (mediaPartsRef || []).filter((p) => /^image\//i.test(p.contentType || '')),
+    [mediaPartsRef]
+  );
+
   const onImageClick = useCallback((info) => {
     if (!info?.src) return;
+    const gallery = imageParts.map((x) => ({
+      ...x,
+      kind: 'image',
+      url: `/api/messages/${item.id}/attachments/${x.index}?inline=1`,
+    }));
+    const attMatch = String(info.src).match(/\/attachments\/(\d+)/);
+    if (attMatch && gallery.length) {
+      const idx = gallery.findIndex((x) => String(x.index) === attMatch[1]);
+      setLightbox({
+        items: gallery,
+        index: idx >= 0 ? idx : 0,
+        msgId: item.id,
+      });
+      return;
+    }
     setLightbox({
       items: [{ kind: 'image', url: info.src, filename: info.alt || '正文图片', alt: info.alt || '' }],
       index: 0,
       msgId: item.id,
     });
-  }, [item.id]);
+  }, [item.id, imageParts]);
 
   const onBrokenChange = useCallback((n) => setBrokenN(n), []);
 
@@ -452,8 +473,6 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
   const images = m && hasRemoteImages(m.html);
   const autoAllow = settings.remoteImages === 'always' || (settings.remoteImages === 'contacts' && m?.knownSender);
   const showImages = autoAllow || allowImages;
-  const mediaParts = m?.mediaParts || [];
-  const imageParts = mediaParts.filter((p) => /^image\//i.test(p.contentType || ''));
 
   return (
     <div className="thread-card">

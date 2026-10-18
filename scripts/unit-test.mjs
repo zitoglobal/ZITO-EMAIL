@@ -24,7 +24,7 @@ import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
 import { conversationKey, isSqliteCorrupt } from '../server/repo.js';
-import { threadIdOf, inlineCidImages, resolveCidPlaceholders, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER } from '../server/imap.js';
+import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER } from '../server/imap.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
@@ -453,7 +453,7 @@ assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.i
   ]);
   assert('cid fallback filename', byName.includes('data:image/png;base64,'));
   assert('CID_DATA_MAX is small', CID_DATA_MAX <= 64 * 1024);
-  assert('MEDIA_BODY_VER >= 2', MEDIA_BODY_VER >= 2);
+  assert('MEDIA_BODY_VER >= 3', MEDIA_BODY_VER >= 3);
   const mid = { contentId: 'mid@x', contentType: 'image/jpeg', size: CID_DATA_MAX + 1, content: Buffer.alloc(10) };
   const midPh = inlineCidImages('url(cid:mid@x)', [mid]);
   assert('product-size cid becomes placeholder', midPh.includes('__ZM_CID_0__'));
@@ -462,6 +462,8 @@ assert('oauth status shape', typeof oauthStatus().ready === 'boolean' && Array.i
   assert('large cid becomes placeholder', ph.includes('__ZM_CID_0__'));
   const resolved = resolveCidPlaceholders(ph, 42, [big]);
   assert('placeholder → attachment url', resolved.includes('/api/messages/42/attachments/0?inline=1'));
+  const orphan = neutralizeOrphanCids('<img src="cid:missing@x"><img src="cid:also@y">');
+  assert('orphan cid neutralized', !/cid:/i.test(orphan.html) && orphan.replaced === 2);
   assert('sanitize keeps relative api img', sanitizeMailHtml('<img src="/api/messages/1/attachments/0?inline=1">').includes('/api/messages/1/attachments/0'));
   assert('sanitize keeps table background attr', /background=/i.test(sanitizeMailHtml('<td background="https://cdn.example/bg.png">x</td>')));
   assert('sanitize keeps caption', sanitizeMailHtml('<table><caption>报价表</caption><tr><td>1</td></tr></table>').includes('报价表'));

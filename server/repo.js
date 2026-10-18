@@ -774,7 +774,7 @@ export function counts(userId) {
 export const getBody = (pk) => db.prepare('SELECT * FROM bodies WHERE message_pk = ?').get(pk);
 const BODY_MAX = 3 * 1024 * 1024;
 
-/** 超限时剥掉 data:image base64，保留 /api 附件图与文字，避免静默丢整封缓存 */
+/** 超限时剥 data:/style 并硬截断，保证一定能落盘（避免大信每次开信重拉 IMAP） */
 function fitBodyForCache(html, text) {
   let h = html == null ? null : String(html);
   let t = text == null ? '' : String(text);
@@ -782,17 +782,29 @@ function fitBodyForCache(html, text) {
   if (size() <= BODY_MAX) return { html: h, text: t, trimmed: false };
   if (h) {
     h = h.replace(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+/gi, '');
+    if (size() > BODY_MAX) h = h.replace(/<style[\s\S]*?<\/style>/gi, '');
   }
-  if (size() > BODY_MAX && t.length > 200_000) t = t.slice(0, 200_000) + '\n…';
-  if (size() > BODY_MAX && h && h.length > BODY_MAX - Math.min(t.length, 50_000)) {
-    h = h.slice(0, Math.max(100_000, BODY_MAX - Math.min(t.length, 50_000))) + '<!-- zm-trim -->';
+  if (size() > BODY_MAX && t.length > 100_000) t = `${t.slice(0, 100_000)}\n…`;
+  if (size() > BODY_MAX) {
+    const textBudget = Math.min(t.length, 40_000);
+    t = t.slice(0, textBudget);
+    const htmlBudget = Math.max(0, BODY_MAX - t.length - 24);
+    if (h && h.length > htmlBudget) h = `${h.slice(0, htmlBudget)}<!-- zm-trim -->`;
+  }
+  while (size() > BODY_MAX) {
+    if (h && h.length > 2048) h = h.slice(0, Math.floor(h.length * 0.75));
+    else if (t.length > 2048) t = t.slice(0, Math.floor(t.length * 0.75));
+    else {
+      t = t.slice(0, Math.max(0, BODY_MAX - 1));
+      h = '';
+      break;
+    }
   }
   return { html: h, text: t, trimmed: true };
 }
 
 export function saveBody(pk, { html, text, meta }) {
   const fitted = fitBodyForCache(html, text);
-  if ((fitted.html?.length || 0) + (fitted.text?.length || 0) > BODY_MAX) return false;
   const metaOut = { ...(meta || {}), bodyTrimmed: !!fitted.trimmed };
   db.prepare('INSERT OR REPLACE INTO bodies (message_pk, html, text, meta, fetched_at) VALUES (?, ?, ?, ?, ?)').run(
     pk,
