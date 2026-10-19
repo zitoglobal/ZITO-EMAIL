@@ -32,7 +32,7 @@ import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCi
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
-import { isTransientSmtpError } from '../server/mailer.js';
+import { isTransientSmtpError, loadOutboxFiles, OUTBOX_DIR } from '../server/mailer.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -468,6 +468,8 @@ assert(
 assert('smtp transient timeout', isTransientSmtpError('ETIMEDOUT connecting'));
 assert('smtp transient 421', isTransientSmtpError('421 Try again later'));
 assert('smtp auth not transient', !isTransientSmtpError('535 Authentication failed'));
+assert('outbox load rejects outside dir', loadOutboxFiles(path.join(os.tmpdir(), 'not-outbox-xyz')).length === 0);
+assert('outbox dir constant set', typeof OUTBOX_DIR === 'string' && OUTBOX_DIR.length > 0);
 assert('ASSET_KIND techpack label', ASSET_KIND_LABEL.techpack === 'Tech pack');
 assert('apparel template has stage', APPAREL_EMAIL_TEMPLATES.some((t) => t.stage === 'quote'));
 assert('FOLLOW_SEQ force days sample', FOLLOW_SEQ_DAYS.sample === 7 && FOLLOW_SEQ_DAYS.bulk === 5);

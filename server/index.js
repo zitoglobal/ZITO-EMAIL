@@ -348,7 +348,8 @@ app.post(
     res.json({
       ok: true,
       file: path.basename(dest),
-      dir: IS_DESKTOP ? backup.BACKUP_DIR : undefined,
+      // 桌面仅回相对提示，绝对路径只给托盘 desktop/backup
+      dir: IS_DESKTOP ? 'backups' : undefined,
       lastBackupAt: backup.lastBackupAt(),
     });
   })
@@ -1104,7 +1105,7 @@ app.get(
       knownSender: repo.isKnownContact(req.user.id, noteAddr),
       sender: priority.senderInfo(req.user.id, noteAddr || row.from_addr),
       conflict: priority.conflictHints(req.user.id, { fromAddr: row.from_addr, threadId: row.thread_id }),
-      internalNotes: threadNotes.listNotes({ threadId: row.thread_id, address: noteAddr, limit: 20 }),
+      internalNotes: threadNotes.listNotes(req.user.id, { threadId: row.thread_id, address: noteAddr, limit: 20 }),
       ...dealPack,
     });
   })

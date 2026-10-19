@@ -121,14 +121,51 @@ export function saveOutboxFiles(files) {
   return dir;
 }
 
+function safeOutboxChild(dir, name) {
+  const base = String(name || '');
+  if (!/^\d+$/.test(base)) return null;
+  const root = path.resolve(dir);
+  const full = path.resolve(root, base);
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+  if (full !== root && !full.startsWith(prefix)) return null;
+  return full;
+}
+
 export function loadOutboxFiles(dir) {
-  if (!dir || !fs.existsSync(dir)) return [];
-  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
-  return meta.map((m) => ({ filename: m.filename, contentType: m.contentType, content: fs.readFileSync(path.join(dir, m.file)) }));
+  if (!dir) return [];
+  const root = path.resolve(dir);
+  const outRoot = path.resolve(OUTBOX_DIR);
+  const outPrefix = outRoot.endsWith(path.sep) ? outRoot : outRoot + path.sep;
+  if (root !== outRoot && !root.startsWith(outPrefix)) return [];
+  if (!fs.existsSync(root)) return [];
+  let meta;
+  try {
+    meta = JSON.parse(fs.readFileSync(path.join(root, 'meta.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(meta)) return [];
+  return meta
+    .map((m) => {
+      const fp = safeOutboxChild(root, m.file);
+      if (!fp || !fs.existsSync(fp)) return null;
+      return {
+        filename: String(m.filename || 'file').slice(0, 200),
+        contentType: String(m.contentType || 'application/octet-stream').slice(0, 120),
+        content: fs.readFileSync(fp),
+      };
+    })
+    .filter(Boolean);
 }
 
 export function removeOutboxFiles(dir) {
-  if (dir && dir.startsWith(OUTBOX_DIR)) fs.rmSync(dir, { recursive: true, force: true });
+  if (!dir) return;
+  const root = path.resolve(dir);
+  const outRoot = path.resolve(OUTBOX_DIR);
+  const outPrefix = outRoot.endsWith(path.sep) ? outRoot : outRoot + path.sep;
+  if (root === outRoot || root.startsWith(outPrefix)) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 // ---------- 后台调度 ----------

@@ -1,4 +1,5 @@
 import { db, now } from './db.js';
+import { assertScopeReadable, resolveScopes } from './deals.js';
 
 function publicNote(r, usersById) {
   const u = usersById?.get(r.user_id);
@@ -25,8 +26,38 @@ function loadUsers(ids) {
   return map;
 }
 
-/** 团队内可见：任意登录用户可读本实例备注（不做跨租户隔离；单团队部署） */
-export function listNotes({ threadId, address, limit = 30 } = {}) {
+function assertNotesReadable(userId, { threadId, address } = {}) {
+  const addr = String(address || '').trim();
+  if (addr) {
+    const scopes = resolveScopes(addr);
+    if (!scopes) throw Object.assign(new Error('无效地址'), { status: 400 });
+    assertScopeReadable(userId, scopes.default.key);
+    return;
+  }
+  const tid = String(threadId || '').trim();
+  if (!tid) throw Object.assign(new Error('缺少会话或地址'), { status: 400 });
+  const hit = db
+    .prepare(
+      `SELECT 1 AS ok FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id
+       WHERE b.user_id = ? AND m.thread_id = ? LIMIT 1`
+    )
+    .get(userId, tid);
+  if (!hit) {
+    const admin = db.prepare('SELECT role FROM users WHERE id = ?').get(userId);
+    if (admin?.role !== 'admin') {
+      throw Object.assign(new Error('无权查看该会话备注'), { status: 403 });
+    }
+  }
+}
+
+/** 有往来 / 认领范围内可读内部备注（单团队部署） */
+export function listNotes(userId, { threadId, address, limit = 30 } = {}) {
+  try {
+    assertNotesReadable(userId, { threadId, address });
+  } catch (e) {
+    if (e.status === 403 || e.status === 400) return [];
+    throw e;
+  }
   const lim = Math.min(80, Math.max(1, Number(limit) || 30));
   let rows = [];
   if (threadId) {
@@ -52,6 +83,7 @@ export function addNote(userId, { threadId, address, body } = {}) {
   const tid = String(threadId || '').trim().slice(0, 500);
   const addr = String(address || '').trim().toLowerCase().slice(0, 200);
   if (!tid && !addr) throw Object.assign(new Error('缺少会话或地址'), { status: 400 });
+  assertNotesReadable(userId, { threadId: tid, address: addr });
   const id = Number(
     db
       .prepare(

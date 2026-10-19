@@ -40,21 +40,34 @@ function scopeKeysFor(address, scopeKey) {
   return [...new Set(keys)];
 }
 
+function isValidScopeKey(sk) {
+  return /^(a|c|p):.+/i.test(String(sk || ''));
+}
+
 /**
- * 认领范围内团队可读：按 scope_key 列资料，不限上传者。
- * 预览/下载走 /api/customer-assets/:id/content 代理。
+ * 认领/有往来范围内可读：按 scope_key 列资料，不限上传者。
+ * 每个 key 须通过 assertScopeReadable（防任意 scope 枚举）。
  */
 export function listAssets(userId, { address, scopeKey, limit = 50 } = {}) {
-  const uniq = scopeKeysFor(address, scopeKey);
-  if (!uniq.length) return [];
-  const ph = uniq.map(() => '?').join(',');
+  const uniq = scopeKeysFor(address, scopeKey).filter(isValidScopeKey);
+  const allowed = [];
+  for (const sk of uniq) {
+    try {
+      assertScopeReadable(userId, sk);
+      allowed.push(sk);
+    } catch {
+      /* 无权限的 scope 跳过，不泄露是否存在 */
+    }
+  }
+  if (!allowed.length) return [];
+  const ph = allowed.map(() => '?').join(',');
   const lim = Math.min(100, Math.max(1, Number(limit) || 50));
   return db
     .prepare(
       `SELECT * FROM customer_assets WHERE scope_key IN (${ph})
        ORDER BY created_at DESC LIMIT ?`
     )
-    .all(...uniq, lim)
+    .all(...allowed, lim)
     .map((r) => {
       const a = publicAsset(r);
       a.mine = r.user_id === userId;
@@ -99,11 +112,24 @@ export function addAsset(userId, body = {}) {
   if (!msg) throw Object.assign(new Error('邮件不存在或无权访问'), { status: 404 });
 
   let scopeKey = String(body.scopeKey || '').trim();
+  const scopes = body.address ? resolveScopes(body.address) : null;
   if (!scopeKey) {
-    const scopes = resolveScopes(body.address);
     if (!scopes) throw Object.assign(new Error('请指定客户地址'), { status: 400 });
     scopeKey = scopes.default.key;
   }
+  if (!isValidScopeKey(scopeKey)) {
+    throw Object.assign(new Error('无效的客户范围'), { status: 400 });
+  }
+  if (scopes) {
+    const allowed = new Set(
+      [scopes.default?.key, scopes.person?.key, scopes.company?.key].filter(Boolean)
+    );
+    if (!allowed.has(scopeKey)) {
+      throw Object.assign(new Error('资料范围与客户地址不一致'), { status: 400 });
+    }
+  }
+  // 禁止把附件「种」进无权查看的同事客户 scope
+  assertScopeReadable(userId, scopeKey);
   const kind = KINDS.has(body.kind) ? body.kind : 'other';
   const title = String(body.title || body.filename || '资料').trim().slice(0, 120);
   const filename = String(body.filename || '').trim().slice(0, 200);

@@ -397,7 +397,7 @@ export function registerDealsRoutes(app, ctx) {
     auth,
     wrap(async (req, res) => {
       res.json({
-        notes: threadNotes.listNotes({
+        notes: threadNotes.listNotes(req.user.id, {
           threadId: req.query.threadId,
           address: req.query.address,
           limit: Number(req.query.limit) || 30,
