@@ -940,8 +940,14 @@ app.get(
     if (opts.mailboxId !== 'all') mailboxOf(req, opts.mailboxId);
 
     if (req.query.deep === '1' && opts.q) {
-      const ids = await deepSearch(req.user.id, opts);
-      return res.json({ ...repo.queryMessages(req.user.id, { ids, limit: 200, map: opts.map }), pinned: [], deep: true });
+      const { ids, meta } = await deepSearch(req.user.id, opts);
+      return res.json({
+        ...repo.queryMessages(req.user.id, { ids, limit: 200, map: opts.map }),
+        pinned: [],
+        deep: true,
+        deepMeta: meta,
+        searchMeta: { mode: 'deep', ...meta },
+      });
     }
 
     if (opts.box === 'folder' && opts.mailboxId !== 'all') {
@@ -967,7 +973,26 @@ app.get(
       !opts.cursor && !opts.q && opts.box === 'inbox' ? repo.queryMessages(req.user.id, { ...opts, onlyPinned: true, limit: 50 }).messages : [];
     result.messages = labels.attachLabels(req.user.id, result.messages);
     const pinnedLabeled = labels.attachLabels(req.user.id, pinned);
-    res.json({ ...result, pinned: pinnedLabeled });
+    let searchMeta = null;
+    if (opts.q) {
+      let ftsBusy = false;
+      try {
+        const st = repo.getFtsStatus();
+        ftsBusy = !!(st.busy || st.pending || (st.backfillLeft || 0) > 0);
+      } catch (_) {
+        /* ignore */
+      }
+      searchMeta = {
+        mode: 'local',
+        ftsBusy,
+        /** 首绑 Inbox 本地窗口，更早邮件需 deep=1 或滚动回填 */
+        initialInboxCap: 400,
+        hint: ftsBusy
+          ? '全文索引建立中，结果可能不全'
+          : '仅搜本地已同步邮件；更早询价请点「在服务器上搜索全文」',
+      };
+    }
+    res.json({ ...result, pinned: pinnedLabeled, searchMeta });
   })
 );
 
@@ -987,14 +1012,22 @@ function backfillTargets(userId, opts) {
 async function deepSearch(userId, opts) {
   const mbs = opts.mailboxId === 'all' ? repo.listMailboxes(userId) : [repo.getMailbox(userId, opts.mailboxId)];
   const ids = [];
+  const PER_FOLDER = 100;
+  let foldersSearched = 0;
+  let foldersCapped = 0;
   await Promise.allSettled(
     mbs.map(async (mb) => {
       const folders = repo
         .listFolders(mb.id)
         .filter((f) => (opts.box === 'folder' ? f.path === opts.folder : ['\\Inbox', '\\Sent', '\\Archive'].includes(f.special_use)));
       for (const f of folders) {
+        foldersSearched += 1;
         const q = opts.q;
-        const uids = (await imap.searchUids(mb, f.path, { or: [{ subject: q }, { from: q }, { to: q }, { body: q }] })).sort((a, b) => b - a).slice(0, 100);
+        const allUids = (await imap.searchUids(mb, f.path, { or: [{ subject: q }, { from: q }, { to: q }, { body: q }] })).sort(
+          (a, b) => b - a
+        );
+        if (allUids.length > PER_FOLDER) foldersCapped += 1;
+        const uids = allUids.slice(0, PER_FOLDER);
         if (!uids.length) continue;
         const cached = new Set(repo.cachedUids(mb.id, f.path).map((r) => r.uid));
         const missing = uids.filter((u) => !cached.has(u));
@@ -1008,7 +1041,21 @@ async function deepSearch(userId, opts) {
       }
     })
   );
-  return ids;
+  return {
+    ids,
+    meta: {
+      mode: 'deep',
+      perFolderCap: PER_FOLDER,
+      foldersSearched,
+      foldersCapped,
+      hitCount: ids.length,
+      truncated: foldersCapped > 0,
+      hint:
+        foldersCapped > 0
+          ? `服务器搜索每文件夹最多 ${PER_FOLDER} 封，更早匹配可能未列出`
+          : '已在邮件服务器搜索 Inbox / Sent / Archive',
+    },
+  };
 }
 
 // ---------- 邮件详情 ----------

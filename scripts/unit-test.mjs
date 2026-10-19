@@ -755,6 +755,24 @@ assert('ftsEscape empty', ftsEscape('   ') === '');
 }
 
 {
+  const { writeComposeWal, latestComposeWal, clearComposeWal, walToComposeInitial } = await import('../web/src/composeWal.js');
+  const mem = {};
+  globalThis.localStorage = {
+    getItem: (k) => (k in mem ? mem[k] : null),
+    setItem: (k, v) => { mem[k] = String(v); },
+    removeItem: (k) => { delete mem[k]; },
+  };
+  clearComposeWal();
+  assert('wal write', writeComposeWal({ walKey: 'k1', to: 'a@b.com', subject: 'PO', body: '<p>hi</p>' }));
+  const lat = latestComposeWal();
+  assert('wal latest', lat?.subject === 'PO' && lat.to === 'a@b.com');
+  const init = walToComposeInitial(lat, { mode: 'new' });
+  assert('wal to initial', init._fromWal && init.subject === 'PO');
+  clearComposeWal('k1');
+  assert('wal clear', !latestComposeWal());
+}
+
+{
   const { enqueueAction, flushActionQueue, actionQueueLength, QUEUEABLE_ACTIONS } = await import('../web/src/actionQueue.js');
   assert('queueable archive', QUEUEABLE_ACTIONS.has('archive'));
   // jsdom-less：用假 storage

@@ -364,6 +364,7 @@ export default function MailList({
   onSaveSearch, onUpdateSavedSearch, activeSavedSearch = null,
   onMenu, error, compact, onMarkAllRead,
   ftsIndexing = false,
+  searchMeta = null,
 }) {
   const [input, setInput] = useState(q);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -378,11 +379,16 @@ export default function MailList({
   const showMailbox = (view.mailboxId || 'all') === 'all' && Object.keys(mailboxMap).length > 1;
   const isSent = view.box === 'sent' || (view.box === 'folder' && view.special === '\\Sent');
   const all = [...pinned, ...messages];
-  /** 与 styles.css contain-intrinsic-size 对齐；过小会导致 virt padding / 选中滚动偏位 */
-  const rowH = compact ? 44 : 72;
+  /** 基准行高；virt 时用实测均值纠偏（双行标签/为何行） */
+  const baseRowH = compact ? 44 : 72;
+  const [rowH, setRowH] = useState(baseRowH);
   /** 无置顶且行数多时做轻量窗口化（无新依赖） */
   const useVirt = pinned.length === 0 && messages.length > 60;
   const [virt, setVirt] = useState({ start: 0, end: 50 });
+
+  useEffect(() => {
+    setRowH(baseRowH);
+  }, [baseRowH, scrollKey]);
 
   useEffect(() => setInput(q), [q]);
 
@@ -460,6 +466,27 @@ export default function MailList({
   const topPad = useVirt ? virt.start * rowH : 0;
   const botPad = useVirt ? Math.max(0, (messages.length - virt.end) * rowH) : 0;
 
+  // 用当前窗口行实测均值校正 virt 步长，减轻双行标签滚动偏位
+  useEffect(() => {
+    if (!useVirt) return;
+    const el = listBodyRef.current;
+    if (!el) return;
+    const rows = el.querySelectorAll('.mail-row');
+    if (rows.length < 3) return;
+    let sum = 0;
+    let n = 0;
+    rows.forEach((r) => {
+      const h = r.getBoundingClientRect().height;
+      if (h > 20) {
+        sum += h;
+        n += 1;
+      }
+    });
+    if (!n) return;
+    const avg = Math.round(sum / n);
+    if (Math.abs(avg - rowH) >= 4) setRowH(Math.max(baseRowH - 8, Math.min(120, avg)));
+  }, [useVirt, visibleMessages, baseRowH, rowH]);
+
   function toggleCheck(id, range) {
     const next = new Set(checked);
     if (range && lastChecked.current) {
@@ -524,11 +551,10 @@ export default function MailList({
         </form>
         {q && (
           <div className="search-hint">
-            {ftsIndexing
-              ? '全文索引建立中，本地搜索结果可能不全；可稍后再搜或改用服务器搜索'
-              : deep
-                ? '已在邮件服务器上搜索全文（含正文）'
-                : '当前搜索本地缓存的邮件'}
+            {ftsIndexing || searchMeta?.ftsBusy
+              ? searchMeta?.hint || '全文索引建立中，本地搜索结果可能不全；可稍后再搜或改用服务器搜索'
+              : searchMeta?.hint
+                || (deep ? '已在邮件服务器上搜索全文（含正文）' : '当前搜索本地缓存的邮件')}
             {!deep && <button className="link-btn" onClick={() => onSearch(q, true)}><ServerCrash size={12} /> 在服务器上搜索全文</button>}
             {onSaveSearch && (
               <button

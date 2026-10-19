@@ -4,6 +4,7 @@ import { api, qs } from './api.js';
 import { putMessageCache } from './messageCache.js';
 import { enqueueAction, flushActionQueue, actionQueueLength, peekActionQueue, QUEUEABLE_ACTIONS } from './actionQueue.js';
 import { parseMessageDeepLink } from '../../server/mail_links.js';
+import { latestComposeWal, clearComposeWal, walToComposeInitial } from './composeWal.js';
 
 function readQueueLen() {
   try {
@@ -126,6 +127,7 @@ export default function App() {
   const [netOnline, setNetOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
   const [queuePending, setQueuePending] = useState(() => readQueueLen());
   const [fts, setFts] = useState({ busy: false, pending: false, backfillLeft: 0 });
+  const [searchMeta, setSearchMeta] = useState(null);
 
   const [composers, setComposers] = useState([]);
   const [modal, setModal] = useState(null);
@@ -318,6 +320,7 @@ export default function App() {
     setCategory('all');
     setQ('');
     setDeep(false);
+    setSearchMeta(null);
   }
 
   useAppBoot({ applyState, setUser, setAi, setAiMeta, setBoot, setQ, setViewState: setView, notify });
@@ -409,6 +412,7 @@ export default function App() {
             })
         );
         if (id !== reqId.current) return;
+        if (!append) setSearchMeta(data.searchMeta || (data.deep ? data.deepMeta : null) || null);
         setList((p) => {
           if (append) {
             const have = new Set(p.messages.map((m) => m.id));
@@ -916,6 +920,24 @@ export default function App() {
     }
     pushComposer(buildComposeState(mode, msg, composeCtx, extra));
   }
+
+  /* 启动恢复：本机 WAL 写信快照（每会话只提示一次） */
+  const walOffered = useRef(false);
+  useEffect(() => {
+    if (boot !== 'ready' || !user || !mailboxes.length || walOffered.current) return;
+    const wal = latestComposeWal();
+    if (!wal || Date.now() - (wal.at || 0) > 7 * 24 * 3600_000) return;
+    if (composers.length) return;
+    walOffered.current = true;
+    notify('发现本机未同步的写信草稿', 'info', {
+      label: '恢复',
+      fn: () => {
+        pushComposer(walToComposeInitial(wal, buildComposeState('new', null, composeCtx)));
+        clearComposeWal(wal.walKey);
+      },
+    }, 12000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boot, user?.id, mailboxes.length]);
 
   /* 深链：?compose=1 写信；?box=&messageId=&mailboxId= Push / 复制链接 / 服务号点达 */
   useEffect(() => {
@@ -1794,7 +1816,9 @@ export default function App() {
           q={q}
           deep={deep}
           ftsIndexing={!!(fts.busy || fts.pending || (fts.backfillLeft || 0) > 0)}
+          searchMeta={q ? searchMeta : null}
           onSearch={(nq, d) => {
+            setSearchMeta(null);
             if (!nq && view.box === 'smart') {
               setView({ mailboxId: 'all', box: 'inbox' });
               return;
@@ -1939,6 +1963,7 @@ export default function App() {
         {composers.map((c, i) => (
           <Composer
             key={c.key}
+            walKey={c.key}
             initial={c.initial}
             mailboxes={mailboxes}
             aiEnabled={ai}

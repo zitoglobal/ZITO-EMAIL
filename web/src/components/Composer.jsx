@@ -8,6 +8,7 @@ import {
   fileToInlineDataUrl, formatSize, htmlToText, insertHtmlAtCursor, relativeTime, sanitizeHtml, schedulePresets, textToHtml,
 } from '../utils.js';
 import { signatureHtml, signaturePlain, toPayload } from '../compose.js';
+import { writeComposeWal, clearComposeWal } from '../composeWal.js';
 import { ICON_MD, Icon } from '../uiIcons.jsx';
 import TimeMenu from './TimeMenu.jsx';
 
@@ -111,7 +112,7 @@ function RecipientInput({ label, value, onChange, autoFocus, right }) {
   );
 }
 
-export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend, onSaveDraft, onClose, notify, stacked, glossary, onOpenSettings }) {
+export default function Composer({ initial, walKey, mailboxes, aiEnabled, aiMeta, onSend, onSaveDraft, onClose, notify, stacked, glossary, onOpenSettings }) {
   const [mailboxId, setMailboxId] = useState(initial.mailboxId || mailboxes[0]?.id);
   const [to, setTo] = useState(initial.to || '');
   const [cc, setCc] = useState(initial.cc || '');
@@ -151,8 +152,28 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
       placeCaretAtStart(editor.current);
     }
     if (initial.aiInstruction && aiEnabled) generate(initial.aiInstruction);
+    if (initial._fromWal && initial._walFileNames?.length) {
+      notify(`已从本机恢复正文；附件需重新添加：${initial._walFileNames.join('、')}`, 'info', null, 8000);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function snapshotWal() {
+    if (!walKey || !hasContent()) return;
+    writeComposeWal({
+      walKey,
+      mailboxId,
+      mode: initial.mode || 'new',
+      to,
+      cc,
+      bcc,
+      subject,
+      body: editor.current?.innerHTML || '',
+      draftUid,
+      sourceId: initial.sourceId,
+      fileNames: files.map((f) => f.name || f.filename || '附件'),
+    });
+  }
 
   // 全局 Esc → 最小化；同步 body 标记供 App 屏蔽列表快捷键
   useEffect(() => {
@@ -169,13 +190,15 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     };
   }, [view]);
 
-  // 自动保存草稿（定时 + 切走标签页）
+  // 自动保存草稿（定时 + 切走标签页）；同时刷本地 WAL
   const latest = useRef();
-  latest.current = { saveDraft, hasContent, saving };
+  latest.current = { saveDraft, hasContent, saving, snapshotWal };
   useEffect(() => {
     const flush = () => {
-      const { saveDraft, hasContent, saving } = latest.current;
-      if (dirty.current && hasContent() && !saving) saveDraft(true);
+      const { saveDraft, hasContent, saving, snapshotWal } = latest.current;
+      if (!dirty.current || !hasContent() || saving) return;
+      snapshotWal?.();
+      saveDraft(true);
     };
     const t = setInterval(flush, AUTOSAVE_MS);
     const onVis = () => {
@@ -266,32 +289,44 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     if (total > MAX_TOTAL) return notify('附件总大小不能超过 25MB', 'error');
     const { payload, state: s } = collect();
     if (sendAt) payload.sendAt = sendAt;
+    snapshotWal();
     onSend(payload, files, s);
   }
 
   async function saveDraft(silent) {
     setSaving(true);
+    snapshotWal();
     try {
       const { payload } = collect();
       const res = await onSaveDraft(payload, files);
       if (res?.uid) setDraftUid(res.uid);
       dirty.current = false;
       setSavedAt(Date.now());
+      if (walKey) clearComposeWal(walKey);
       if (!silent) notify('草稿已保存');
     } catch (e) {
-      // 静默自动保存失败也要可见，避免长时间写信用丢稿
-      notify(silent ? `自动保存失败：${e.message}` : e.message, 'error', null, silent ? 6000 : 4000);
+      const offline = e?.offline || e?.status === 0 || /failed to fetch|network|离线/i.test(String(e?.message || ''));
+      if (offline) {
+        notify(silent ? '已离线保存到本机，联网后再存服务器草稿' : '网络不可用，已保存到本机', 'info', null, 7000);
+        dirty.current = false;
+        setSavedAt(Date.now());
+      } else {
+        notify(silent ? `自动保存失败：${e.message}（已尝试本机备份）` : `${e.message}（已尝试本机备份）`, 'error', null, silent ? 7000 : 5000);
+      }
     } finally {
       setSaving(false);
     }
   }
 
   function close() {
+    if (dirty.current && hasContent()) snapshotWal();
+    else if (walKey && !hasContent()) clearComposeWal(walKey);
     onClose(dirty.current && hasContent() ? collect() : null);
   }
 
   function discard() {
     if (!window.confirm('确定舍弃这封邮件吗？')) return;
+    if (walKey) clearComposeWal(walKey);
     onClose(null, { discard: true, draftUid, mailboxId });
   }
 
