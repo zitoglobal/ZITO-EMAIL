@@ -491,6 +491,8 @@ CREATE INDEX IF NOT EXISTS idx_thread_notes_addr ON thread_notes(address, create
   if (!styleCols.has('unit_price')) db.exec('ALTER TABLE deal_styles ADD COLUMN unit_price REAL');
   if (!styleCols.has('moq')) db.exec("ALTER TABLE deal_styles ADD COLUMN moq TEXT NOT NULL DEFAULT ''");
   if (!styleCols.has('currency')) db.exec("ALTER TABLE deal_styles ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'");
+  const outboxCols = new Set(db.prepare('PRAGMA table_info(outbox)').all().map((c) => c.name));
+  if (!outboxCols.has('tries')) db.exec('ALTER TABLE outbox ADD COLUMN tries INTEGER NOT NULL DEFAULT 0');
 }
 
 // FTS5 全文（主题/摘要/发件人/正文）

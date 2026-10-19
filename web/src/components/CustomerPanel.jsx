@@ -169,10 +169,17 @@ export default function CustomerPanel({
     const onBump = (e) => {
       const reason = e.detail?.reason;
       const id = e.detail?.dealId || dealId;
-      if (reason === 'sample' || reason === 'commerce' || reason === 'split' || reason === 'stage' || reason === 'follow') {
+      if (
+        reason === 'sample'
+        || reason === 'commerce'
+        || reason === 'style'
+        || reason === 'split'
+        || reason === 'stage'
+        || reason === 'follow'
+      ) {
         reloadArtifacts(id);
       }
-      if (reason === 'commerce' || reason === 'split' || reason === 'stage' || reason === 'follow' || reason === 'claim') {
+      if (reason === 'commerce' || reason === 'style' || reason === 'split' || reason === 'stage' || reason === 'follow' || reason === 'claim') {
         api('/customer/timeline?address=' + encodeURIComponent(peerAddr) + '&limit=18')
           .then((d) => setTimeline(d))
           .catch(() => {});
@@ -607,7 +614,8 @@ export default function CustomerPanel({
         {person && (
           <div className="customer-sec">
             <div className="customer-section-title">
-              备注 {noteSaving && <Loader2 size={10} className="spin" style={{ marginLeft: 4 }} />}
+              联系人备注 {noteSaving && <Loader2 size={10} className="spin" style={{ marginLeft: 4 }} />}
+              <small className="muted" style={{ marginLeft: 6 }}>跟人走，非单笔成交</small>
             </div>
             <textarea
               className="customer-note"
@@ -617,6 +625,11 @@ export default function CustomerPanel({
               rows={3}
               placeholder="付款习惯、旺季、对接人…"
             />
+            {deal?.note ? (
+              <small className="muted" style={{ display: 'block', marginTop: 6 }}>
+                本成交备注：{deal.note}
+              </small>
+            ) : null}
           </div>
         )}
 
@@ -624,7 +637,11 @@ export default function CustomerPanel({
           <div className="customer-sec">
             <div className="customer-section-title">
               <CalendarClock size={12} /> 下次跟进
-              {dealId ? <small className="muted" style={{ marginLeft: 6 }}>成交跟进日</small> : null}
+              {dealId ? (
+                <small className="muted" style={{ marginLeft: 6 }}>写入成交管线</small>
+              ) : (
+                <small className="muted" style={{ marginLeft: 6 }}>联系人备忘（认领后进管线）</small>
+              )}
             </div>
             <div className="customer-follow-row">
               {[1, 3, 7].map((n) => (

@@ -72,11 +72,20 @@ export default function Outbox({ mailboxMap, onMenu, onEdit, notify, version, on
                   <b>{it.subject || '(无主题)'}</b>
                   <span className={'ob-time' + (it.status === 'failed' ? ' err' : '')}>
                     {it.status === 'failed' ? <AlertCircle size={12} /> : it.status === 'sending' ? <Loader2 size={12} className="spin" /> : <Clock size={12} />}
-                    {it.status === 'failed' ? '发送失败' : it.status === 'sending' ? '发送中' : `${formatShortDateTime(it.sendAt)}（${relativeTime(it.sendAt)}）`}
+                    {it.status === 'failed'
+                      ? '发送失败'
+                      : it.status === 'sending'
+                        ? '发送中'
+                        : it.tries > 0
+                          ? `自动重试中 · ${formatShortDateTime(it.sendAt)}`
+                          : `${formatShortDateTime(it.sendAt)}（${relativeTime(it.sendAt)}）`}
                   </span>
                 </div>
                 <div className="ob-line2">致：{it.to || '—'}{mb && <span className="muted"> · 由 {mb.email} 发出</span>}</div>
                 {it.error && <div className="ob-err">{it.error}</div>}
+                {it.status === 'failed' && /中断|已发送/.test(it.error || '') && (
+                  <div className="ob-err muted">请先到「已发送」确认是否已发出，避免重复投递后再点重试。</div>
+                )}
               </div>
               {it.status !== 'sending' && (
                 <div className="ob-actions">

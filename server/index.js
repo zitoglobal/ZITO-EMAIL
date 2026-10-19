@@ -276,6 +276,8 @@ app.get('/api/desktop/status', (req, res) => {
     desktop: true,
     home: desktopHome(),
     dataDir: process.env.DATA_DIR,
+    backupDir: backup.BACKUP_DIR,
+    lastBackupAt: backup.lastBackupAt(),
     port: PORT,
     hasUsers: users.userCount() > 0,
     aiConfigured: ai.aiConfigured(),
@@ -283,6 +285,39 @@ app.get('/api/desktop/status', (req, res) => {
     version: process.env.npm_package_version || '1.0.0',
   });
 });
+
+/** 桌面本机：托盘一键备份（仅 127.0.0.1 可达） */
+app.post(
+  '/api/desktop/backup',
+  wrap(async (req, res) => {
+    if (!IS_DESKTOP) throw Object.assign(new Error('非桌面模式'), { status: 404 });
+    const dest = await backup.backupOnce();
+    res.json({
+      ok: true,
+      file: path.basename(dest),
+      dir: backup.BACKUP_DIR,
+      lastBackupAt: backup.lastBackupAt(),
+    });
+  })
+);
+
+/** 手动触发加密备份（桌面任意登录用户；云端仅管理员） */
+app.post(
+  '/api/backup/now',
+  auth,
+  wrap(async (req, res) => {
+    if (!IS_DESKTOP && req.user.role !== 'admin') {
+      throw Object.assign(new Error('仅管理员可手动备份'), { status: 403 });
+    }
+    const dest = await backup.backupOnce();
+    res.json({
+      ok: true,
+      file: path.basename(dest),
+      dir: IS_DESKTOP ? backup.BACKUP_DIR : undefined,
+      lastBackupAt: backup.lastBackupAt(),
+    });
+  })
+);
 
 app.post(
   '/api/desktop/setup',
@@ -1383,7 +1418,17 @@ app.get(
     res.json({
       items: repo.listOutbox(req.user.id).map((o) => {
         const p = JSON.parse(o.payload);
-        return { id: o.id, mailboxId: o.mailbox_id, to: p.to, subject: p.subject, sendAt: o.send_at, status: o.status, error: o.error, payload: p };
+        return {
+          id: o.id,
+          mailboxId: o.mailbox_id,
+          to: p.to,
+          subject: p.subject,
+          sendAt: o.send_at,
+          status: o.status,
+          error: o.error,
+          tries: o.tries || 0,
+          payload: p,
+        };
       }),
     });
   })

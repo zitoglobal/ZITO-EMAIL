@@ -912,7 +912,13 @@ export const listOutbox = (userId) =>
 export const getOutbox = (userId, id) => db.prepare('SELECT * FROM outbox WHERE id = ? AND user_id = ?').get(id, userId);
 export const dueOutbox = () => db.prepare("SELECT * FROM outbox WHERE status = 'scheduled' AND send_at <= ? LIMIT 20").all(now());
 export const setOutboxStatus = (id, status, error = null) => db.prepare('UPDATE outbox SET status = ?, error = ? WHERE id = ?').run(status, error, id);
-export const updateOutboxTime = (id, sendAt) => db.prepare("UPDATE outbox SET send_at = ?, status = 'scheduled', error = NULL WHERE id = ?").run(sendAt, id);
+export const updateOutboxTime = (id, sendAt) =>
+  db.prepare("UPDATE outbox SET send_at = ?, status = 'scheduled', error = NULL, tries = 0 WHERE id = ?").run(sendAt, id);
+/** 瞬时失败：退避后自动再试（不重发成功件——仅 sending 失败路径调用） */
+export function scheduleOutboxRetry(id, sendAt, tries, error) {
+  const msg = `将自动重试（${tries}/2）：${error || '发送失败'}`;
+  db.prepare("UPDATE outbox SET status = 'scheduled', send_at = ?, tries = ?, error = ? WHERE id = ?").run(sendAt, tries, msg, id);
+}
 export const deleteOutbox = (id) => db.prepare('DELETE FROM outbox WHERE id = ?').run(id);
 /** 仅删除仍为 scheduled 的任务（与 sending claim 互斥） */
 export function deleteOutboxIfScheduled(id) {

@@ -495,6 +495,7 @@ function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudCha
   const [aiKeyDraft, setAiKeyDraft] = useState('');
   const [aiBaseDraft, setAiBaseDraft] = useState('');
   const [aiSaving, setAiSaving] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
   const set = (k) => (v) => {
     onSave({ [k]: v });
     if (k === 'notify' && v && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -533,8 +534,35 @@ function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudCha
     }
   }
 
+  async function runBackupNow() {
+    setBackupBusy(true);
+    try {
+      const r = await api('/backup/now', { method: 'POST' });
+      notify(r.file ? `备份已写入 ${r.file}` : '备份完成', 'success');
+      setDesktopInfo((d) => (d ? { ...d, lastBackupAt: r.lastBackupAt } : d));
+    } catch (err) {
+      notify(err.message || '备份失败', 'error');
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
   return (
     <>
+      {isDesktop && (
+        <div className="ai-status-card on" style={{ marginBottom: 16 }} id="desktop-backup">
+          <b>本机数据备份</b>
+          <small>
+            邮件库在本机 AppData。重装系统前请导出加密备份；托盘也可「立即备份 / 打开数据文件夹」。
+            {desktopInfo?.lastBackupAt ? ` 最近备份：${new Date(desktopInfo.lastBackupAt).toLocaleString('zh-CN')}` : ' 尚无备份记录。'}
+          </small>
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" className="btn-primary" disabled={backupBusy} onClick={runBackupNow}>
+              {backupBusy ? '备份中…' : '立即导出加密备份'}
+            </button>
+          </div>
+        </div>
+      )}
       <div className={'ai-status-card ' + (aiEnabled ? 'on' : 'off')} id="ai-status">
         <b>
           {aiEnabled

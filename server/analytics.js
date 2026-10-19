@@ -82,6 +82,35 @@ export function teamInsights(viewerId, { dayStart } = {}) {
     if (/→\s*成交/.test(d)) transitions.toWon += e.n;
     if (/→\s*丢单/.test(d)) transitions.toLost += e.n;
   }
+
+  /** 轻量 cohort：近 30 日阶段事件中「A → B」次数与相邻转化率（非完整漏斗归因） */
+  const pairRows = db
+    .prepare(
+      `SELECT detail, COUNT(*) AS n FROM deal_events
+       WHERE action = 'stage' AND created_at >= ? AND detail LIKE '%→%'
+       GROUP BY detail`
+    )
+    .all(since);
+  let inquiryToQuote = 0;
+  let quoteToSample = 0;
+  let sampleToBulk = 0;
+  for (const e of pairRows) {
+    const d = String(e.detail || '');
+    if (/询盘\s*→\s*报价/.test(d)) inquiryToQuote += e.n;
+    if (/报价\s*→\s*样品/.test(d)) quoteToSample += e.n;
+    if (/样品\s*→\s*大货/.test(d)) sampleToBulk += e.n;
+  }
+  const pct = (num, den) => (den > 0 ? Math.round((num / den) * 1000) / 10 : null);
+  const cohort30d = {
+    inquiryToQuote,
+    quoteToSample,
+    sampleToBulk,
+    /** 进入报价 /（存量询盘 + 进入报价） */
+    inquiryToQuoteRate: pct(inquiryToQuote, (funnelCounts.inquiry || 0) + inquiryToQuote),
+    quoteToSampleRate: pct(quoteToSample, (funnelCounts.quote || 0) + quoteToSample),
+    sampleToBulkRate: pct(sampleToBulk, (funnelCounts.sample || 0) + sampleToBulk),
+  };
+
   const openPipe = (funnelCounts.inquiry || 0) + (funnelCounts.quote || 0) + (funnelCounts.sample || 0) + (funnelCounts.bulk || 0) + (funnelCounts.payment || 0);
   const wonRate = openPipe + (funnelCounts.won || 0) + (funnelCounts.lost || 0)
     ? Math.round(((funnelCounts.won || 0) / Math.max(1, (funnelCounts.won || 0) + (funnelCounts.lost || 0) + openPipe)) * 1000) / 10
@@ -106,6 +135,7 @@ export function teamInsights(viewerId, { dayStart } = {}) {
       counts: funnelCounts,
       stages: STAGES.map((s) => ({ id: s.id, label: s.label, color: s.color, count: funnelCounts[s.id] || 0 })),
       transitions30d: transitions,
+      cohort30d,
       wonRate,
       openPipeline: openPipe,
     },

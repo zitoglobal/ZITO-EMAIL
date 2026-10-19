@@ -273,7 +273,7 @@ export default function DealBar({
     if (!deal?.id || !styleQuick.styleNo.trim()) return;
     setBusy('style');
     try {
-      await api(`/deals/${deal.id}/styles`, {
+      const r = await api(`/deals/${deal.id}/styles`, {
         method: 'POST',
         body: {
           styleNo: styleQuick.styleNo.trim(),
@@ -285,7 +285,7 @@ export default function DealBar({
         },
       });
       setStyleQuick({ styleNo: '', colorway: '', sizeRange: '', unitPrice: '', moq: '', currency: styleQuick.currency || 'USD' });
-      bumpDeal(deal, 'style');
+      bumpDeal({ ...deal, styles: r.styles || [] }, 'style');
       notify('已添加款号', 'success');
     } catch (e) {
       notify(e.message, 'error');
@@ -438,7 +438,7 @@ export default function DealBar({
               <div className="deal-commerce-grid">
                 <label>款号<input value={commerce.styleNo} onChange={(e) => setCommerce((c) => ({ ...c, styleNo: e.target.value }))} placeholder="Style No." /></label>
                 <label>币种<input value={commerce.currency} onChange={(e) => setCommerce((c) => ({ ...c, currency: e.target.value }))} placeholder="USD" /></label>
-                <label>金额<input value={commerce.amount} onChange={(e) => setCommerce((c) => ({ ...c, amount: e.target.value }))} placeholder="0" inputMode="decimal" /></label>
+                <label title="整单/订单金额（非单款单价）">订单金额<input value={commerce.amount} onChange={(e) => setCommerce((c) => ({ ...c, amount: e.target.value }))} placeholder="整单" inputMode="decimal" /></label>
                 <label>MOQ<input value={commerce.moq} onChange={(e) => setCommerce((c) => ({ ...c, moq: e.target.value }))} placeholder="500 pcs" /></label>
                 <label>交期(天)<input value={commerce.leadDays} onChange={(e) => setCommerce((c) => ({ ...c, leadDays: e.target.value }))} placeholder="45" inputMode="numeric" /></label>
                 <label>贸易术语
@@ -477,6 +477,9 @@ export default function DealBar({
                   自动跟进序列
                 </label>
               </div>
+              <p className="deal-amount-hint muted">
+                上方「订单金额」= 整单；下方「单价」= 各款 FOB/件价。多款报价请用加款，勿把单价填进订单金额。
+              </p>
               <div className="deal-style-quick" aria-label="多款快捷添加">
                 <input
                   value={styleQuick.styleNo}
@@ -532,7 +535,7 @@ export default function DealBar({
           <input
             value={noteDraft}
             onChange={(e) => setNoteDraft(e.target.value.slice(0, 200))}
-            placeholder="跟进备注（如：等对方确认交期）"
+            placeholder="本成交备注（如：等 PP；跟人备注在客户栏）"
             maxLength={200}
             autoFocus
             onKeyDown={(e) => {
@@ -564,7 +567,7 @@ export default function DealBar({
           <button
             type="button"
             className="sl-btn ghost"
-            title="编辑跟进备注"
+            title="编辑本成交备注（联系人长期备注在客户栏）"
             onClick={() => setEditingNote(true)}
           >
             <StickyNote size={12} /> 备注

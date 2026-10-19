@@ -13,6 +13,13 @@ import * as priority from './priority.js';
 
 export const OUTBOX_DIR = path.join(DATA_DIR, 'outbox');
 
+/** 瞬时 SMTP/网络错误：可自动退避重试（非认证/拒信） */
+export function isTransientSmtpError(msg) {
+  return /timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|socket|network|temporar|421|450|451|452|try again/i.test(
+    String(msg || '')
+  );
+}
+
 export function parseRecipients(v) {
   if (!v) return [];
   const list = Array.isArray(v) ? v.join(',') : String(v);
@@ -153,8 +160,17 @@ async function tick() {
           console.warn('[deals] outbox claim', e.message);
         }
       } catch (e) {
-        repo.setOutboxStatus(job.id, 'failed', e.message);
-        emit(job.user_id, 'outbox', { id: job.id, status: 'failed', error: e.message });
+        const msg = e.message || String(e);
+        const transient = isTransientSmtpError(msg);
+        const tries = Number(job.tries || 0) + 1;
+        if (transient && tries <= 2) {
+          const delay = tries === 1 ? 30_000 : 120_000;
+          repo.scheduleOutboxRetry(job.id, Date.now() + delay, tries, msg);
+          emit(job.user_id, 'outbox', { id: job.id, status: 'retry', tries, error: msg, sendAt: Date.now() + delay });
+        } else {
+          repo.setOutboxStatus(job.id, 'failed', msg);
+          emit(job.user_id, 'outbox', { id: job.id, status: 'failed', error: msg });
+        }
       }
     }
 

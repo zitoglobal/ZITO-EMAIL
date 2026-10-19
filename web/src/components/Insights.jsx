@@ -208,6 +208,16 @@ export default function Insights({ onMenu, isAdmin, onGo, onOpenMessage, onOpenS
                 · 丢单 {data.funnel.transitions30d.toLost || 0}
               </div>
             )}
+            {data.funnel?.cohort30d && (
+              <div className="insights-funnel-trans muted" title="按阶段变更事件粗算，非严格归因 cohort">
+                近 30 日转化：询盘→报价 {data.funnel.cohort30d.inquiryToQuote || 0}
+                {data.funnel.cohort30d.inquiryToQuoteRate != null ? `（${data.funnel.cohort30d.inquiryToQuoteRate}%）` : ''}
+                · 报价→样品 {data.funnel.cohort30d.quoteToSample || 0}
+                {data.funnel.cohort30d.quoteToSampleRate != null ? `（${data.funnel.cohort30d.quoteToSampleRate}%）` : ''}
+                · 样品→大货 {data.funnel.cohort30d.sampleToBulk || 0}
+                {data.funnel.cohort30d.sampleToBulkRate != null ? `（${data.funnel.cohort30d.sampleToBulkRate}%）` : ''}
+              </div>
+            )}
 
             <h3 className="insights-h">我的跟进日</h3>
             <div className="insights-follow">

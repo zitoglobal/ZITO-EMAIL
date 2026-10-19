@@ -10,24 +10,23 @@ export default function AdminEmpty({ user, onAddMailbox, onOpenTeam, onOpenSetti
           <Shield size={14} /> 管理员
         </div>
         <h1>你好，{user?.name || '管理员'}</h1>
-        <p>尚未绑定邮箱。你可以先开通同事账号，或绑定自己的邮箱开始收信。</p>
+        <p>第一步：绑定自己的邮箱，收信与今日待办才会出现。团队成员可随后开通。</p>
         <div className="admin-empty-actions">
-          <button type="button" className="btn-primary" onClick={onOpenTeam}>
-            <Users size={15} /> 开通团队成员
+          <button type="button" className="btn-primary" onClick={onAddMailbox}>
+            <MailPlus size={15} /> 绑定第一个邮箱
           </button>
-          <button type="button" className="btn-ghost" onClick={onAddMailbox}>
-            <MailPlus size={15} /> 绑定邮箱
+          <button type="button" className="btn-ghost" onClick={onOpenTeam}>
+            <Users size={15} /> 开通团队成员
           </button>
           <button type="button" className="btn-ghost" onClick={onOpenSettings}>
             <SlidersHorizontal size={15} /> 偏好设置
           </button>
         </div>
-        <ul className="admin-empty-hints">
-          <li>成员登录后各自绑定邮箱，数据相互隔离</li>
-          <li>Gmail / Microsoft 365 可在绑定页一键 OAuth（需管理员配置应用凭证）</li>
-          <li>「销售洞察」可查看同步失败、在线人数与 Focus 抽样</li>
-          <li>今日待办 / 等待会在有邮件同步后自动出现</li>
-        </ul>
+        <ol className="admin-empty-hints">
+          <li>绑定 IMAP/SMTP 或 Gmail / Microsoft 365 OAuth（需管理员配置应用凭证）</li>
+          <li>同步完成后，「今日待办 / 等待」自动出现</li>
+          <li>需要时再开通同事账号；成员登录后各自绑箱，数据隔离</li>
+        </ol>
       </div>
     </section>
   );

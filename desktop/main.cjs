@@ -236,6 +236,27 @@ function rebuildTrayMenu() {
       },
     },
     {
+      label: '立即备份',
+      click: async () => {
+        try {
+          const r = await fetch(`http://127.0.0.1:${serverPort}/api/desktop/backup`, { method: 'POST' });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+          const dir = j.dir || path.join(dataHomePath(), 'data', 'backups');
+          fs.mkdirSync(dir, { recursive: true });
+          await dialog.showMessageBox({
+            type: 'info',
+            title: '备份完成',
+            message: j.file ? `已写入 ${j.file}` : '备份完成',
+            detail: dir,
+          });
+          shell.openPath(dir);
+        } catch (e) {
+          dialog.showErrorBox('备份失败', e.message || String(e));
+        }
+      },
+    },
+    {
       label: openLogin ? '开机自启 ✓' : '开机自启',
       type: 'checkbox',
       checked: openLogin,
