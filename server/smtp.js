@@ -46,6 +46,32 @@ export async function verifySmtp(mb, password) {
   }
 }
 
+function formatAddrList(list) {
+  return (Array.isArray(list) ? list : list ? [list] : [])
+    .map((x) => {
+      if (!x) return '';
+      if (typeof x === 'string') return x.trim();
+      const addr = String(x.address || '').trim();
+      const name = String(x.name || '').trim();
+      if (!addr) return '';
+      if (!name) return addr;
+      const safe = name.replace(/["\\]/g, '');
+      return `"${safe}" <${addr}>`;
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** MailComposer 会剥掉 Bcc；已发送副本需保留时在编译后注入头 */
+function injectBccHeader(raw, bccLine) {
+  if (!bccLine) return raw;
+  const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+  const headEnd = buf.indexOf('\r\n\r\n');
+  if (headEnd < 0) return buf;
+  const line = Buffer.from(`Bcc: ${bccLine}\r\n`, 'utf8');
+  return Buffer.concat([buf.subarray(0, headEnd + 2), line, buf.subarray(headEnd + 2)]);
+}
+
 export async function buildRaw(mb, mail) {
   const composer = new MailComposer({
     from: { name: mb.name || '', address: mb.email },
@@ -61,7 +87,12 @@ export async function buildRaw(mb, mail) {
     keepBcc: mail.keepBcc,
     headers: { 'X-Mailer': 'ZITO Smart Mail' },
   });
-  return composer.compile().build();
+  const raw = await composer.compile().build();
+  if (mail.keepBcc) {
+    const bccLine = formatAddrList(mail.bcc);
+    if (bccLine) return injectBccHeader(raw, bccLine);
+  }
+  return raw;
 }
 
 const envelopeAddr = (x) => (typeof x === 'string' ? x : x?.address);

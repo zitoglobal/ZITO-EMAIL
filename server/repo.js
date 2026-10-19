@@ -201,6 +201,33 @@ export function patchMessages(ids, patch) {
   db.prepare(`UPDATE messages SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id IN (${ph})`).run(...cols.map((c) => patch[c]), ...ids);
 }
 
+/**
+ * 按实际已读态变化调整 folders.unseen（批量 read/unread 与单封 markSeen 对齐）。
+ * @param {Array<{ mailbox_id: number, folder: string, seen: number|boolean }>} rows 变更前行
+ * @param {boolean} wantSeen 目标已读
+ */
+export function adjustUnseenForSeenChange(rows, wantSeen) {
+  if (!rows?.length) return;
+  const deltas = new Map();
+  for (const r of rows) {
+    const wasSeen = !!r.seen;
+    if (wantSeen === wasSeen) continue;
+    const k = `${r.mailbox_id}\u0000${r.folder}`;
+    deltas.set(k, (deltas.get(k) || 0) + (wantSeen ? -1 : 1));
+  }
+  const dec = db.prepare('UPDATE folders SET unseen = MAX(0, unseen + ?) WHERE mailbox_id = ? AND path = ?');
+  const inc = db.prepare('UPDATE folders SET unseen = unseen + ? WHERE mailbox_id = ? AND path = ?');
+  for (const [k, delta] of deltas) {
+    if (!delta) continue;
+    const sep = k.indexOf('\u0000');
+    const mailboxId = sep >= 0 ? k.slice(0, sep) : k;
+    const folder = sep >= 0 ? k.slice(sep + 1) : '';
+    // mailbox_id 为十六进制字符串，不可 Number()
+    if (delta < 0) dec.run(delta, mailboxId, folder);
+    else inc.run(delta, mailboxId, folder);
+  }
+}
+
 export function deleteMessageRows(ids) {
   if (!ids.length) return;
   // 先删主表，再清 FTS：索引损坏时也不能挡住「删除邮件」

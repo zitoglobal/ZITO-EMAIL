@@ -700,6 +700,19 @@ app.delete(
   })
 );
 
+app.get('/api/admin/fts', auth, admin, (req, res) => {
+  res.json({ ...repo.getFtsStatus(), generatedAt: Date.now() });
+});
+app.post(
+  '/api/admin/fts/rebuild',
+  auth,
+  admin,
+  wrap(async (req, res) => {
+    const r = repo.rebuildFtsIndex('admin-ui');
+    res.json({ ok: true, ...r, status: repo.getFtsStatus(), generatedAt: Date.now() });
+  })
+);
+
 // ---------- 邮箱绑定 ----------
 app.get(
   '/api/providers/detect',
@@ -1067,6 +1080,9 @@ function contentDisposition(kind, name) {
   return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
 }
 
+/** 冷 miss 并发合流：同 id 只打一趟 IMAP */
+const bodyInflight = new Map();
+
 async function loadBody(row, { force = false } = {}) {
   const cached = !force ? repo.getBody(row.id) : null;
   if (cached) {
@@ -1088,16 +1104,26 @@ async function loadBody(row, { force = false } = {}) {
       return { html, text: cached.text, meta, signals };
     }
   }
-  const mb = repo.getMailboxById(row.mailbox_id);
-  const parsed = await imap.fetchParsed(mb, row.folder, row.uid);
-  const body = imap.serializeParsed(parsed);
-  body.html = imap.resolveCidPlaceholders(body.html, row.id, parsed.attachments || []);
-  const neut = imap.neutralizeOrphanCids(body.html);
-  body.html = neut.html;
-  body.meta = { ...body.meta, cidUnresolved: neut.replaced };
-  repo.saveBody(row.id, body);
-  const signals = repo.refreshSignals(row.id, row.subject, body.text || row.snippet || '');
-  return { ...body, signals };
+  const inflightKey = `${row.id}:${force ? 1 : 0}`;
+  if (bodyInflight.has(inflightKey)) return bodyInflight.get(inflightKey);
+  const job = (async () => {
+    const mb = repo.getMailboxById(row.mailbox_id);
+    const parsed = await imap.fetchParsed(mb, row.folder, row.uid);
+    const body = imap.serializeParsed(parsed);
+    body.html = imap.resolveCidPlaceholders(body.html, row.id, parsed.attachments || []);
+    const neut = imap.neutralizeOrphanCids(body.html);
+    body.html = neut.html;
+    body.meta = { ...body.meta, cidUnresolved: neut.replaced };
+    repo.saveBody(row.id, body);
+    const signals = repo.refreshSignals(row.id, row.subject, body.text || row.snippet || '');
+    return { ...body, signals };
+  })();
+  bodyInflight.set(inflightKey, job);
+  try {
+    return await job;
+  } finally {
+    bodyInflight.delete(inflightKey);
+  }
 }
 
 /** 用户刚标未读后，短暂抑制迟到的 POST /seen（读信竞态） */
@@ -1384,6 +1410,8 @@ app.post(
         const seen = action === 'read';
         if (!seen) noteUnreadSuppress(ids);
         else ids.forEach((id) => suppressSeenUntil.delete(id));
+        // 先按变更前状态改 folders.unseen，侧栏角标立刻准
+        repo.adjustUnseenForSeenChange(rows, seen);
         repo.patchMessages(ids, { seen: seen ? 1 : 0 });
         await each(async (g) => {
           const uids = g.rows.map((r) => r.uid);

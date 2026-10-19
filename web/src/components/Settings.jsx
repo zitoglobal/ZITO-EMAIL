@@ -63,6 +63,7 @@ const TABS = [
   ['deliverability', '投递力', Shield],
   ['account', '账户与安全', User],
   ['team', '团队成员', Users],
+  ['system', '系统运维', Server],
 ];
 
 const DEFAULT_LABEL_COLORS = ['#0a66ff', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#0d9488', '#475569', '#0891b2'];
@@ -925,6 +926,85 @@ function Templates({ notify, isAdmin }) {
   );
 }
 
+function FtsAdminPanel({ notify }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => {
+    setLoading(true);
+    api('/admin/fts')
+      .then(setData)
+      .catch((e) => notify(e.message, 'error'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 8_000);
+    return () => clearInterval(t);
+  }, []);
+
+  async function rebuild() {
+    if (!window.confirm('重建全文索引会短暂占用 CPU，搜索在完成前可能不全。确定？')) return;
+    setBusy(true);
+    try {
+      const r = await api('/admin/fts/rebuild', { method: 'POST', body: {} });
+      setData({ ...(r.status || {}), generatedAt: r.generatedAt });
+      notify(r.queued ? '重建已排队（当前有任务在跑）' : '已开始重建全文索引', 'success');
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setBusy(false);
+      load();
+    }
+  }
+
+  const left = data?.backfillLeft || 0;
+  const working = !!(data?.busy || data?.pending || left > 0);
+
+  return (
+    <>
+      <p className="set-desc">
+        全文搜索（FTS）状态。索引建立中时列表会提示「结果可能不全」；异常时可手动重建（分片回填，不阻塞 API）。
+      </p>
+      <div className="set-actions" style={{ marginBottom: 12 }}>
+        <button type="button" className="btn-ghost sm" onClick={load} disabled={loading}>
+          <RefreshCw size={13} className={loading ? 'spin' : ''} /> 刷新
+        </button>
+        <button type="button" className="btn-ghost sm" onClick={rebuild} disabled={busy || data?.busy}>
+          {busy ? <Loader2 size={13} className="spin" /> : <Server size={13} />} 重建索引
+        </button>
+      </div>
+      {loading && !data && <div className="muted"><Loader2 size={14} className="spin" /> 读取中…</div>}
+      {data && (
+        <div className={'set-account deliver-card level-' + (working ? 'warn' : 'good')}>
+          <div className="set-account-head">
+            <Server size={16} />
+            <div className="account-text">
+              <b>messages_fts</b>
+              <small>SQLite FTS5 · 本地全文索引</small>
+            </div>
+            <span className={'status-pill ' + (working ? 'warn' : 'ok')}>
+              {data.busy ? '重建中' : data.pending ? '排队' : left > 0 ? '回填中' : '空闲'}
+            </span>
+          </div>
+          <ul className="deliver-checks">
+            <li className={data.busy ? 'bad' : 'ok'}>重建进行中：{data.busy ? '是' : '否'}</li>
+            <li className={data.pending ? 'bad' : 'ok'}>排队补跑：{data.pending ? '是' : '否'}</li>
+            <li className={left > 0 ? 'bad' : 'ok'}>待回填约 {left} 封</li>
+          </ul>
+          {data.generatedAt && (
+            <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+              更新于 {new Date(data.generatedAt).toLocaleString()}
+            </p>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function DeliverabilityPanel({ notify }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1555,7 +1635,10 @@ function LabelsPanel({ notify, onChanged }) {
 
 export default function Settings({ user, mailboxes, tab: initialTab, focusMailbox, onClose, notify, onUserChange, onSettings, onMailboxesChanged, onAddMailbox, onLogout, aiEnabled, aiMeta, onAiCloudChange, onAiRefresh, onLabelsChanged }) {
   const [tab, setTab] = useState(initialTab || 'mailboxes');
-  const tabs = TABS.filter(([k]) => k !== 'team' || user.role === 'admin');
+  const tabs = TABS.filter(([k]) => {
+    if (k === 'team' || k === 'system') return user.role === 'admin';
+    return true;
+  });
 
   return (
     <div className="modal-mask" onClick={onClose}>
@@ -1600,6 +1683,7 @@ export default function Settings({ user, mailboxes, tab: initialTab, focusMailbo
             {tab === 'deliverability' && <DeliverabilityPanel notify={notify} />}
             {tab === 'account' && <Account user={user} onUserChange={onUserChange} onLogout={onLogout} notify={notify} />}
             {tab === 'team' && <Team me={user} notify={notify} />}
+            {tab === 'system' && user.role === 'admin' && <FtsAdminPanel notify={notify} />}
           </div>
         </div>
       </div>

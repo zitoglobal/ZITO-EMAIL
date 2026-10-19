@@ -54,6 +54,9 @@ export function useRealtimeMail({
       // Sent / 发信本地同步：更快刷新，稳住今日待办与等待
       if (d?.deal) window.dispatchEvent(new CustomEvent('zm-deal', { detail: d }));
       if (d?.deal || d?.sent) bumpCollab(d);
+      if (d?.flagRetryGaveUp) {
+        notify('部分已读/星标未能同步到邮箱服务器，请稍后重试或点同步', 'info', null, 10_000);
+      }
       if (d?.sent || d?.deal) {
         clearTimeout(fastTimer);
         fastTimer = setTimeout(() => scheduleRef.current(), 200);

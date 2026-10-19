@@ -779,6 +779,84 @@ assert('ftsEscape empty', ftsEscape('   ') === '');
 }
 
 {
+  const { buildRaw } = await import('../server/smtp.js');
+  const { simpleParser } = await import('mailparser');
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64'
+  );
+  const mb = { name: 'ZITO Sales', email: 'me@zito.test' };
+  const cid = 'img1@zito.mail';
+  const mailBase = {
+    to: [{ address: 'buyer@acme.com', name: 'Buyer' }],
+    cc: [],
+    bcc: [{ address: 'boss@zito.test', name: 'Boss' }],
+    subject: 'Quote PO-9',
+    html: `<p>hi <img src="cid:${cid}" alt=""></p>`,
+    text: 'hi',
+    inReplyTo: '<parent@acme.com>',
+    references: ['<root@acme.com>', '<parent@acme.com>'],
+    attachments: [{
+      filename: 'p.png', content: png, contentType: 'image/png', cid, contentDisposition: 'inline',
+    }],
+  };
+  const raw = await buildRaw(mb, { ...mailBase, keepBcc: false });
+  const rawStr = raw.toString('utf8');
+  const parsed = await simpleParser(raw);
+  assert('buildRaw subject', parsed.subject === 'Quote PO-9');
+  assert('buildRaw In-Reply-To', String(parsed.inReplyTo || '').includes('parent@acme.com'));
+  const refs = Array.isArray(parsed.references)
+    ? parsed.references.join(' ')
+    : String(parsed.references || '');
+  assert('buildRaw References', refs.includes('root@acme.com') && refs.includes('parent@acme.com'));
+  assert('buildRaw strips Bcc when keepBcc false', !/^Bcc:/im.test(rawStr) && !/boss@zito\.test/i.test(rawStr.split(/\r?\n\r?\n/)[0] || ''));
+  assert('buildRaw mime keeps cid', /cid:img1@zito\.mail/i.test(rawStr) && /Content-ID:.*img1@zito\.mail/i.test(rawStr));
+  const rawBcc = await buildRaw(mb, { ...mailBase, keepBcc: true });
+  const bccHead = rawBcc.toString('utf8').split(/\r?\n\r?\n/)[0] || '';
+  assert('buildRaw keepBcc for Sent copy', /^Bcc:.*boss@zito\.test/im.test(bccHead));
+}
+
+{
+  const { adjustUnseenForSeenChange } = await import('../server/repo.js');
+  const { db } = await import('../server/db.js');
+  const mb = db.prepare('SELECT id FROM mailboxes LIMIT 1').get();
+  const path = '__UT_UNSEEN__';
+  if (!mb) {
+    assert('adjustUnseen skipped (no mailbox)', true);
+  } else {
+    const mid = String(mb.id);
+    try {
+      db.prepare('DELETE FROM folders WHERE mailbox_id = ? AND path = ?').run(mid, path);
+      db.prepare(
+        `INSERT INTO folders (mailbox_id, path, name, delimiter, special_use, uidvalidity, total, unseen, last_sync)
+         VALUES (?, ?, 'UT', '/', NULL, 1, 10, 5, 0)`
+      ).run(mid, path);
+      adjustUnseenForSeenChange(
+        [
+          { mailbox_id: mid, folder: path, seen: 0 },
+          { mailbox_id: mid, folder: path, seen: 0 },
+          { mailbox_id: mid, folder: path, seen: 1 },
+        ],
+        true
+      );
+      let u = db.prepare('SELECT unseen FROM folders WHERE mailbox_id = ? AND path = ?').get(mid, path);
+      assert('adjustUnseen read decrements only was-unread', Number(u?.unseen) === 3, `got ${u?.unseen}`);
+      adjustUnseenForSeenChange(
+        [
+          { mailbox_id: mid, folder: path, seen: 1 },
+          { mailbox_id: mid, folder: path, seen: 1 },
+        ],
+        false
+      );
+      u = db.prepare('SELECT unseen FROM folders WHERE mailbox_id = ? AND path = ?').get(mid, path);
+      assert('adjustUnseen unread increments', Number(u?.unseen) === 5, `got ${u?.unseen}`);
+    } finally {
+      db.prepare('DELETE FROM folders WHERE mailbox_id = ? AND path = ?').run(mid, path);
+    }
+  }
+}
+
+{
   const { sealDesktopSecret, unsealDesktopSecret } = await import('../server/desktop_boot.js');
   const sealed = sealDesktopSecret('super-secret-token-xyz');
   assert('desk seal prefix', sealed.startsWith('d1.'));

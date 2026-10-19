@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, Menu, CheckCircle2 } from 'lucide-react';
 import { api, qs } from './api.js';
-import { putMessageCache } from './messageCache.js';
+import { getMessageCache, putMessageCache } from './messageCache.js';
 import { enqueueAction, flushActionQueue, actionQueueLength, peekActionQueue, QUEUEABLE_ACTIONS } from './actionQueue.js';
 import { parseMessageDeepLink } from '../../server/mail_links.js';
 import { latestComposeWal, clearComposeWal, walToComposeInitial } from './composeWal.js';
@@ -845,6 +845,7 @@ export default function App() {
     const t = setTimeout(() => {
       if (cancelled || typeof navigator !== 'undefined' && navigator.onLine === false) return;
       neighbors.forEach((m) => {
+        if (getMessageCache(m.id)) return;
         api(`/messages/${m.id}?markSeen=0`)
           .then((d) => putMessageCache(m.id, d))
           .catch(() => {});
