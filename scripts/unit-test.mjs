@@ -16,7 +16,10 @@ import {
   suggestFollowAction,
   aggregateFollowupsByCustomer,
   followGroupKey,
+  slimFocusPayload,
+  FOCUS_LIST_CAP,
 } from '../server/priority.js';
+import { checkEmailDomain } from '../server/deliverability.js';
 import { matchCondition, matchRule } from '../server/mail_rules.js';
 import {
   scopeFromAddress, resolveScopes, isValidStage, stageMeta, STAGES, suggestStageAfterSend,
@@ -175,6 +178,46 @@ assert('timeline need_reply', decReply.status === 'need_reply');
 
 // ---------- domain helpers ----------
 assert('domainOf', domainOf('A@Acme.com') === 'acme.com');
+
+// ---------- Focus 首包瘦身 ----------
+{
+  const fat = {
+    reply: Array.from({ length: 12 }, (_, i) => ({
+      id: i + 1,
+      subject: `S${i}`,
+      snippet: 'x'.repeat(400),
+      bodyPreview: 'y'.repeat(200),
+      html: '<p>z</p>',
+      priority: { score: 1, why: 'w', overdue: false, hits: [], reasons: ['r'] },
+      siblingCount: 0,
+    })),
+    followups: Array.from({ length: 5 }, (_, i) => ({
+      id: 100 + i,
+      subject: `F${i}`,
+      snippet: 'f'.repeat(300),
+      follow: { why: 'wait', urgency: 'soft' },
+    })),
+    todayUnreplied: [],
+    olderUnreplied: [],
+    overdueList: [],
+    stats: { needReply: 12, followups: 5 },
+  };
+  const slim = slimFocusPayload(fat, { replyCap: 3, followCap: 2 });
+  assert('slimFocus caps reply', slim.reply.length === 3);
+  assert('slimFocus caps follow', slim.followups.length === 2);
+  assert('slimFocus listMeta totals', slim.listMeta.replyTotal === 12 && slim.listMeta.followTotal === 5);
+  assert('slimFocus truncated', slim.listMeta.truncated === true);
+  assert('slimFocus drops heavy fields', !slim.reply[0].html && !slim.reply[0].bodyPreview);
+  assert('slimFocus keeps id/subject', slim.reply[0].id === 1 && slim.reply[0].subject === 'S0');
+  assert('slimFocus trims snippet', slim.reply[0].snippet.length <= 180);
+  assert('FOCUS_LIST_CAP positive', FOCUS_LIST_CAP >= 50);
+}
+
+// ---------- 投递力单域名（无 DNS 时可空，有结果则结构正确）----------
+{
+  const r = await checkEmailDomain('not-an-email');
+  assert('checkEmailDomain empty', r == null);
+}
 assert('free gmail', isFreeDomain('gmail.com'));
 assert('corp not free', !isFreeDomain('acme-apparel.com'));
 assert('normalize email', normalizeKey('Buyer@Acme.com') === 'buyer@acme.com');

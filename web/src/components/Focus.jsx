@@ -67,7 +67,10 @@ export default function Focus({
   const multi = Object.keys(mailboxMap).length > 1;
   const overdue = reply.filter((m) => m.priority?.overdue).length;
   const handled = stats?.handledToday || 0;
-  const total = handled + reply.length;
+  const replyTotal = data?.listMeta?.replyTotal ?? stats?.needReply ?? reply.length;
+  const followTotal = data?.listMeta?.followTotal ?? stats?.followups ?? follow.length;
+  const listTruncated = !!data?.listMeta?.truncated;
+  const total = handled + replyTotal;
   const pct = total ? Math.round((handled / total) * 100) : 100;
 
   const [headOpen, setHeadOpen] = useState(() => {
@@ -333,20 +336,25 @@ export default function Focus({
           </button>
         </div>
 
-        {(reply.length > 0 || follow.length > 0 || overdue > 0 || (stats?.todayUnreplied || 0) > 0) && (
+        {listTruncated && data?.listMeta && (
+          <div className="focus-trunc-hint" role="status">
+            列表已截断显示前 {data.listMeta.replyCap}/{data.listMeta.followCap} 封（待回 {replyTotal} · 待跟 {followTotal}）；角标仍为全量。
+          </div>
+        )}
+        {(replyTotal > 0 || followTotal > 0 || overdue > 0 || (stats?.todayUnreplied || 0) > 0) && (
           <div className={'focus-summary-bar' + (headOpen ? ' open' : '')}>
             <div className="focus-summary-stats" role="toolbar" aria-label="待办分段筛选">
               <button type="button" className={'fs-pill' + ((stats?.todayUnreplied || 0) ? ' danger' : '') + (bucket === 'today' ? ' on' : '')} onClick={() => selectBucket('today')} title="只看今天收到仍未回的">
                 今日未回 <b>{stats?.todayUnreplied ?? todayReply.length}</b>
               </button>
               <button type="button" className={'fs-pill' + (bucket === 'reply' ? ' on' : '')} onClick={() => selectBucket('reply')} title="全部仍待你回复的">
-                全部待回 <b>{reply.length}</b>
+                全部待回 <b>{replyTotal}</b>
               </button>
               <button type="button" className={'fs-pill' + (overdue ? ' danger' : '') + (bucket === 'overdue' ? ' on' : '')} onClick={() => selectBucket('overdue')} title={`已超过 SLA（VIP ${slaTier.vip}h / 客户 ${slaTier.customer}h / 询盘 ${slaTier.inquiry}h）`}>
                 已超时 <b>{overdue}</b>
               </button>
-              <button type="button" className={'fs-pill' + (follow.length ? ' warn' : '') + (bucket === 'follow' ? ' on' : '')} onClick={() => selectBucket('follow')} title="你已发出、对方未回">
-                待跟进 <b>{follow.length}</b>
+              <button type="button" className={'fs-pill' + (followTotal ? ' warn' : '') + (bucket === 'follow' ? ' on' : '')} onClick={() => selectBucket('follow')} title="你已发出、对方未回">
+                待跟进 <b>{followTotal}</b>
               </button>
             </div>
             <button type="button" className="fs-expand" onClick={toggleHead} aria-expanded={headOpen} title={headOpen ? '收起明细' : '展开明细'}>
@@ -375,13 +383,13 @@ export default function Focus({
                 <b>{stats?.todayUnreplied ?? todayReply.length}</b><span>今日未回</span>
               </button>
               <button type="button" className={'stat' + (bucket === 'reply' ? ' on' : '')} onClick={() => selectBucket('reply')} aria-pressed={bucket === 'reply'}>
-                <b>{reply.length}</b><span>全部待回</span>
+                <b>{replyTotal}</b><span>全部待回</span>
               </button>
               <button type="button" className={'stat' + (overdue ? ' danger' : '') + (bucket === 'overdue' ? ' on' : '')} onClick={() => selectBucket('overdue')} aria-pressed={bucket === 'overdue'} title={`VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 新询盘 ${slaTier.inquiry}h`}>
                 <b>{overdue}</b><span>已超时</span>
               </button>
-              <button type="button" className={'stat' + (follow.length ? ' warn' : '') + (bucket === 'follow' ? ' on' : '')} onClick={() => selectBucket('follow')} aria-pressed={bucket === 'follow'}>
-                <b>{follow.length}</b><span>待跟进</span>
+              <button type="button" className={'stat' + (followTotal ? ' warn' : '') + (bucket === 'follow' ? ' on' : '')} onClick={() => selectBucket('follow')} aria-pressed={bucket === 'follow'}>
+                <b>{followTotal}</b><span>待跟进</span>
               </button>
             </div>
             <div className={'focus-progress' + (pct === 100 && total ? ' done' : '')} title="今日已回复或标记处理的客户邮件">

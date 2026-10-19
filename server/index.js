@@ -2064,6 +2064,11 @@ app.get(
   '/api/deliverability',
   auth,
   wrap(async (req, res) => {
+    const email = String(req.query.email || '').trim();
+    if (email) {
+      const check = await deliverability.checkEmailDomain(email);
+      return res.json({ email, check, generatedAt: Date.now() });
+    }
     res.json(await deliverability.reportForUser(req.user.id));
   })
 );

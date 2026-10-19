@@ -18,7 +18,8 @@ export function registerFocusRoutes(app, ctx) {
       });
       data.reply = labels.attachLabels(req.user.id, data.reply || []);
       data.followups = labels.attachLabels(req.user.id, data.followups || []);
-      res.json(data);
+      // 瘦身：截断列表 + 去掉重量字段，角标 stats 仍按全量
+      res.json(priority.slimFocusPayload(data));
     })
   );
 

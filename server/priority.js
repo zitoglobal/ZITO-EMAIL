@@ -803,6 +803,101 @@ export function focus(userId, settings = {}, { mailboxId = 'all', dayStart } = {
   };
 }
 
+/** 今日待办列表默认上限（stats / brief 仍按全量计） */
+export const FOCUS_LIST_CAP = 100;
+
+function slimFocusPriority(p) {
+  if (!p) return p;
+  return {
+    score: p.score,
+    level: p.level,
+    tier: p.tier,
+    overdue: p.overdue,
+    waitingHours: p.waitingHours,
+    slaHours: p.slaHours,
+    why: p.why,
+    hits: Array.isArray(p.hits) ? p.hits.slice(0, 6) : [],
+    company: p.company,
+    claimedBoost: p.claimedBoost,
+  };
+}
+
+function slimFocusFollow(f) {
+  if (!f) return f;
+  return {
+    ...f,
+    hits: Array.isArray(f.hits) ? f.hits.slice(0, 6) : f.hits,
+    signals: Array.isArray(f.signals) ? f.signals.slice(0, 8) : f.signals,
+  };
+}
+
+function slimFocusMessage(m) {
+  if (!m) return m;
+  const note = m.aiNote;
+  return {
+    id: m.id,
+    mailboxId: m.mailboxId,
+    folder: m.folder,
+    messageId: m.messageId,
+    threadId: m.threadId,
+    subject: m.subject,
+    from: m.from,
+    to: m.to,
+    date: m.date,
+    sortTs: m.sortTs,
+    seen: m.seen,
+    flagged: m.flagged,
+    answered: m.answered,
+    hasAttachments: m.hasAttachments,
+    snippet: m.snippet ? String(m.snippet).slice(0, 180) : '',
+    category: m.category,
+    pinned: m.pinned,
+    snoozeUntil: m.snoozeUntil,
+    threadCount: m.threadCount,
+    specialUse: m.specialUse,
+    signals: m.signals,
+    doneAt: m.doneAt,
+    nudgeOff: m.nudgeOff,
+    aiNote: note
+      ? {
+          summary: note.summary || note.text || note.note || '',
+          actions: note.actions,
+        }
+      : null,
+    priority: slimFocusPriority(m.priority),
+    follow: slimFocusFollow(m.follow),
+    deal: m.deal,
+    labels: m.labels,
+    remindStage: m.remindStage,
+    receivedToday: m.receivedToday,
+    isOverdue: m.isOverdue,
+    focusBucket: m.focusBucket,
+    siblingCount: m.siblingCount,
+    waitingHours: m.waitingHours,
+  };
+}
+
+/** API 输出：截断列表 + 去掉重量字段，stats 仍反映全量 */
+export function slimFocusPayload(data, { replyCap = FOCUS_LIST_CAP, followCap = FOCUS_LIST_CAP } = {}) {
+  const reply = data.reply || [];
+  const followups = data.followups || [];
+  return {
+    ...data,
+    reply: reply.slice(0, replyCap).map(slimFocusMessage),
+    followups: followups.slice(0, followCap).map(slimFocusMessage),
+    todayUnreplied: (data.todayUnreplied || []).slice(0, 40),
+    olderUnreplied: (data.olderUnreplied || []).slice(0, 40),
+    overdueList: (data.overdueList || []).slice(0, 40),
+    listMeta: {
+      replyTotal: reply.length,
+      followTotal: followups.length,
+      replyCap,
+      followCap,
+      truncated: reply.length > replyCap || followups.length > followCap,
+    },
+  };
+}
+
 /**
  * 单封验真：是否在今日待办/等待，以及进/出原因（供 UI 与排查）
  * hits / outHits：结构化规则命中，便于点开验真

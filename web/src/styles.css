@@ -1472,6 +1472,12 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
   position: absolute; top: 4px; right: 4px;
   width: 6px; height: 6px; border-radius: 50%; background: var(--selvedge);
 }
+.focus-trunc-hint {
+  width: 100%; margin: 0 0 8px; padding: 6px 10px; border-radius: var(--r);
+  font-size: 12px; line-height: 1.4; color: var(--muted);
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel-2));
+  border: 1px solid color-mix(in srgb, var(--warn) 28%, var(--hairline));
+}
 .focus-filter-banner {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%;
   padding: 7px 10px; border-radius: var(--r);
@@ -2270,6 +2276,18 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .c-head-actions button svg { stroke-width: var(--icon-stroke); }
 .c-head-actions button:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 .c-head-actions button:active { transform: scale(0.94); }
+.c-deliver-hint {
+  display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
+  padding: 8px 16px; font-size: 12.5px; line-height: 1.4; color: var(--muted);
+  border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--warn) 10%, var(--panel));
+}
+.c-deliver-hint.level-bad {
+  background: color-mix(in srgb, var(--selvedge) 10%, var(--panel));
+  color: color-mix(in srgb, var(--selvedge) 55%, var(--text));
+}
+.c-deliver-hint > span { flex: 1; min-width: 160px; }
+.c-deliver-hint .c-link { flex: none; white-space: nowrap; }
 .c-row { display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--hairline); min-height: 42px; flex: none; }
 .c-label { color: var(--faint); font-size: 13px; width: 46px; flex: none; }
 .c-input-wrap { flex: 1; position: relative; }

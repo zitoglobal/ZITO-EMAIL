@@ -139,11 +139,35 @@ export default function Composer({ initial, walKey, mailboxes, aiEnabled, aiMeta
   const [templates, setTemplates] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deliverCheck, setDeliverCheck] = useState(null);
+  const [deliverDismissedFor, setDeliverDismissedFor] = useState('');
   const editor = useRef();
   const fileInput = useRef();
   const dirty = useRef(false);
   const mailbox = mailboxes.find((m) => m.id === mailboxId) || mailboxes[0];
   const isReply = initial.mode === 'reply' || initial.mode === 'replyAll';
+
+  useEffect(() => {
+    const email = mailbox?.email;
+    if (!email || deliverDismissedFor === email) {
+      setDeliverCheck(null);
+      return;
+    }
+    let alive = true;
+    api('/deliverability?email=' + encodeURIComponent(email))
+      .then((r) => {
+        if (!alive) return;
+        const check = r?.check;
+        if (check && (check.level === 'bad' || check.level === 'warn')) setDeliverCheck({ email, ...check });
+        else setDeliverCheck(null);
+      })
+      .catch(() => {
+        if (alive) setDeliverCheck(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [mailbox?.email, deliverDismissedFor]);
 
   useEffect(() => {
     editor.current.innerHTML = initial.body ?? `<div><br></div><br>${signatureHtml(mailbox?.signature)}`;
@@ -537,9 +561,22 @@ export default function Composer({ initial, walKey, mailboxes, aiEnabled, aiMeta
     const imageItems = items.filter((i) => i.type.startsWith('image/'));
     if (imageItems.length) {
       e.preventDefault();
-      for (const item of imageItems) {
-        const f = item.getAsFile();
-        if (f) await insertInlineImage(f);
+      // Alt：插入正文（旧行为）；默认进附件，避免开发信 HTML 膨胀进垃圾箱
+      if (e.altKey) {
+        for (const item of imageItems) {
+          const f = item.getAsFile();
+          if (f) await insertInlineImage(f);
+        }
+        return;
+      }
+      const imgs = imageItems.map((i) => i.getAsFile()).filter(Boolean).map((f, idx) => {
+        if (f.name && f.name !== 'image.png') return f;
+        const ext = (f.type || 'image/png').split('/')[1] || 'png';
+        return new File([f], `paste-${Date.now()}-${idx + 1}.${ext}`, { type: f.type || 'image/png' });
+      });
+      if (imgs.length) {
+        addFiles(imgs);
+        notify(`已将 ${imgs.length} 张图片添加为附件（按住 Alt 粘贴可插入正文）`, 'info', null, 5000);
       }
       return;
     }
@@ -550,7 +587,7 @@ export default function Composer({ initial, walKey, mailboxes, aiEnabled, aiMeta
       touch();
       return;
     }
-    const clipFiles = [...(e.clipboardData?.files || [])].filter((f) => !String(f.type || '').startsWith('image/'));
+    const clipFiles = [...(e.clipboardData?.files || [])];
     if (clipFiles.length) {
       e.preventDefault();
       addFiles(clipFiles);
@@ -608,6 +645,28 @@ export default function Composer({ initial, walKey, mailboxes, aiEnabled, aiMeta
               ))}
             </select>
           </div>
+        </div>
+      )}
+      {deliverCheck && (
+        <div className={'c-deliver-hint level-' + deliverCheck.level} role="status">
+          <span>
+            {deliverCheck.level === 'bad' ? '发信域名投递风险较高' : '发信域名投递力需关注'}
+            （{deliverCheck.domain}）
+            {(() => {
+              const tips = (deliverCheck.tips || []).filter((t) => !/齐全/.test(t)).slice(0, 2);
+              return tips.length ? ` · ${tips.join('；')}` : '';
+            })()}
+          </span>
+          {typeof onOpenSettings === 'function' && (
+            <button type="button" className="c-link" onClick={() => onOpenSettings('deliverability')}>去设置</button>
+          )}
+          <button
+            type="button"
+            className="c-link"
+            onClick={() => setDeliverDismissedFor(deliverCheck.email || mailbox?.email || '')}
+          >
+            知道了
+          </button>
         </div>
       )}
       <RecipientInput
@@ -744,7 +803,7 @@ export default function Composer({ initial, walKey, mailboxes, aiEnabled, aiMeta
           <button
             type="button"
             onClick={() => inlineImgInput.current?.click()}
-            title="插入正文图片（非附件）"
+            title="插入正文图片（非附件；粘贴默认进附件，Alt+粘贴插入正文）"
             disabled={imgBusy}
           >
             {imgBusy ? <Icon as={Loader2} {...ICON_MD} className="spin" /> : <Icon as={Image} {...ICON_MD} />}

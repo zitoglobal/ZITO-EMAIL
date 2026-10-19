@@ -70,6 +70,13 @@ async function checkDomain(domain) {
   return result;
 }
 
+/** 单邮箱域名快检（写信发前提示） */
+export async function checkEmailDomain(email) {
+  const domain = domainOfEmail(email);
+  if (!domain) return null;
+  return checkDomain(domain);
+}
+
 /** 当前用户各发信域名的投递力摘要 */
 export async function reportForUser(userId) {
   const mbs = db.prepare('SELECT id, email, name FROM mailboxes WHERE user_id = ?').all(userId);
