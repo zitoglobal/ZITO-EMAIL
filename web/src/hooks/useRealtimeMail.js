@@ -180,7 +180,14 @@ export function useRealtimeMail({
     es.addEventListener('outbox', (e) => {
       const d = parse(e);
       if (d.status === 'sent') notify('邮件已发送 ✓', 'success');
-      if (d.status === 'failed') notify(`发送失败：${d.error}（可在「定时发送」中重试）`, 'error', null, 10_000);
+      if (d.status === 'failed') {
+        notify(
+          `发送失败：${d.error || '未知错误'}`,
+          'error',
+          { label: '打开发送队列', fn: () => goBoxRef.current?.('scheduled') },
+          12_000
+        );
+      }
       if (d.status === 'retry') {
         notify(`发送暂时失败，将自动重试（${d.tries}/2）：${d.error || ''}`, 'info', null, 8_000);
       }

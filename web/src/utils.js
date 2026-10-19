@@ -108,7 +108,7 @@ export const SMART_VIEWS = {
   unread: '未读邮件',
   flagged: '星标邮件',
   snoozed: '稍后处理',
-  scheduled: '定时发送',
+  scheduled: '发送队列',
   sent: '已发送',
   drafts: '草稿箱',
   archive: '归档',

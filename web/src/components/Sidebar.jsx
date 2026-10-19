@@ -31,7 +31,7 @@ const MAILBOX_PRIMARY = [
 /** L2 更多 — collapsed by default */
 const MAILBOX_MORE = [
   { box: 'snoozed', label: '稍后处理', icon: Clock },
-  { box: 'scheduled', label: '定时发送', icon: CalendarClock },
+  { box: 'scheduled', label: '发送队列', icon: CalendarClock },
   { box: 'sent', label: '已发送', icon: Send, multiOnly: true },
   { box: 'drafts', label: '草稿箱', icon: FileText, multiOnly: true },
 ];
@@ -124,12 +124,14 @@ export default function Sidebar({
     const label = multi || s.box !== 'inbox' ? s.label : '收件箱';
     const overdue =
       (s.box === 'today' && (counts.focus?.overdue > 0 || counts.focus?.todayUnreplied > 0)) ||
-      (s.box === 'team' && counts.team?.overdue > 0);
+      (s.box === 'team' && counts.team?.overdue > 0) ||
+      (s.box === 'scheduled' && (counts.outboxFailed || 0) > 0);
     const waitingSplit =
       s.box === 'waiting' &&
       (typeof counts.focus?.waitingMine === 'number' || typeof counts.focus?.waitingThem === 'number');
     const countLabel = fmtCount(n);
-    const showPill = (s.box === 'today' || s.box === 'waiting' || s.box === 'team') && n > 0;
+    const showPill =
+      (s.box === 'today' || s.box === 'waiting' || s.box === 'team' || s.box === 'scheduled') && n > 0;
     const todayTitle =
       s.box === 'today'
         ? `今日未回 ${counts.focus?.todayUnreplied || 0} · 待回 ${counts.focus?.needReply || 0} · 超时 ${counts.focus?.overdue || 0} · 跟进 ${counts.focus?.followups || 0}`
@@ -169,9 +171,11 @@ export default function Sidebar({
           <span
             className="count-pill alert"
             title={
-              s.box === 'team'
-                ? `${counts.team.overdue} 条公海已超时未认领`
-                : `${counts.focus.overdue} 封已超过回复时限`
+              s.box === 'scheduled'
+                ? `${counts.outboxFailed} 封发送失败，点此重试`
+                : s.box === 'team'
+                  ? `${counts.team.overdue} 条公海已超时未认领`
+                  : `${counts.focus.overdue} 封已超过回复时限`
             }
           >
             {countLabel}

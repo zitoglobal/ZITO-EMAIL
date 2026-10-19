@@ -27,7 +27,7 @@ import { isBlockedHostname, assertSafeAiBaseUrl } from '../server/net_guard.js';
 import { sanitizeMailHtml, scrubStyleAttr } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
-import { conversationKey, isSqliteCorrupt } from '../server/repo.js';
+import { conversationKey, ftsEscape, isSqliteCorrupt } from '../server/repo.js';
 import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER } from '../server/imap.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
@@ -629,6 +629,15 @@ assert('isSqliteCorrupt SQLITE_CORRUPT', isSqliteCorrupt({ message: 'SQLITE_CORR
 assert('isSqliteCorrupt contentless', isSqliteCorrupt(new Error('cannot DELETE from contentless fts5 table: messages_fts')));
 assert('isSqliteCorrupt legacy trigger cols', isSqliteCorrupt(new Error('table messages_fts has no column named from_name')));
 assert('isSqliteCorrupt ignores other', !isSqliteCorrupt(new Error('UNIQUE constraint failed')));
+
+// ---------- FTS5 CJK / 款号（unicode61 勿整词引号）----------
+assert('ftsEscape CJK NEAR', ftsEscape('询盘报价') === '询 NEAR/1 盘 NEAR/1 报 NEAR/1 价');
+assert('ftsEscape single CJK', ftsEscape('款') === '款');
+assert('ftsEscape style code prefix', ftsEscape('ZS-2401') === '"ZS"* "2401"*');
+assert('ftsEscape latin phrase', ftsEscape('cotton jersey') === '"cotton"* "jersey"*');
+assert('ftsEscape mixed CJK+latin', ftsEscape('报价 PO123').includes('报 NEAR/1 价') && ftsEscape('报价 PO123').includes('"PO123"*'));
+assert('ftsEscape strips input quotes', ftsEscape('ab"cd') === '"ab"* "cd"*');
+assert('ftsEscape empty', ftsEscape('   ') === '');
 
 {
   let aiHttpRejected = false;

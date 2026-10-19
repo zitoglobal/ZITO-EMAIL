@@ -148,13 +148,35 @@ export default function App() {
   const selectedItem = allItems.find((m) => m.id === selectedId) || null;
 
   // ---------- 通知 ----------
+  /** 最近一次可撤销操作（toast「撤销」或快捷键 Z） */
+  const lastUndoRef = useRef(null);
   const notify = useCallback((text, type = 'info', action, ttl = 4000) => {
     const id = Math.random().toString(36).slice(2);
+    if (action?.fn && action.label === '撤销') {
+      lastUndoRef.current = { id, fn: action.fn, expires: Date.now() + ttl };
+    }
     setToasts((t) => [...t.slice(-3), { id, text, type, action }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), ttl);
+    setTimeout(() => {
+      setToasts((t) => t.filter((x) => x.id !== id));
+      if (lastUndoRef.current?.id === id) lastUndoRef.current = null;
+    }, ttl);
     return id;
   }, []);
-  const dismiss = (id) => setToasts((t) => t.filter((x) => x.id !== id));
+  const dismiss = (id) => {
+    setToasts((t) => t.filter((x) => x.id !== id));
+    if (lastUndoRef.current?.id === id) lastUndoRef.current = null;
+  };
+  const runLastUndo = useCallback(() => {
+    const u = lastUndoRef.current;
+    if (!u || Date.now() > u.expires) {
+      lastUndoRef.current = null;
+      return false;
+    }
+    lastUndoRef.current = null;
+    dismiss(u.id);
+    u.fn();
+    return true;
+  }, []);
 
   const railAllowed = layoutMode === 'sales' && viewportW >= LAYOUT_LIMITS.salesRailMinViewport;
   const openCustomer = useCallback((address, detailOrSender) => {
@@ -1236,6 +1258,7 @@ export default function App() {
         ArrowDown: () => step(1),
         k: () => step(-1),
         ArrowUp: () => step(-1),
+        z: () => runLastUndo(),
         '?': () => setModal({ type: 'help' }),
       };
       const onSelected = {
@@ -1431,7 +1454,7 @@ export default function App() {
         />
       )}
 
-      {showStatusStrip ? (
+      {showAlertStrip ? (
         <div className={'mb-sync-strip' + (!netOnline || syncBad.length ? ' err' : '')} role="status">
           {!netOnline ? (
             <>
@@ -1917,7 +1940,11 @@ export default function App() {
             <span>{t.text}</span>
             {t.action && (
               <button
+                type="button"
                 onClick={() => {
+                  if (t.action.label === '撤销' && lastUndoRef.current?.id === t.id) {
+                    lastUndoRef.current = null;
+                  }
                   dismiss(t.id);
                   t.action.fn();
                 }}

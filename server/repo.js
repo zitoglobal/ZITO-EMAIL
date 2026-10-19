@@ -272,14 +272,36 @@ export function backfillSignals() {
   )();
 }
 
-function ftsEscape(term) {
-  return String(term || '')
-    .replace(/["']/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((t) => `"${t.replace(/"/g, '')}"`)
-    .join(' ');
+/**
+ * FTS5 MATCH 片段。unicode61 对 CJK 按字切词：整词加引号常 0 命中。
+ * CJK → NEAR/1；款号/英文 → 分段 + 前缀。
+ */
+export function ftsEscape(term) {
+  const raw = String(term || '')
+    .replace(/["*]/g, ' ')
+    .trim();
+  if (!raw) return '';
+  const chars = [...raw];
+  const cjk = chars.filter((ch) => /[\u3400-\u9fff]/.test(ch));
+  const nonSpace = chars.filter((ch) => !/\s/.test(ch));
+  // 纯中日韩（可夹空白）
+  if (cjk.length && cjk.length === nonSpace.length) {
+    if (cjk.length === 1) return cjk[0];
+    return cjk.join(' NEAR/1 ');
+  }
+  // 中英混排：CJK 邻近 + 拉丁分段
+  if (cjk.length >= 2) {
+    const latin = raw
+      .replace(/[\u3400-\u9fff]/g, ' ')
+      .split(/[^0-9a-zA-Z]+/i)
+      .filter(Boolean);
+    const bits = [cjk.join(' NEAR/1 ')];
+    for (const t of latin) bits.push(t.length >= 2 ? `"${t}"*` : `"${t}"`);
+    return bits.join(' ');
+  }
+  const parts = raw.split(/[^0-9a-zA-Z]+/i).filter(Boolean);
+  if (!parts.length) return '';
+  return parts.map((t) => (t.length >= 2 ? `"${t}"*` : `"${t}"`)).join(' ');
 }
 
 /** SQLite / FTS 损坏或 contentless 误建（删信、丢弃草稿常踩中） */
@@ -395,11 +417,22 @@ export function searchFtsIds(terms = [], limit = 500) {
     const n = db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get().n;
     if (!n) return null; // 尚未建索引 → LIKE
     return db
-      .prepare(`SELECT rowid AS id FROM messages_fts WHERE messages_fts MATCH ? LIMIT ?`)
+      .prepare(
+        `SELECT rowid AS id FROM messages_fts WHERE messages_fts MATCH ?
+         ORDER BY bm25(messages_fts) LIMIT ?`
+      )
       .all(q, limit)
       .map((r) => r.id);
   } catch {
-    return null;
+    // 旧 MATCH 语法失败时回退无排序
+    try {
+      return db
+        .prepare(`SELECT rowid AS id FROM messages_fts WHERE messages_fts MATCH ? LIMIT ?`)
+        .all(q, limit)
+        .map((r) => r.id);
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -765,10 +798,20 @@ export function counts(userId) {
   const snoozed = db
     .prepare('SELECT COUNT(*) n FROM messages m JOIN mailboxes b ON b.id = m.mailbox_id WHERE b.user_id = ? AND m.snooze_until IS NOT NULL')
     .get(userId).n;
-  const scheduled = db
-    .prepare("SELECT COUNT(*) n FROM outbox WHERE user_id = ? AND (status = 'failed' OR (status = 'scheduled' AND send_at - created_at > 65000))")
+  const outboxFailed = db
+    .prepare("SELECT COUNT(*) n FROM outbox WHERE user_id = ? AND status = 'failed'")
     .get(userId).n;
-  return { unifiedUnread: inbox.reduce((s, r) => s + r.unseen, 0), snoozed, scheduled };
+  const scheduled = db
+    .prepare(
+      "SELECT COUNT(*) n FROM outbox WHERE user_id = ? AND ((status = 'scheduled' AND send_at - created_at > 65000) OR status = 'sending')"
+    )
+    .get(userId).n;
+  return {
+    unifiedUnread: inbox.reduce((s, r) => s + r.unseen, 0),
+    snoozed,
+    scheduled: scheduled + outboxFailed,
+    outboxFailed,
+  };
 }
 
 // ---------- 正文缓存 ----------

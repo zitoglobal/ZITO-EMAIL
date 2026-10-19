@@ -47,8 +47,12 @@ export default function Outbox({ mailboxMap, onMenu, onEdit, notify, version, on
         <div className="list-title-row">
           <button className="icon-btn mobile-only" onClick={onMenu}><Menu size={18} /></button>
           <div className="list-title">
-            <h2>定时发送</h2>
-            <small>到点后由服务器自动发出，关闭浏览器也不影响</small>
+            <h2>发送队列</h2>
+            <small>
+              {items?.some((it) => it.status === 'failed')
+                ? `${items.filter((it) => it.status === 'failed').length} 封发送失败，可重试或改时间`
+                : '定时与重试队列；到点由服务器发出，关闭浏览器也不影响'}
+            </small>
           </div>
           <button className="icon-btn" onClick={load} title="刷新"><RefreshCw size={16} /></button>
         </div>
