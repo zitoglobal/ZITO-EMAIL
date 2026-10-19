@@ -207,14 +207,18 @@ export default function Focus({
     });
   };
 
-  const groupSizes = useMemo(() => {
+  /** 按客户头：预聚合计数，避免 render 内 O(n²) filter/some */
+  const groupMeta = useMemo(() => {
     const map = new Map();
-    for (const m of filteredReply) {
-      const k = m.priority.company?.key;
-      map.set(k, (map.get(k) || 0) + 1);
+    for (const m of viewReply) {
+      const k = m.priority?.company?.key;
+      const cur = map.get(k) || { count: 0, hasToday: false };
+      cur.count += 1;
+      if (m.receivedToday || m.focusBucket === 'today') cur.hasToday = true;
+      map.set(k, cur);
     }
     return map;
-  }, [filteredReply]);
+  }, [viewReply]);
 
   const setClaim = (v) => {
     setClaimFilter(v);
@@ -621,10 +625,8 @@ export default function Focus({
                   <b>{m.priority.company?.name}</b>
                   {m.priority.tier === 'vip' && <Crown size={12} className="vip-icon" />}
                   {m.priority.company?.domain && <small>{m.priority.company.domain}</small>}
-                  <span className="cust-count">{viewReply.filter((x) => x.priority?.company?.key === k).length} 封</span>
-                  {viewReply.some((x) => x.priority?.company?.key === k && x.receivedToday) && (
-                    <span className="cust-today-tag">含今日</span>
-                  )}
+                  <span className="cust-count">{groupMeta.get(k)?.count || 0} 封</span>
+                  {groupMeta.get(k)?.hasToday && <span className="cust-today-tag">含今日</span>}
                 </div>
               )}
               <Row {...rowProps(m, 'reply')} />

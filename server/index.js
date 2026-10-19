@@ -1036,8 +1036,28 @@ async function loadBody(row, { force = false } = {}) {
   return { ...body, signals };
 }
 
+/** 用户刚标未读后，短暂抑制迟到的 POST /seen（读信竞态） */
+const suppressSeenUntil = new Map();
+
+function noteUnreadSuppress(ids = []) {
+  const until = Date.now() + 30_000;
+  for (const id of ids) {
+    const n = Number(id);
+    if (Number.isInteger(n)) suppressSeenUntil.set(n, until);
+  }
+  if (suppressSeenUntil.size > 2000) {
+    const nowMs = Date.now();
+    for (const [k, exp] of suppressSeenUntil) {
+      if (exp <= nowMs) suppressSeenUntil.delete(k);
+    }
+  }
+}
+
 function markSeen(row) {
   if (row.seen) return;
+  const until = suppressSeenUntil.get(row.id);
+  if (until && Date.now() < until) return;
+  suppressSeenUntil.delete(row.id);
   repo.patchMessages([row.id], { seen: 1 });
   db.prepare('UPDATE folders SET unseen = MAX(0, unseen - 1) WHERE mailbox_id = ? AND path = ?').run(row.mailbox_id, row.folder);
   imap.setFlags(repo.getMailboxById(row.mailbox_id), row.folder, [row.uid], { seen: true }).catch(() => {});
@@ -1271,6 +1291,8 @@ app.post(
       case 'read':
       case 'unread': {
         const seen = action === 'read';
+        if (!seen) noteUnreadSuppress(ids);
+        else ids.forEach((id) => suppressSeenUntil.delete(id));
         repo.patchMessages(ids, { seen: seen ? 1 : 0 });
         await each(async (g) => {
           const uids = g.rows.map((r) => r.uid);

@@ -43,7 +43,7 @@ const REWRITES = [
   ['zh', '译成中文', Languages],
 ];
 const MAX_TOTAL = 25 * 1024 * 1024;
-const AUTOSAVE_MS = 20_000;
+const AUTOSAVE_MS = 8_000;
 
 function RecipientInput({ label, value, onChange, autoFocus, right }) {
   const [sugs, setSugs] = useState([]);
@@ -154,15 +154,23 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 自动保存草稿
+  // 自动保存草稿（定时 + 切走标签页）
   const latest = useRef();
   latest.current = { saveDraft, hasContent, saving };
   useEffect(() => {
-    const t = setInterval(() => {
+    const flush = () => {
       const { saveDraft, hasContent, saving } = latest.current;
       if (dirty.current && hasContent() && !saving) saveDraft(true);
-    }, AUTOSAVE_MS);
-    return () => clearInterval(t);
+    };
+    const t = setInterval(flush, AUTOSAVE_MS);
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, []);
 
   function placeCaretAtStart(el) {
@@ -256,7 +264,8 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
       setSavedAt(Date.now());
       if (!silent) notify('草稿已保存');
     } catch (e) {
-      if (!silent) notify(e.message, 'error');
+      // 静默自动保存失败也要可见，避免长时间写信用丢稿
+      notify(silent ? `自动保存失败：${e.message}` : e.message, 'error', null, silent ? 6000 : 4000);
     } finally {
       setSaving(false);
     }

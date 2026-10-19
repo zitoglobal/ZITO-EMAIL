@@ -47,7 +47,7 @@ export default function Palette({
     let alive = true;
     setSearching(true);
     const t = setTimeout(() => {
-      api('/messages' + qs({ q: query, box: 'inbox', mailboxId: 'all', limit: 8 }))
+      api('/messages' + qs({ q: query, box: 'any', mailboxId: 'all', limit: 8 }))
         .then((r) => {
           if (alive) setRemote(r.messages || []);
         })
@@ -124,7 +124,27 @@ export default function Palette({
 
   return (
     <div className="palette-mask" onClick={onClose}>
-      <div className="palette" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="搜索与命令">
+      <div
+        className="palette"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="搜索与命令"
+        onKeyDown={(e) => {
+          if (e.key !== 'Tab' || !items.length) return;
+          const focusable = e.currentTarget.querySelectorAll('input,button.palette-item');
+          if (focusable.length < 2) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }}
+      >
         <div className="palette-input">
           <Search size={16} />
           <input

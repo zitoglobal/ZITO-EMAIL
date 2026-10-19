@@ -169,7 +169,7 @@ function Chips({ m, variant }) {
   return shown.length ? <div className="row-tags" title={all.length > 4 ? '更多状态已收起' : undefined}>{shown}</div> : null;
 }
 
-export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp, onMuteFollow, onClaim, claimBusy, onAiAction, aiActionBusy }) {
+function RowImpl({ m, mb, showMailbox, selected, checked, onSelect, onToggleCheck, onAction, isSent, compact, variant = 'mail', onFollowUp, onMuteFollow, onClaim, claimBusy, onAiAction, aiActionBusy }) {
   const [snooze, setSnooze] = useState(false);
   const follow = variant === 'follow';
   const focus = variant !== 'mail';
@@ -355,6 +355,8 @@ export function Row({ m, mb, showMailbox, selected, checked, onSelect, onToggleC
   );
 }
 
+export const Row = React.memo(RowImpl);
+
 export default function MailList({
   title, subtitle, view, mailboxMap, messages, pinned, loading, loadingMore, hasMore, onLoadMore, selectedId, onSelect,
   checked, setChecked, category, setCategory, showCategories, q, deep, onSearch, onRefresh, refreshing, onAction, moveFolders,
@@ -368,7 +370,10 @@ export default function MailList({
   const [bulkLabel, setBulkLabel] = useState(false);
   const searchRef = useRef();
   const sentinel = useRef();
+  const listBodyRef = useRef();
   const lastChecked = useRef(null);
+  const scrollKey = `${view.mailboxId || 'all'}:${view.box || ''}:${view.folder || ''}:${view.labelId || ''}:${q || ''}`;
+  const scrollPos = useRef(new Map());
   const showMailbox = (view.mailboxId || 'all') === 'all' && Object.keys(mailboxMap).length > 1;
   const isSent = view.box === 'sent' || (view.box === 'folder' && view.special === '\\Sent');
   const all = [...pinned, ...messages];
@@ -399,6 +404,21 @@ export default function MailList({
     if (!selectedId) return;
     document.querySelector(`.mail-row[data-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [selectedId]);
+
+  // 换箱/搜索前记下滚动；切回时恢复
+  useEffect(() => {
+    const el = listBodyRef.current;
+    if (!el) return undefined;
+    const y = scrollPos.current.get(scrollKey);
+    if (typeof y === 'number') el.scrollTop = y;
+    return () => {
+      scrollPos.current.set(scrollKey, el.scrollTop);
+      if (scrollPos.current.size > 40) {
+        const first = scrollPos.current.keys().next().value;
+        scrollPos.current.delete(first);
+      }
+    };
+  }, [scrollKey]);
 
   function toggleCheck(id, range) {
     const next = new Set(checked);
@@ -556,7 +576,7 @@ export default function MailList({
         </div>
       </header>
 
-      <div className="list-body">
+      <div className="list-body" ref={listBodyRef}>
         {error && <div className="list-error">{error}</div>}
         {loading && !all.length && (
           <div className="skeletons">

@@ -1220,12 +1220,20 @@ export default function App() {
   // ---------- 快捷键 ----------
   const keyState = useRef();
   const gPending = useRef(0);
-  keyState.current = { allItems, selectedId, selectedItem, currentMsg, modal, composers, checked };
+  keyState.current = { allItems, selectedId, selectedItem, currentMsg, modal, composers, checked, palette };
   useEffect(() => {
     const onKey = (e) => {
       const el = document.activeElement;
       if (e.ctrlKey || e.metaKey || e.altKey || /INPUT|TEXTAREA|SELECT/.test(el?.tagName) || el?.isContentEditable) return;
       const s = keyState.current;
+      // 命令面板打开时不抢 j/k 等全局快捷键（输入框外点到列表项时）
+      if (s.palette) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setPalette(false);
+        }
+        return;
+      }
       if (s.modal) {
         if (e.key === 'Escape') setModal(null);
         return;
@@ -1243,10 +1251,13 @@ export default function App() {
       const item = s.selectedItem || s.currentMsg;
       if (gPending.current && Date.now() - gPending.current < 1500) {
         gPending.current = 0;
-        const target = { t: 'today', w: 'today', i: 'inbox', u: 'unread', s: 'flagged', d: 'deals', a: 'insights', q: 'team' }[e.key];
+        const target = { t: 'today', w: 'waiting', i: 'inbox', u: 'unread', s: 'flagged', d: 'deals', a: 'insights', q: 'team' }[e.key];
         if (target) {
           e.preventDefault();
-          if (e.key === 'w') setFocusBucket('reply');
+          if (e.key === 'w') {
+            setWaitingTab('mine');
+            setFocusBucket('reply');
+          }
           setView({ mailboxId: 'all', box: target });
           return;
         }

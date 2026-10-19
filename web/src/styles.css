@@ -955,6 +955,8 @@ body.col-resizing iframe { pointer-events: none !important; }
 .mail-row {
   position: relative; display: flex; gap: 12px; padding: 11px 16px 11px 18px; cursor: pointer;
   transition: background 0.14s var(--ease-out);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
 }
 .mail-row::after { content: ''; position: absolute; left: 66px; right: 0; bottom: 0; height: 1px; background: var(--hairline); }
 .mail-row:hover { background: color-mix(in srgb, var(--panel-2) 88%, var(--accent-soft)); }
@@ -1023,7 +1025,7 @@ body.col-resizing iframe { pointer-events: none !important; }
 .mail-line1 .date { flex: none; min-width: 4.5em; text-align: right; }
 .mail-row:hover .mail-line1 .date { opacity: 0.35; }
 
-.mail-row.compact { padding-top: 8px; padding-bottom: 8px; align-items: center; }
+.mail-row.compact { padding-top: 8px; padding-bottom: 8px; align-items: center; contain-intrinsic-size: auto 44px; }
 .mail-row.compact::after { left: 56px; }
 .mail-row.compact .avatar { width: 28px; height: 28px; font-size: 11px; margin: 0; }
 .mail-row.compact .mail-main { flex-direction: row; align-items: center; gap: 10px; }

@@ -842,10 +842,10 @@ export default function Reader({
         .then(({ messages }) => {
           if (token !== alive.current) return;
           setThread(messages);
+          // 只展开当前 + 末封并拉正文；其余折叠，点开再加载（避免线程扇出）
           const last = messages[messages.length - 1];
           const open = new Set([id]);
           if (last) open.add(last.id);
-          messages.forEach((m) => !m.seen && open.add(m.id));
           setExpanded(open);
           open.forEach((mid) => mid !== id && loadDetail(mid, token, { markSeen: false }));
         })
@@ -898,9 +898,12 @@ export default function Reader({
         const known = new Set(thread.map((m) => m.id));
         const added = messages.filter((m) => !known.has(m.id)).map((m) => m.id);
         setThread(messages);
-        if (added.length) {
-          setExpanded((s) => new Set([...s, ...added]));
-          added.forEach((mid) => loadDetail(mid, token));
+        if (!added.length) return;
+        // 仅自动展开并加载新末封，避免整线程重拉正文
+        const last = messages[messages.length - 1];
+        if (last && added.includes(last.id)) {
+          setExpanded((s) => new Set([...s, last.id]));
+          loadDetail(last.id, token);
         }
       })
       .catch(() => {});
