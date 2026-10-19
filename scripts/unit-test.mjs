@@ -29,6 +29,7 @@ import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
 import {
   conversationKey, ftsEscape, isSqliteCorrupt, reclaimStaleOutboxSending, claimOutboxSending,
+  getFtsStatus, backfillFtsChunk,
 } from '../server/repo.js';
 import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER } from '../server/imap.js';
 import { queueScore } from '../server/team_queue.js';
@@ -649,6 +650,14 @@ assert('ftsEscape latin phrase', ftsEscape('cotton jersey') === '"cotton"* "jers
 assert('ftsEscape mixed CJK+latin', ftsEscape('报价 PO123').includes('报 NEAR/1 价') && ftsEscape('报价 PO123').includes('"PO123"*'));
 assert('ftsEscape strips input quotes', ftsEscape('ab"cd') === '"ab"* "cd"*');
 assert('ftsEscape empty', ftsEscape('   ') === '');
+
+{
+  const st0 = getFtsStatus();
+  assert('fts status shape', typeof st0.busy === 'boolean' && typeof st0.pending === 'boolean' && typeof st0.backfillLeft === 'number');
+  // 勿在单测里调用 rebuildFtsIndex（会 DROP 真实库 FTS）；只探一片差量回填
+  const chunkN = backfillFtsChunk(1);
+  assert('fts backfill chunk number', typeof chunkN === 'number' && chunkN >= 0);
+}
 
 {
   const { sealDesktopSecret, unsealDesktopSecret } = await import('../server/desktop_boot.js');

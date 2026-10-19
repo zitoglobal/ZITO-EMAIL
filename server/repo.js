@@ -319,6 +319,26 @@ const FTS_DDL = `CREATE VIRTUAL TABLE messages_fts USING fts5(
 )`;
 
 let ftsRebuildBusy = false;
+let ftsRebuildPending = false;
+let ftsBackfillTimer = null;
+let ftsBackfillLeft = 0;
+/** 每片行数：让出事件循环，避免大库启动/自愈时卡住 API */
+const FTS_BACKFILL_CHUNK = 400;
+
+export function getFtsStatus() {
+  return {
+    busy: ftsRebuildBusy,
+    pending: ftsRebuildPending,
+    backfillLeft: ftsBackfillLeft,
+  };
+}
+
+function clearFtsBackfillTimer() {
+  if (ftsBackfillTimer != null) {
+    clearImmediate(ftsBackfillTimer);
+    ftsBackfillTimer = null;
+  }
+}
 
 /** 旧版 external-content 触发器（列 from_name/to_json）与现行 FTS 冲突，必须卸掉 */
 export function dropLegacyFtsTriggers() {
@@ -329,20 +349,38 @@ export function dropLegacyFtsTriggers() {
   `);
 }
 
-/** 丢弃损坏/contentless 的 FTS 索引并全量重建（邮件主表不动） */
-export function rebuildFtsIndex() {
-  if (ftsRebuildBusy) return;
+/**
+ * 丢弃损坏/contentless 的 FTS 索引并重建。
+ * DDL 同步完成；正文回填分片到 setImmediate，busy 期间再请求会记 pending 并在收尾补跑。
+ */
+export function rebuildFtsIndex(reason = '') {
+  if (ftsRebuildBusy) {
+    ftsRebuildPending = true;
+    if (reason) console.warn('[fts] rebuild queued:', reason);
+    return { started: false, queued: true };
+  }
   ftsRebuildBusy = true;
+  ftsRebuildPending = false;
+  clearFtsBackfillTimer();
   try {
-    console.warn('[fts] rebuilding messages_fts…');
+    console.warn('[fts] rebuilding messages_fts…', reason || '');
     dropLegacyFtsTriggers();
     db.exec('DROP TABLE IF EXISTS messages_fts');
     db.exec(FTS_DDL);
-    backfillFts(100000);
-    console.warn('[fts] rebuild done');
-  } finally {
+    pruneFtsOrphans();
+    scheduleBackfillFts(100000, { holdBusy: true, label: 'rebuild' });
+    return { started: true, queued: false };
+  } catch (e) {
     ftsRebuildBusy = false;
+    ftsBackfillLeft = 0;
+    console.error('[fts] rebuild failed:', e.message);
+    throw e;
   }
+}
+
+/** 与 rebuildFtsIndex 相同；语义上强调「可排队」 */
+export function scheduleRebuildFtsIndex(reason = '') {
+  return rebuildFtsIndex(reason);
 }
 
 function ftsWrite(fn) {
@@ -350,8 +388,13 @@ function ftsWrite(fn) {
     return fn();
   } catch (e) {
     if (!isSqliteCorrupt(e)) throw e;
-    rebuildFtsIndex();
-    return fn();
+    scheduleRebuildFtsIndex('write');
+    try {
+      return fn();
+    } catch (e2) {
+      console.warn('[fts] write deferred during rebuild:', e2.message);
+      return undefined;
+    }
   }
 }
 
@@ -402,7 +445,7 @@ export function ensureFtsHealthy() {
       return;
     }
     try {
-      rebuildFtsIndex();
+      scheduleRebuildFtsIndex('probe');
     } catch (e2) {
       console.error('[fts] rebuild failed:', e2.message);
     }
@@ -436,16 +479,17 @@ export function searchFtsIds(terms = [], limit = 500) {
   }
 }
 
-/** 启动时差量补齐 FTS，并清理孤儿索引（删信路径漏清时自愈） */
-export function backfillFts(limit = 15000) {
+function pruneFtsOrphans() {
   try {
     db.prepare('DELETE FROM messages_fts WHERE rowid NOT IN (SELECT id FROM messages)').run();
   } catch (e) {
-    if (isSqliteCorrupt(e)) {
-      // 由 ensureFtsHealthy / rebuild 处理，避免递归
-      throw e;
-    }
+    if (isSqliteCorrupt(e)) throw e;
   }
+}
+
+/** 单片回填；返回写入行数。供调度与单测。 */
+export function backfillFtsChunk(limit = FTS_BACKFILL_CHUNK) {
+  const n = Math.max(1, Math.min(Number(limit) || FTS_BACKFILL_CHUNK, 2000));
   const rows = db
     .prepare(
       `SELECT m.id, m.subject, m.snippet, m.from_name, m.from_addr, b.text AS body
@@ -454,16 +498,17 @@ export function backfillFts(limit = 15000) {
        WHERE m.id NOT IN (SELECT rowid FROM messages_fts)
        ORDER BY m.date DESC LIMIT ?`
     )
-    .all(limit);
-  if (!rows.length) return;
+    .all(n);
+  if (!rows.length) return 0;
   const ins = db.prepare(
     `INSERT INTO messages_fts (rowid, subject, snippet, from_text, body) VALUES (?, ?, ?, ?, ?)`
   );
+  const del = db.prepare('DELETE FROM messages_fts WHERE rowid = ?');
   const run = tx(() => {
     for (const r of rows) {
       const fromText = `${r.from_name || ''} ${r.from_addr || ''}`.trim();
       try {
-        db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(r.id);
+        del.run(r.id);
       } catch {
         /* ignore */
       }
@@ -471,6 +516,85 @@ export function backfillFts(limit = 15000) {
     }
   });
   run();
+  return rows.length;
+}
+
+/**
+ * 差量补齐 FTS（默认异步分片）。
+ * opts.sync=true 时仍同步跑完（仅测试/小库）；默认不堵事件循环。
+ */
+export function backfillFts(limit = 15000, opts = {}) {
+  const sync = !!opts.sync;
+  const cap = Math.max(0, Number(limit) || 0);
+  // 重建回填进行中：只抬高剩余额度，勿 clearImmediate 打断 rebuild
+  if (ftsRebuildBusy && !sync) {
+    ftsBackfillLeft = Math.max(ftsBackfillLeft, cap);
+    return;
+  }
+  try {
+    pruneFtsOrphans();
+  } catch (e) {
+    if (isSqliteCorrupt(e)) {
+      // 由 ensureFtsHealthy / rebuild 处理，避免递归
+      throw e;
+    }
+  }
+  if (sync) {
+    let left = cap;
+    while (left > 0) {
+      const wrote = backfillFtsChunk(Math.min(FTS_BACKFILL_CHUNK, left));
+      if (!wrote) break;
+      left -= wrote;
+    }
+    return;
+  }
+  scheduleBackfillFts(cap, { holdBusy: false, label: 'backfill' });
+}
+
+function scheduleBackfillFts(limit, { holdBusy = false, label = 'backfill' } = {}) {
+  clearFtsBackfillTimer();
+  ftsBackfillLeft = Math.max(0, Number(limit) || 0);
+  const tick = () => {
+    ftsBackfillTimer = null;
+    try {
+      if (ftsBackfillLeft <= 0) {
+        finishBackfill(holdBusy, label);
+        return;
+      }
+      const wrote = backfillFtsChunk(Math.min(FTS_BACKFILL_CHUNK, ftsBackfillLeft));
+      if (!wrote) {
+        finishBackfill(holdBusy, label);
+        return;
+      }
+      ftsBackfillLeft = Math.max(0, ftsBackfillLeft - wrote);
+      ftsBackfillTimer = setImmediate(tick);
+      if (typeof ftsBackfillTimer.unref === 'function') ftsBackfillTimer.unref();
+    } catch (e) {
+      console.error(`[fts] ${label} chunk failed:`, e.message);
+      finishBackfill(holdBusy, label, e);
+    }
+  };
+  ftsBackfillTimer = setImmediate(tick);
+  if (typeof ftsBackfillTimer.unref === 'function') ftsBackfillTimer.unref();
+}
+
+function finishBackfill(holdBusy, label, err) {
+  ftsBackfillLeft = 0;
+  if (holdBusy) {
+    ftsRebuildBusy = false;
+    if (err) console.error(`[fts] ${label} unfinished:`, err.message);
+    else console.warn('[fts] rebuild done');
+    if (ftsRebuildPending) {
+      ftsRebuildPending = false;
+      setImmediate(() => {
+        try {
+          scheduleRebuildFtsIndex('pending');
+        } catch (e) {
+          console.error('[fts] pending rebuild failed:', e.message);
+        }
+      });
+    }
+  }
 }
 
 /** 解析搜索语法：from/to/subject/has/is + label:/is:vip/category:，其余为关键词 */

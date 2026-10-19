@@ -2,13 +2,23 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, Menu, CheckCircle2 } from 'lucide-react';
 import { api, qs } from './api.js';
 import { putMessageCache } from './messageCache.js';
-import { enqueueAction, flushActionQueue, actionQueueLength, QUEUEABLE_ACTIONS } from './actionQueue.js';
+import { enqueueAction, flushActionQueue, actionQueueLength, peekActionQueue, QUEUEABLE_ACTIONS } from './actionQueue.js';
 
 function readQueueLen() {
   try {
     return actionQueueLength();
   } catch {
     return 0;
+  }
+}
+
+function queueLastErrorHint() {
+  try {
+    const q = peekActionQueue();
+    const err = q.find((x) => x?.lastError)?.lastError;
+    return err ? String(err).slice(0, 56) : '';
+  } catch {
+    return '';
   }
 }
 import Auth, { HeroBrand } from './components/Auth.jsx';
@@ -1454,6 +1464,7 @@ export default function App() {
   const lastSyncAt = mailboxes.reduce((max, m) => Math.max(max, Number(m.lastSync) || 0), 0);
   const showAlertStrip = !netOnline || syncAlert || queuePending > 0;
   const showStatusStrip = showAlertStrip || !!lastSyncAt;
+  const queueErrHint = queuePending > 0 ? queueLastErrorHint() : '';
 
   // 销售台：客户栏常驻挂载，未选信显示空态，避免选信时插拔整列跳动
   const showCustomerRail = railAllowed && view.box !== 'scheduled';
@@ -1563,7 +1574,10 @@ export default function App() {
           ) : queuePending > 0 ? (
             <>
               <RefreshCw size={14} />
-              <span>{queuePending} 项离线操作待同步</span>
+              <span title={queueErrHint || undefined}>
+                {queuePending} 项离线操作待同步
+                {queueErrHint ? ` · ${queueErrHint}` : ''}
+              </span>
               <button
                 type="button"
                 className="mb-sync-link"

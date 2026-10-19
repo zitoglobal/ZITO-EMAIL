@@ -226,7 +226,7 @@ class Engine {
         if (/messages_fts|fts5|contentless/i.test(msg) || repo.isSqliteCorrupt(e)) {
           console.warn('[sync] FTS/索引异常，尝试重建且不标邮箱 error:', msg);
           try {
-            repo.rebuildFtsIndex();
+            repo.scheduleRebuildFtsIndex('sync');
           } catch (e2) {
             console.warn('[sync] fts rebuild', e2.message);
           }

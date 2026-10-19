@@ -297,6 +297,10 @@ app.get('/api/health', (req, res) => {
   } catch (_) {}
   const mailSecret = String(process.env.MAIL_SECRET || '').trim();
   const oauthSt = oauth.status();
+  let fts = null;
+  try {
+    fts = repo.getFtsStatus();
+  } catch (_) {}
   res.status(dbOk ? 200 : 503).json({
     ok: dbOk,
     db: dbOk ? 'up' : 'down',
@@ -307,6 +311,7 @@ app.get('/api/health', (req, res) => {
     errorMailboxes,
     oauth: { gmail: oauthSt.gmail, microsoft: oauthSt.microsoft },
     onlineUsers: onlineUserCount(),
+    fts,
   });
 });
 
@@ -2321,11 +2326,12 @@ if (fs.existsSync(DIST)) {
 repo.backfillSignals();
 try {
   repo.ensureFtsHealthy();
+  // 差量回填异步分片，避免大库启动阻塞 listen / 调度
   repo.backfillFts();
 } catch (e) {
   console.warn('[fts]', e.message);
   try {
-    if (repo.isSqliteCorrupt(e)) repo.rebuildFtsIndex();
+    if (repo.isSqliteCorrupt(e)) repo.scheduleRebuildFtsIndex('startup');
   } catch (e2) {
     console.error('[fts] recovery failed', e2.message);
   }
