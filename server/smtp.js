@@ -2,10 +2,10 @@ import nodemailer from 'nodemailer';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { decrypt } from './security.js';
 import * as oauth from './oauth.js';
-import { assertSafeMailHost } from './net_guard.js';
+import { pinSafeMailHost } from './net_guard.js';
 
 async function transport(mb, password) {
-  await assertSafeMailHost(mb.smtp_host, 'SMTP');
+  const pin = await pinSafeMailHost(mb.smtp_host, 'SMTP');
   let auth;
   if (mb.oauth_refresh_enc || mb.oauth_access_enc) {
     const accessToken = await oauth.ensureAccessToken(mb);
@@ -14,7 +14,7 @@ async function transport(mb, password) {
     auth = { user: mb.login_user || mb.email, pass: password ?? decrypt(mb.pass_enc) };
   }
   return nodemailer.createTransport({
-    host: mb.smtp_host,
+    host: pin.address,
     port: Number(mb.smtp_port),
     secure: !!mb.smtp_secure,
     requireTLS: !mb.smtp_secure,
@@ -22,6 +22,7 @@ async function transport(mb, password) {
     connectionTimeout: 20_000,
     greetingTimeout: 20_000,
     socketTimeout: 90_000,
+    tls: { servername: pin.hostname },
   });
 }
 

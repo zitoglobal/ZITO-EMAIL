@@ -5,6 +5,7 @@ import { putMessageCache } from './messageCache.js';
 import { enqueueAction, flushActionQueue, actionQueueLength, peekActionQueue, QUEUEABLE_ACTIONS } from './actionQueue.js';
 import { parseMessageDeepLink } from '../../server/mail_links.js';
 import { latestComposeWal, clearComposeWal, walToComposeInitial } from './composeWal.js';
+import { applyServiceWorkerUpdate } from './pushClient.js';
 
 function readQueueLen() {
   try {
@@ -1335,15 +1336,20 @@ export default function App() {
         else setNetOnline(false);
       }
     };
+    const onSwUpdate = () => {
+      notify('有新版本可用', 'info', { label: '刷新更新', fn: () => applyServiceWorkerUpdate() }, 20_000);
+    };
     window.addEventListener('offline', onOff);
     window.addEventListener('online', flush);
     window.addEventListener('zm-network', onZm);
+    window.addEventListener('zm-sw-update', onSwUpdate);
     if (navigator.onLine && actionQueueLength()) flush();
     else setQueuePending(readQueueLen());
     return () => {
       window.removeEventListener('offline', onOff);
       window.removeEventListener('online', flush);
       window.removeEventListener('zm-network', onZm);
+      window.removeEventListener('zm-sw-update', onSwUpdate);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

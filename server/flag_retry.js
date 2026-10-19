@@ -57,9 +57,19 @@ async function flushOne(job) {
     sync.touch(mb.id, job.folder, 400);
   } catch (e) {
     const msg = imap.friendlyImapError(e);
-    if (isAuthImapError(e) || job.tries + 1 >= MAX_TRIES) {
-      console.warn('[flag-retry] give up', mb.email, msg);
+    // 仅认证失败标整箱 error；瞬时失败耗尽只告警，不让销售侧「箱红了却仍能收信」
+    if (isAuthImapError(e)) {
+      console.warn('[flag-retry] auth fail', mb.email, msg);
       markError(mb, msg);
+      return;
+    }
+    if (job.tries + 1 >= MAX_TRIES) {
+      console.warn('[flag-retry] give up (no mailbox error)', mb.email, msg);
+      try {
+        emit(mb.user_id, 'sync', { mailboxId: mb.id, local: true, flagRetryGaveUp: true });
+      } catch {
+        /* ignore */
+      }
       return;
     }
     job.tries += 1;

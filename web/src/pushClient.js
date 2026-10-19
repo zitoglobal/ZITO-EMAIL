@@ -9,14 +9,49 @@ function urlBase64ToUint8Array(base64String) {
   return arr;
 }
 
+function announceSwUpdate() {
+  try {
+    window.dispatchEvent(new CustomEvent('zm-sw-update'));
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return null;
   try {
-    return await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    if (reg.waiting && navigator.serviceWorker.controller) announceSwUpdate();
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'installed' && navigator.serviceWorker.controller) announceSwUpdate();
+      });
+    });
+    // 主动检查更新（长期开着的 PWA）
+    try {
+      reg.update();
+    } catch {
+      /* ignore */
+    }
+    return reg;
   } catch (e) {
     console.warn('[sw]', e.message);
     return null;
   }
+}
+
+/** 让等待中的 SW 立即接管并刷新页面 */
+export async function applyServiceWorkerUpdate() {
+  const reg = await navigator.serviceWorker.getRegistration();
+  if (reg?.waiting) {
+    reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+  }
+  // 等 controllerchange 或直接 reload
+  const reload = () => window.location.reload();
+  navigator.serviceWorker.addEventListener('controllerchange', reload, { once: true });
+  setTimeout(reload, 400);
 }
 
 export async function enableWebPush() {

@@ -61,6 +61,15 @@ export function isBlockedHostname(host) {
 
 /** 同步快速检查主机名字面量；异步再解析 DNS */
 export async function assertSafeMailHost(host, label = '邮件服务器') {
+  const pinned = await pinSafeMailHost(host, label);
+  return pinned.hostname;
+}
+
+/**
+ * 连接前钉扎：解析 DNS → 拒绝私网 → 返回要 connect 的 IP + TLS servername。
+ * 客户端应对 address 建连，并用 hostname 做 SNI/证书校验，缩小 DNS rebinding 窗口。
+ */
+export async function pinSafeMailHost(host, label = '邮件服务器') {
   const h = String(host || '')
     .trim()
     .toLowerCase()
@@ -69,19 +78,26 @@ export async function assertSafeMailHost(host, label = '邮件服务器') {
   if (isBlockedHostname(h)) {
     throw Object.assign(new Error(`${label}地址不允许使用内网或本机地址`), { status: 400 });
   }
-  if (net.isIP(h)) return h;
+  if (net.isIP(h)) {
+    return { hostname: h, address: h, family: net.isIPv6(h) ? 6 : 4 };
+  }
   let addrs;
   try {
     addrs = await dns.lookup(h, { all: true, verbatim: true });
   } catch {
     throw Object.assign(new Error(`无法解析${label}域名：${h}`), { status: 400 });
   }
-  for (const a of addrs || []) {
-    if (ipBlocked(a.address)) {
-      throw Object.assign(new Error(`${label}解析到内网地址，已拒绝连接`), { status: 400 });
-    }
+  const safe = (addrs || []).filter((a) => a?.address && !ipBlocked(a.address));
+  if (!safe.length) {
+    throw Object.assign(new Error(`${label}解析到内网地址，已拒绝连接`), { status: 400 });
   }
-  return h;
+  // 邮件服务优先 IPv4，减少部分企业网关 IPv6 异常
+  const pick = safe.find((a) => Number(a.family) === 4) || safe[0];
+  return {
+    hostname: h,
+    address: pick.address,
+    family: Number(pick.family) === 6 ? 6 : 4,
+  };
 }
 
 export async function assertSafeMailHosts(conn) {

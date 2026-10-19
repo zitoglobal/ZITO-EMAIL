@@ -5,7 +5,7 @@ import iconv from 'iconv-lite';
 import { decrypt } from './security.js';
 import { classify } from './classify.js';
 import * as oauth from './oauth.js';
-import { assertSafeMailHost } from './net_guard.js';
+import { pinSafeMailHost } from './net_guard.js';
 
 const IDLE_CLOSE_MS = 10 * 60 * 1000;
 
@@ -39,8 +39,8 @@ export function isTransientFailure(e) {
 }
 
 export async function buildClient(mb, password) {
-  // 连接前复检 DNS，缩小绑定时校验与实际连接之间的重绑定窗口
-  await assertSafeMailHost(mb.imap_host, 'IMAP');
+  // 钉扎解析 IP 再建连，TLS 仍用原主机名做 SNI（防 DNS rebinding）
+  const pin = await pinSafeMailHost(mb.imap_host, 'IMAP');
   let auth;
   if (mb.oauth_refresh_enc || mb.oauth_access_enc) {
     const accessToken = await oauth.ensureAccessToken(mb);
@@ -52,7 +52,7 @@ export async function buildClient(mb, password) {
     };
   }
   const client = new ImapFlow({
-    host: mb.imap_host,
+    host: pin.address,
     port: Number(mb.imap_port),
     secure: !!mb.imap_secure,
     auth,
@@ -62,6 +62,7 @@ export async function buildClient(mb, password) {
     connectionTimeout: 20_000,
     maxIdleTime: 4 * 60_000,
     clientInfo: { name: 'ZITO Smart Mail', version: '2.0' },
+    tls: { servername: pin.hostname },
   });
   client.on('error', () => {});
   return client;

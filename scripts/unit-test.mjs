@@ -23,7 +23,7 @@ import {
   FOLLOW_SEQ_DAYS, quoteSnippet, scopeMailMatch,
 } from '../server/deals.js';
 import { APPAREL_EMAIL_TEMPLATES, ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS as CLIENT_FOLLOW_SEQ } from '../web/src/apparelPresets.js';
-import { isBlockedHostname, assertSafeAiBaseUrl, isLoopbackIp } from '../server/net_guard.js';
+import { isBlockedHostname, assertSafeAiBaseUrl, isLoopbackIp, pinSafeMailHost } from '../server/net_guard.js';
 import { sanitizeMailHtml, scrubStyleAttr } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
@@ -335,6 +335,24 @@ assert('block ipv4-mapped loopback', isBlockedHostname('::ffff:127.0.0.1'));
 assert('allow ipv4-mapped public', !isBlockedHostname('::ffff:8.8.8.8'));
 assert('allow public host name', !isBlockedHostname('imap.gmail.com'));
 assert('allow public ip', !isBlockedHostname('8.8.8.8'));
+{
+  const pin = await pinSafeMailHost('8.8.8.8', 'DNS');
+  assert('pin public ip', pin.address === '8.8.8.8' && pin.hostname === '8.8.8.8' && pin.family === 4);
+  let pinPriv = false;
+  try {
+    await pinSafeMailHost('10.1.2.3', 'DNS');
+  } catch {
+    pinPriv = true;
+  }
+  assert('pin blocks private ip', pinPriv);
+  let pinLocal = false;
+  try {
+    await pinSafeMailHost('localhost', 'DNS');
+  } catch {
+    pinLocal = true;
+  }
+  assert('pin blocks localhost', pinLocal);
+}
 
 // ---------- mail HTML sanitize ----------
 assert('strip script', !sanitizeMailHtml('<p>Hi</p><script>alert(1)</script>').includes('script'));

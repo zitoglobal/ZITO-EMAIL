@@ -1,9 +1,13 @@
 /* ZITO Mail service worker — 缓存壳 + Web Push */
-const CACHE = 'zm-shell-v2';
+const CACHE = 'zm-shell-v3';
 const SHELL = ['/', '/manifest.webmanifest', '/favicon-180.png', '/zito-icon.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener('message', (event) => {
+  if (event?.data?.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
