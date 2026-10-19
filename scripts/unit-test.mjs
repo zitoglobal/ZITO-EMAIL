@@ -670,6 +670,41 @@ assert('ftsEscape empty', ftsEscape('   ') === '');
 }
 
 {
+  const { writeAttCache, readAttCache, attCacheEtag } = await import('../server/att_cache.js');
+  const { DATA_DIR } = await import('../server/db.js');
+  const pk = 900001;
+  const idx = 0;
+  const buf = Buffer.from('fake-png-bytes');
+  const etag = writeAttCache(pk, idx, { filename: 'a.png', contentType: 'image/png', content: buf });
+  assert('att cache write etag', !!etag);
+  const hit = readAttCache(pk, idx);
+  assert('att cache read', hit && hit.content.equals(buf) && hit.contentType === 'image/png');
+  assert('att cache etag shape', attCacheEtag(pk, idx, buf.length).includes(String(pk)));
+  try {
+    fs.rmSync(path.join(DATA_DIR, 'att-cache', String(pk)), { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+{
+  const { enqueueAction, flushActionQueue, actionQueueLength, QUEUEABLE_ACTIONS } = await import('../web/src/actionQueue.js');
+  assert('queueable archive', QUEUEABLE_ACTIONS.has('archive'));
+  // jsdom-less：用假 storage
+  const mem = {};
+  globalThis.localStorage = {
+    getItem: (k) => (k in mem ? mem[k] : null),
+    setItem: (k, v) => { mem[k] = String(v); },
+    removeItem: (k) => { delete mem[k]; },
+  };
+  enqueueAction({ ids: [1, 2], action: 'archive', extra: {} });
+  assert('queue length 1', actionQueueLength() === 1);
+  let calls = 0;
+  const r = await flushActionQueue(async () => { calls += 1; return { ok: true }; });
+  assert('queue flush ok', r.ok === 1 && calls === 1 && actionQueueLength() === 0);
+}
+
+{
   let aiHttpRejected = false;
   try {
     await assertSafeAiBaseUrl('http://example.com/v1');

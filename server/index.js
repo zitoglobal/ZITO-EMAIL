@@ -40,6 +40,7 @@ import * as threadNotes from './thread_notes.js';
 import * as deliverability from './deliverability.js';
 import { assertSafeMailHosts, assertSafeAiBaseUrl, isLoopbackIp } from './net_guard.js';
 import { sanitizeMailHtml } from './sanitize_mail.js';
+import { readAttCache, writeAttCache, attCacheEtag } from './att_cache.js';
 import * as totp from './totp.js';
 import * as analytics from './analytics.js';
 import * as push from './push.js';
@@ -1168,9 +1169,29 @@ app.get(
   auth,
   wrap(async (req, res) => {
     const row = messageOf(req);
-    const a = await imap.getAttachment(repo.getMailboxById(row.mailbox_id), row.folder, row.uid, req.params.index);
-    const name = a.filename || 'attachment';
-    const type = String(a.contentType || 'application/octet-stream').toLowerCase();
+    const index = Number(req.params.index);
+    if (!Number.isInteger(index) || index < 0) throw httpError(400, '附件索引无效');
+
+    let name;
+    let type;
+    let content;
+    let etag;
+
+    const cached = readAttCache(row.id, index);
+    if (cached) {
+      name = cached.filename;
+      type = String(cached.contentType || 'application/octet-stream').toLowerCase();
+      content = cached.content;
+      etag = attCacheEtag(row.id, index, content.length);
+    } else {
+      const a = await imap.getAttachment(repo.getMailboxById(row.mailbox_id), row.folder, row.uid, index);
+      name = a.filename || 'attachment';
+      type = String(a.contentType || 'application/octet-stream').toLowerCase();
+      content = a.content;
+      const sealed = writeAttCache(row.id, index, { filename: name, contentType: type, content });
+      etag = sealed ? attCacheEtag(row.id, index, Buffer.isBuffer(content) ? content.length : 0) : attCacheEtag(row.id, index, 0);
+    }
+
     const baseType = type.split(';')[0].trim();
     // SVG 不当 inline（防 XSS）；图/PDF/纯文本/CSV 可预览
     const allowInline = /^(image\/(png|jpe?g|gif|webp|bmp)|application\/pdf|text\/(plain|csv))$/i.test(baseType);
@@ -1180,6 +1201,12 @@ app.get(
     let contentType = type;
     if (inline && isText && !/charset=/i.test(type)) contentType = `${baseType}; charset=utf-8`;
     if (!inline && isText) contentType = 'application/octet-stream';
+
+    if (req.headers['if-none-match'] && String(req.headers['if-none-match']).includes(etag.replace(/"/g, ''))) {
+      res.status(304).end();
+      return;
+    }
+
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', contentDisposition(inline ? 'inline' : 'attachment', name));
     // 一律带隔离 CSP；PDF 阅读器可能忽略 sandbox，仍限制外联脚本面
@@ -1191,8 +1218,9 @@ app.get(
     );
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Download-Options', 'noopen');
-    res.setHeader('Cache-Control', 'private, max-age=3600');
-    res.send(a.content);
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=86400, immutable');
+    res.send(content);
   })
 );
 

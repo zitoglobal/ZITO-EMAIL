@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, Menu, CheckCircle2 } from 'lucide-react';
 import { api, qs } from './api.js';
 import { putMessageCache } from './messageCache.js';
+import { enqueueAction, flushActionQueue, actionQueueLength, QUEUEABLE_ACTIONS } from './actionQueue.js';
 import Auth, { HeroBrand } from './components/Auth.jsx';
 import { BrandIcon } from './components/Brand.jsx';
 import Sidebar from './components/Sidebar.jsx';
@@ -663,6 +664,11 @@ export default function App() {
         loadState();
         if (view.box === 'today' || view.box === 'waiting' || ['restore', 'unsnooze', 'pin', 'unpin'].includes(action)) loadList({ silent: true });
       } catch (e) {
+        if ((e.offline || e.status === 0) && QUEUEABLE_ACTIONS.has(action)) {
+          enqueueAction({ ids, action, extra });
+          notify('网络不可用，操作已排队，恢复后自动同步', 'info', null, 6000);
+          return;
+        }
         notify(e.message, 'error');
         loadList({ silent: true });
       }
@@ -1226,18 +1232,38 @@ export default function App() {
 
   useEffect(() => {
     const onOff = () => setNetOnline(false);
-    const onOn = () => setNetOnline(true);
+    const flush = async () => {
+      setNetOnline(true);
+      if (!actionQueueLength()) return;
+      try {
+        const r = await flushActionQueue(api);
+        if (r.ok) {
+          notify(r.left ? `已同步 ${r.ok} 项离线操作，仍有 ${r.left} 项待传` : `已同步 ${r.ok} 项离线操作`, 'success');
+          loadState();
+          loadList({ silent: true });
+        } else if (r.fail) {
+          notify(`${r.fail} 项离线操作同步失败`, 'error');
+        }
+      } catch {
+        /* ignore */
+      }
+    };
     const onZm = (e) => {
-      if (typeof e.detail?.online === 'boolean') setNetOnline(e.detail.online);
+      if (typeof e.detail?.online === 'boolean') {
+        if (e.detail.online) flush();
+        else setNetOnline(false);
+      }
     };
     window.addEventListener('offline', onOff);
-    window.addEventListener('online', onOn);
+    window.addEventListener('online', flush);
     window.addEventListener('zm-network', onZm);
+    if (navigator.onLine && actionQueueLength()) flush();
     return () => {
       window.removeEventListener('offline', onOff);
-      window.removeEventListener('online', onOn);
+      window.removeEventListener('online', flush);
       window.removeEventListener('zm-network', onZm);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---------- 快捷键 ----------

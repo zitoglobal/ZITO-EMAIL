@@ -300,6 +300,17 @@ function MediaLightbox({ items, index, onClose, onIndex, msgId }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [index, items.length, onClose, onIndex]);
 
+  // 预取下一张图，左右切换更顺
+  useEffect(() => {
+    const next = items[index + 1];
+    if (!next || (next.kind || attKind(next)) !== 'image') return undefined;
+    const src = next.url || `/api/messages/${msgId}/attachments/${next.index}?inline=1`;
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = src;
+    return undefined;
+  }, [index, items, msgId]);
+
   return (
     <div className="att-preview-overlay" role="dialog" aria-modal="true" aria-label="媒体预览" onClick={onClose}>
       <div className="att-preview-panel" onClick={(e) => e.stopPropagation()}>
@@ -327,7 +338,9 @@ function MediaLightbox({ items, index, onClose, onIndex, msgId }) {
           </div>
         </header>
         <div className={'att-preview-body kind-' + kind}>
-          {kind === 'image' && !imgErr && <img src={url} alt={cur.filename || cur.alt || ''} onError={() => setImgErr(true)} />}
+          {kind === 'image' && !imgErr && (
+            <img src={url} alt={cur.filename || cur.alt || ''} decoding="async" fetchPriority="high" onError={() => setImgErr(true)} />
+          )}
           {kind === 'image' && imgErr && <div className="att-preview-loading">图片无法显示，请下载查看</div>}
           {kind === 'pdf' && <iframe title={cur.filename || 'pdf'} src={url} />}
           {(kind === 'text' || kind === 'csv') && busy && (
@@ -422,7 +435,14 @@ function Attachments({ msg, setLightbox, peerAddress, canLibrary, onNotify }) {
               tabIndex={meta.preview ? 0 : undefined}
             >
               {kind === 'image' ? (
-                <div className="att-thumb" style={{ backgroundImage: `url(${base}?inline=1)` }} title={meta.label} />
+                <img
+                  className="att-thumb"
+                  src={`${base}?inline=1`}
+                  alt=""
+                  title={meta.label}
+                  loading="lazy"
+                  decoding="async"
+                />
               ) : (
                 <div className={'att-icon kind-' + meta.cls} title={meta.label}>
                   <Icon size={16} />

@@ -2092,7 +2092,7 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
 .att.clickable { cursor: pointer; }
 .att-thumb {
   width: 40px; height: 44px; border-radius: 6px; flex: none;
-  background: var(--panel-2) center/cover no-repeat; border: 1px solid var(--hairline);
+  object-fit: cover; background: var(--panel-2); border: 1px solid var(--hairline);
 }
 .img-bar-fix {
   border-style: solid;
