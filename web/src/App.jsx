@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, Menu } from 'lucide-react';
+import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, Menu, CheckCircle2 } from 'lucide-react';
 import { api, qs } from './api.js';
 import Auth, { HeroBrand } from './components/Auth.jsx';
 import { BrandIcon } from './components/Brand.jsx';
@@ -9,7 +9,7 @@ import Reader from './components/Reader.jsx';
 import Composer from './components/Composer.jsx';
 import Focus from './components/Focus.jsx';
 import ColumnSplitter from './components/ColumnSplitter.jsx';
-import { SMART_VIEWS, dayStart, folderLabel, formatShortDateTime, orderFocus, sanitizeHtml, snoozePresets } from './utils.js';
+import { SMART_VIEWS, dayStart, folderLabel, formatShortDateTime, orderFocus, relativeTime, sanitizeHtml, snoozePresets } from './utils.js';
 import { buildComposeState, signatureHtml, toForm } from './compose.js';
 import {
   LAYOUT_LIMITS,
@@ -102,6 +102,7 @@ export default function App() {
   const [palette, setPalette] = useState(false);
   const [checked, setChecked] = useState(new Set());
   const [currentMsg, setCurrentMsg] = useState(null);
+  const [netOnline, setNetOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
 
   const [composers, setComposers] = useState([]);
   const [modal, setModal] = useState(null);
@@ -1178,6 +1179,22 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  useEffect(() => {
+    const onOff = () => setNetOnline(false);
+    const onOn = () => setNetOnline(true);
+    const onZm = (e) => {
+      if (typeof e.detail?.online === 'boolean') setNetOnline(e.detail.online);
+    };
+    window.addEventListener('offline', onOff);
+    window.addEventListener('online', onOn);
+    window.addEventListener('zm-network', onZm);
+    return () => {
+      window.removeEventListener('offline', onOff);
+      window.removeEventListener('online', onOn);
+      window.removeEventListener('zm-network', onZm);
+    };
+  }, []);
+
   // ---------- 快捷键 ----------
   const keyState = useRef();
   const gPending = useRef(0);
@@ -1194,6 +1211,10 @@ export default function App() {
       const idx = s.allItems.findIndex((m) => m.id === s.selectedId);
       const step = (d) => {
         const m = s.allItems[Math.min(s.allItems.length - 1, Math.max(0, idx + d))];
+        if (m) selectMessage(m);
+      };
+      const openSel = () => {
+        const m = s.selectedItem || s.currentMsg || s.allItems.find((x) => x.id === s.selectedId);
         if (m) selectMessage(m);
       };
       const sel = s.selectedId;
@@ -1218,6 +1239,8 @@ export default function App() {
         '?': () => setModal({ type: 'help' }),
       };
       const onSelected = {
+        Enter: () => openSel(),
+        o: () => openSel(),
         r: () => s.currentMsg && openCompose('reply', s.currentMsg),
         a: () => s.currentMsg && openCompose('replyAll', s.currentMsg),
         f: () => s.currentMsg && openCompose('forward', s.currentMsg),
@@ -1313,6 +1336,9 @@ export default function App() {
   const syncBad = mailboxes.filter((m) => m.status === 'error');
   const syncing = mailboxes.filter((m) => m.status === 'syncing' || m.status === 'new');
   const syncAlert = syncBad.length || syncing.length;
+  const lastSyncAt = mailboxes.reduce((max, m) => Math.max(max, Number(m.lastSync) || 0), 0);
+  const showAlertStrip = !netOnline || syncAlert;
+  const showStatusStrip = showAlertStrip || !!lastSyncAt;
 
   // 销售台：客户栏常驻挂载，未选信显示空态，避免选信时插拔整列跳动
   const showCustomerRail = railAllowed && view.box !== 'scheduled';
@@ -1332,7 +1358,7 @@ export default function App() {
         'app zm-has-mob'
         + (selectedId ? ' has-selection' : '')
         + (settings.density === 'compact' ? ' compact' : '')
-        + (syncAlert ? ' has-sync-strip' : '')
+        + (showStatusStrip ? ' has-sync-strip' : '')
         + (showCustomerRail ? ' has-customer-rail' : '')
         + (layoutMode === 'sales' ? ' layout-sales-desk' : '')
         + ` layout-${layoutMode}`
@@ -1405,9 +1431,17 @@ export default function App() {
         />
       )}
 
-      {syncAlert ? (
-        <div className={'mb-sync-strip' + (syncBad.length ? ' err' : '')} role="status">
-          {syncBad.length ? (
+      {showStatusStrip ? (
+        <div className={'mb-sync-strip' + (!netOnline || syncBad.length ? ' err' : '')} role="status">
+          {!netOnline ? (
+            <>
+              <AlertCircle size={14} />
+              <span>网络已断开，列表可能不是最新；恢复后将自动继续</span>
+              <button type="button" className="mb-sync-link" onClick={() => refresh()} disabled={refreshing}>
+                {refreshing ? '重试中…' : '重试'}
+              </button>
+            </>
+          ) : syncBad.length ? (
             <>
               <AlertCircle size={14} />
               <span title={syncBad[0]?.lastError || ''}>
@@ -1426,6 +1460,14 @@ export default function App() {
               <span>正在同步 {syncing.length} 个邮箱…</span>
             </>
           )}
+        </div>
+      ) : lastSyncAt ? (
+        <div className="mb-sync-strip ok" role="status">
+          <CheckCircle2 size={13} />
+          <span>已同步 · {relativeTime(lastSyncAt)}</span>
+          <button type="button" className="mb-sync-link" onClick={() => refresh()} disabled={refreshing}>
+            {refreshing ? '同步中…' : '立即同步'}
+          </button>
         </div>
       ) : null}
 
@@ -1825,6 +1867,13 @@ export default function App() {
             onReply={() => { setPalette(false); currentMsg && openCompose('reply', currentMsg); }}
             onDone={() => { setPalette(false); selectedId && doAction([selectedId], selectedItem?._section === 'follow' ? 'nofollow' : 'done'); }}
             onSnooze={() => { setPalette(false); selectedId && doAction([selectedId], 'snooze', { until: snoozePresets()[1].at }); }}
+            onSearchAll={(nq) => {
+              setPalette(false);
+              setView({ mailboxId: 'all', box: 'inbox' });
+              setQ(nq);
+              setDeep(false);
+              setSelectedId(null);
+            }}
           />
         </LazyPane>
       )}

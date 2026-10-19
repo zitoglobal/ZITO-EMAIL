@@ -1381,6 +1381,11 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .mb-sync-strip.err { color: var(--selvedge); background: color-mix(in srgb, var(--selvedge) 8%, var(--panel)); border-bottom-color: color-mix(in srgb, var(--selvedge) 22%, transparent); }
+.mb-sync-strip.ok {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+  font-size: 12px;
+}
 .mb-sync-strip > svg { flex: none; }
 .mb-sync-link {
   margin-left: auto; height: 24px; padding: 0 10px; border-radius: 7px; font-size: 12px; font-weight: 600;
