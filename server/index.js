@@ -2356,7 +2356,9 @@ function remindUser(u) {
           .notifyUser(u.id, {
             title: r.escalate ? '超时升级提醒' : '客户邮件待回复',
             body: first?.subject || `${r.count || ''} 封待处理`,
-            url: first?.id ? `/?box=today&messageId=${first.id}` : '/?box=today',
+            url: first?.id
+              ? buildMessageDeepLink({ messageId: first.id, box: 'today', mailboxId: first.mailboxId })
+              : '/?box=today',
             tag: 'zm-remind',
             messageId: first?.id || null,
           })
@@ -2372,7 +2374,7 @@ function remindUser(u) {
     if (!fr?.items?.length) return;
     const first = fr.items[0];
     const url = first.messageId
-      ? `/?box=today&messageId=${first.messageId}`
+      ? buildMessageDeepLink({ messageId: first.messageId, box: 'today' })
       : '/?box=deals';
     push
       .notifyUser(u.id, {

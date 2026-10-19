@@ -381,7 +381,9 @@ class Engine {
                   fresh.length > 1
                     ? `${mb.email || ''} 收到 ${fresh.length} 封新邮件`
                     : `${first.from?.name || first.from?.address || ''}：${first.subject || '(无主题)'}`,
-                url: first?.id ? `/?box=today&messageId=${first.id}` : '/?box=today',
+                url: first?.id
+                  ? buildMessageDeepLink({ messageId: first.id, box: 'inbox', mailboxId: mb.id })
+                  : '/?box=inbox',
                 tag: 'zm-' + mb.id,
                 urgency: important ? 'high' : 'normal',
                 messageId: first?.id || null,
