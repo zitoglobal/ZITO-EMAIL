@@ -15,6 +15,24 @@ function SectionHead({ id, title, count, hint }) {
   );
 }
 
+/** 长列表先渲染前 N 封，避免今日待办上百行一次挂满 DOM */
+function CapRows({ items, initial = 40, render }) {
+  const [open, setOpen] = useState(false);
+  if (!items.length) return null;
+  const needCap = items.length > initial;
+  const shown = needCap && !open ? items.slice(0, initial) : items;
+  return (
+    <>
+      {shown.map(render)}
+      {needCap && !open && (
+        <button type="button" className="focus-show-more" onClick={() => setOpen(true)}>
+          显示其余 {items.length - initial} 封
+        </button>
+      )}
+    </>
+  );
+}
+
 function loadExpanded() {
   try {
     const v = localStorage.getItem('zm_focus_head_expanded');
@@ -581,7 +599,7 @@ export default function Focus({
               count={viewReply.length}
               hint={`超过分层 SLA 仍未回 · VIP ${slaTier.vip}h / 客户 ${slaTier.customer}h / 询盘 ${slaTier.inquiry}h`}
             />
-            {viewReply.map((m) => <Row key={m.id} {...rowProps(m, 'reply')} />)}
+            <CapRows items={viewReply} render={(m) => <Row key={m.id} {...rowProps(m, 'reply')} />} />
           </>
         )}
 
@@ -593,7 +611,9 @@ export default function Focus({
             hint="今天收到、仍待你回复 · 按最新排列"
           />
         )}
-        {groupMode !== 'customer' && bucket !== 'overdue' && viewToday.map((m) => <Row key={m.id} {...rowProps(m, 'reply')} />)}
+        {groupMode !== 'customer' && bucket !== 'overdue' && (
+          <CapRows items={viewToday} render={(m) => <Row key={m.id} {...rowProps(m, 'reply')} />} />
+        )}
 
         {groupMode !== 'customer' && bucket !== 'overdue' && viewOlder.length > 0 && (
           <SectionHead
@@ -603,7 +623,9 @@ export default function Focus({
             hint={claimFilter !== 'all' && claimFilter !== 'active' ? `筛选后 ${viewOlder.length}` : `VIP ${slaTier.vip}h · 客户 ${slaTier.customer}h · 询盘 ${slaTier.inquiry}h`}
           />
         )}
-        {groupMode !== 'customer' && bucket !== 'overdue' && viewOlder.map((m) => <Row key={m.id} {...rowProps(m, 'reply')} />)}
+        {groupMode !== 'customer' && bucket !== 'overdue' && (
+          <CapRows items={viewOlder} render={(m) => <Row key={m.id} {...rowProps(m, 'reply')} />} />
+        )}
 
         {groupMode === 'customer' && viewReply.length > 0 && (
           <SectionHead
@@ -613,26 +635,32 @@ export default function Focus({
             hint={claimFilter === 'active' ? `跟进中 ${viewReply.length}` : `按客户聚合 · 共 ${viewReply.length} 封`}
           />
         )}
-        {groupMode === 'customer' && viewReply.map((m) => {
-          const k = m.priority.company?.key;
-          const head = k !== lastGroup;
-          lastGroup = k;
-          return (
-            <React.Fragment key={m.id}>
-              {head && (
-                <div className="cust-head">
-                  <span className="cust-avatar" style={{ background: avatarColor(k) }}>{(m.priority.company?.name || '?').slice(0, 1).toUpperCase()}</span>
-                  <b>{m.priority.company?.name}</b>
-                  {m.priority.tier === 'vip' && <Crown size={12} className="vip-icon" />}
-                  {m.priority.company?.domain && <small>{m.priority.company.domain}</small>}
-                  <span className="cust-count">{groupMeta.get(k)?.count || 0} 封</span>
-                  {groupMeta.get(k)?.hasToday && <span className="cust-today-tag">含今日</span>}
-                </div>
-              )}
-              <Row {...rowProps(m, 'reply')} />
-            </React.Fragment>
-          );
-        })}
+        {groupMode === 'customer' && (
+          <CapRows
+            items={viewReply}
+            initial={50}
+            render={(m) => {
+              const k = m.priority.company?.key;
+              const head = k !== lastGroup;
+              lastGroup = k;
+              return (
+                <React.Fragment key={m.id}>
+                  {head && (
+                    <div className="cust-head">
+                      <span className="cust-avatar" style={{ background: avatarColor(k) }}>{(m.priority.company?.name || '?').slice(0, 1).toUpperCase()}</span>
+                      <b>{m.priority.company?.name}</b>
+                      {m.priority.tier === 'vip' && <Crown size={12} className="vip-icon" />}
+                      {m.priority.company?.domain && <small>{m.priority.company.domain}</small>}
+                      <span className="cust-count">{groupMeta.get(k)?.count || 0} 封</span>
+                      {groupMeta.get(k)?.hasToday && <span className="cust-today-tag">含今日</span>}
+                    </div>
+                  )}
+                  <Row {...rowProps(m, 'reply')} />
+                </React.Fragment>
+              );
+            }}
+          />
+        )}
 
         {viewFollow.length > 0 && (
           <SectionHead
@@ -652,7 +680,7 @@ export default function Focus({
             <button type="button" className="btn-ghost sm" onClick={() => setClaim('all')}>查看全部</button>
           </div>
         )}
-        {viewFollow.map((m) => <Row key={m.id} {...rowProps(m, 'follow')} />)}
+        <CapRows items={viewFollow} render={(m) => <Row key={m.id} {...rowProps(m, 'follow')} />} />
 
         {(viewReply.length > 0 || viewFollow.length > 0) && (
           <div className="focus-foot">

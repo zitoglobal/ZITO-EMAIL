@@ -791,6 +791,26 @@ export default function App() {
     }
   }
 
+  // J/K 巡航时预取相邻正文（不标已读），打开下封几乎瞬开
+  useEffect(() => {
+    if (!selectedId || boot !== 'ready') return undefined;
+    const idx = allItems.findIndex((m) => m.id === selectedId);
+    if (idx < 0) return undefined;
+    const neighbors = [allItems[idx + 1], allItems[idx - 1]].filter((m) => m?.id && m.specialUse !== '\\Drafts');
+    if (!neighbors.length) return undefined;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      if (cancelled || typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      neighbors.forEach((m) => {
+        api(`/messages/${m.id}?markSeen=0`).catch(() => {});
+      });
+    }, 280);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [selectedId, allItems, boot]);
+
   async function refresh() {
     setRefreshing(true);
     try {

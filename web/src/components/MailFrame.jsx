@@ -106,6 +106,14 @@ function wireImages(doc, { onImageClick, onBrokenChange }) {
   return () => cleanups.forEach((fn) => fn());
 }
 
+function buildSrcDoc(content, { allowImages, dark, isHtml }) {
+  const imgSrc = allowImages
+    ? "img-src 'self' https: http: data: blob: cid:"
+    : "img-src 'self' data: blob: cid:";
+  const color = dark && !isHtml ? ':root{color-scheme:dark}body{color:#e6e8f0}a{color:#a5b4fc}' : ':root{color-scheme:light}';
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; style-src 'unsafe-inline'; font-src data: https:; ${imgSrc}; media-src 'self' data: blob:; frame-ancestors 'none'"><meta name="referrer" content="no-referrer"><base target="_blank"><style>${FRAME_STYLE}${color}</style></head><body>${content}</body></html>`;
+}
+
 export default function MailFrame({
   html,
   text,
@@ -118,7 +126,10 @@ export default function MailFrame({
   const ref = useRef();
   const [height, setHeight] = useState(40);
   const [showQuote, setShowQuote] = useState(false);
+  const handlers = useRef({ onImageClick, onBrokenChange });
+  handlers.current = { onImageClick, onBrokenChange };
 
+  // 引用折叠写入 HTML 一次；展开时只在 iframe 内去 class，避免整页 srcDoc 重建
   const { content, hasQuote, empty } = useMemo(() => {
     const rawHtml = html && String(html).trim() ? html : '';
     const rawText = text && String(text).trim() ? text : '';
@@ -130,23 +141,20 @@ export default function MailFrame({
       };
     }
     const raw = rawHtml || `<div style="white-space:normal">${textToHtml(rawText)}</div>`;
-    if (!collapseQuotes || showQuote) return { content: raw, hasQuote: false, empty: false };
+    if (!collapseQuotes) return { content: raw, hasQuote: false, empty: false };
     const r = markQuotes(raw);
     return { content: r.html, hasQuote: r.hasQuote, empty: false };
-  }, [html, text, collapseQuotes, showQuote]);
+  }, [html, text, collapseQuotes]);
 
-  // 始终放行同源附件 URL（大图 CID → /api/.../attachments），与「外部图片」策略解耦
-  // style-src 仅 unsafe-inline（服务端已消毒）；禁 * 防外链 CSS 追踪
-  const imgSrc = allowImages
-    ? "img-src 'self' https: http: data: blob: cid:"
-    : "img-src 'self' data: blob: cid:";
-  const doc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; style-src 'unsafe-inline'; font-src data: https:; ${imgSrc}; media-src 'self' data: blob:; frame-ancestors 'none'"><meta name="referrer" content="no-referrer"><base target="_blank"><style>${FRAME_STYLE}${
-    dark && !html ? ':root{color-scheme:dark}body{color:#e6e8f0}a{color:#a5b4fc}' : ':root{color-scheme:light}'
-  }</style></head><body>${content}</body></html>`;
+  const isHtml = !!(html && String(html).trim()) && !empty;
+  const doc = useMemo(
+    () => buildSrcDoc(content, { allowImages, dark, isHtml }),
+    [content, allowImages, dark, isHtml]
+  );
 
   useEffect(() => {
     const frame = ref.current;
-    if (!frame) return;
+    if (!frame) return undefined;
     let ro;
     let unwire = () => {};
     let tries = 0;
@@ -162,9 +170,21 @@ export default function MailFrame({
       measure();
       unwire();
       try {
-        unwire = wireImages(frame.contentDocument, { onImageClick, onBrokenChange });
+        unwire = wireImages(frame.contentDocument, {
+          onImageClick: (...a) => handlers.current.onImageClick?.(...a),
+          onBrokenChange: (...a) => handlers.current.onBrokenChange?.(...a),
+        });
       } catch {
         unwire = () => {};
+      }
+      // 若用户已点「展开引用」，srcDoc 重载后补去隐藏
+      if (showQuote) {
+        try {
+          frame.contentDocument?.querySelectorAll('.zm-hidden-quote').forEach((el) => el.classList.remove('zm-hidden-quote'));
+        } catch {
+          /* ignore */
+        }
+        measure();
       }
       const tick = () => {
         measure();
@@ -189,11 +209,28 @@ export default function MailFrame({
       ro?.disconnect();
       unwire();
     };
-  }, [doc, onImageClick, onBrokenChange]);
+    // showQuote 故意不进依赖：展开走下方轻量 effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc]);
+
+  // 展开引用：只改 iframe DOM，不重建 srcDoc
+  useEffect(() => {
+    if (!showQuote) return;
+    const frame = ref.current;
+    try {
+      const root = frame?.contentDocument;
+      if (!root) return;
+      root.querySelectorAll('.zm-hidden-quote').forEach((el) => el.classList.remove('zm-hidden-quote'));
+      const b = root.body;
+      if (b) setHeight(Math.max(40, b.scrollHeight + 6));
+    } catch {
+      /* ignore */
+    }
+  }, [showQuote]);
 
   return (
     <div className="mail-frame-shell">
-      {html && !empty ? (
+      {isHtml ? (
         <span className="mail-trust-badge" title="脚本已禁用 · 外链新窗口打开 · 内嵌图可点击放大">
           已隔离
         </span>
@@ -201,13 +238,13 @@ export default function MailFrame({
       <iframe
         ref={ref}
         title="mail-body"
-        className={'mail-frame' + (html && !empty ? ' html' : '')}
+        className={'mail-frame' + (isHtml ? ' html' : '')}
         sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         srcDoc={doc}
         style={{ height }}
       />
-      {hasQuote && (
-        <button className="quote-toggle" onClick={() => setShowQuote(true)} title="显示引用内容">
+      {hasQuote && !showQuote && (
+        <button type="button" className="quote-toggle" onClick={() => setShowQuote(true)} title="显示引用内容">
           •••
         </button>
       )}
