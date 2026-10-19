@@ -15,18 +15,26 @@ function SectionHead({ id, title, count, hint }) {
   );
 }
 
-/** 长列表先渲染前 N 封，避免今日待办上百行一次挂满 DOM */
-function CapRows({ items, initial = 40, render }) {
-  const [open, setOpen] = useState(false);
+/** 长列表分批露出：每次 +step，避免「显示其余」一次挂满数百行 */
+function CapRows({ items, initial = 40, step = 40, render }) {
+  const [limit, setLimit] = useState(initial);
+  const itemsKey = `${items.length}:${items[0]?.id || ''}:${items[items.length - 1]?.id || ''}`;
+  useEffect(() => {
+    setLimit(initial);
+  }, [itemsKey, initial]);
   if (!items.length) return null;
-  const needCap = items.length > initial;
-  const shown = needCap && !open ? items.slice(0, initial) : items;
+  const shown = items.slice(0, limit);
+  const rest = items.length - shown.length;
   return (
     <>
       {shown.map(render)}
-      {needCap && !open && (
-        <button type="button" className="focus-show-more" onClick={() => setOpen(true)}>
-          显示其余 {items.length - initial} 封
+      {rest > 0 && (
+        <button
+          type="button"
+          className="focus-show-more"
+          onClick={() => setLimit((n) => Math.min(items.length, n + step))}
+        >
+          再显示 {Math.min(step, rest)} 封（还剩 {rest}）
         </button>
       )}
     </>

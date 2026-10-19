@@ -377,7 +377,8 @@ export default function MailList({
   const showMailbox = (view.mailboxId || 'all') === 'all' && Object.keys(mailboxMap).length > 1;
   const isSent = view.box === 'sent' || (view.box === 'folder' && view.special === '\\Sent');
   const all = [...pinned, ...messages];
-  const rowH = compact ? 44 : 64;
+  /** 与 styles.css contain-intrinsic-size 对齐；过小会导致 virt padding / 选中滚动偏位 */
+  const rowH = compact ? 44 : 72;
   /** 无置顶且行数多时做轻量窗口化（无新依赖） */
   const useVirt = pinned.length === 0 && messages.length > 60;
   const [virt, setVirt] = useState({ start: 0, end: 50 });

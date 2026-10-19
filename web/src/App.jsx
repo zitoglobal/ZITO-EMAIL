@@ -3,6 +3,14 @@ import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, 
 import { api, qs } from './api.js';
 import { putMessageCache } from './messageCache.js';
 import { enqueueAction, flushActionQueue, actionQueueLength, QUEUEABLE_ACTIONS } from './actionQueue.js';
+
+function readQueueLen() {
+  try {
+    return actionQueueLength();
+  } catch {
+    return 0;
+  }
+}
 import Auth, { HeroBrand } from './components/Auth.jsx';
 import { BrandIcon } from './components/Brand.jsx';
 import Sidebar from './components/Sidebar.jsx';
@@ -105,6 +113,7 @@ export default function App() {
   const [checked, setChecked] = useState(new Set());
   const [currentMsg, setCurrentMsg] = useState(null);
   const [netOnline, setNetOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
+  const [queuePending, setQueuePending] = useState(() => readQueueLen());
 
   const [composers, setComposers] = useState([]);
   const [modal, setModal] = useState(null);
@@ -666,6 +675,7 @@ export default function App() {
       } catch (e) {
         if ((e.offline || e.status === 0) && QUEUEABLE_ACTIONS.has(action)) {
           enqueueAction({ ids, action, extra });
+          setQueuePending(readQueueLen());
           notify('网络不可用，操作已排队，恢复后自动同步', 'info', null, 6000);
           return;
         }
@@ -1234,18 +1244,25 @@ export default function App() {
     const onOff = () => setNetOnline(false);
     const flush = async () => {
       setNetOnline(true);
-      if (!actionQueueLength()) return;
+      if (!actionQueueLength()) {
+        setQueuePending(0);
+        return;
+      }
       try {
         const r = await flushActionQueue(api);
+        setQueuePending(r.left);
         if (r.ok) {
           notify(r.left ? `已同步 ${r.ok} 项离线操作，仍有 ${r.left} 项待传` : `已同步 ${r.ok} 项离线操作`, 'success');
           loadState();
           loadList({ silent: true });
-        } else if (r.fail) {
-          notify(`${r.fail} 项离线操作同步失败`, 'error');
+        }
+        if (r.fail && !r.ok) {
+          notify(`${r.fail} 项离线操作同步失败，已保留待重试`, 'error');
+        } else if (r.dropped) {
+          notify(`${r.dropped} 项离线操作多次失败已放弃`, 'error');
         }
       } catch {
-        /* ignore */
+        setQueuePending(readQueueLen());
       }
     };
     const onZm = (e) => {
@@ -1258,6 +1275,7 @@ export default function App() {
     window.addEventListener('online', flush);
     window.addEventListener('zm-network', onZm);
     if (navigator.onLine && actionQueueLength()) flush();
+    else setQueuePending(readQueueLen());
     return () => {
       window.removeEventListener('offline', onOff);
       window.removeEventListener('online', flush);
@@ -1434,7 +1452,7 @@ export default function App() {
   const syncing = mailboxes.filter((m) => m.status === 'syncing' || m.status === 'new');
   const syncAlert = syncBad.length || syncing.length;
   const lastSyncAt = mailboxes.reduce((max, m) => Math.max(max, Number(m.lastSync) || 0), 0);
-  const showAlertStrip = !netOnline || syncAlert;
+  const showAlertStrip = !netOnline || syncAlert || queuePending > 0;
   const showStatusStrip = showAlertStrip || !!lastSyncAt;
 
   // 销售台：客户栏常驻挂载，未选信显示空态，避免选信时插拔整列跳动
@@ -1533,9 +1551,33 @@ export default function App() {
           {!netOnline ? (
             <>
               <AlertCircle size={14} />
-              <span>网络已断开，列表可能不是最新；恢复后将自动继续</span>
+              <span>
+                网络已断开，列表可能不是最新
+                {queuePending > 0 ? ` · ${queuePending} 项操作待同步` : ''}
+                ；恢复后将自动继续
+              </span>
               <button type="button" className="mb-sync-link" onClick={() => refresh()} disabled={refreshing}>
                 {refreshing ? '重试中…' : '重试'}
+              </button>
+            </>
+          ) : queuePending > 0 ? (
+            <>
+              <RefreshCw size={14} />
+              <span>{queuePending} 项离线操作待同步</span>
+              <button
+                type="button"
+                className="mb-sync-link"
+                onClick={async () => {
+                  const r = await flushActionQueue(api);
+                  setQueuePending(r.left);
+                  if (r.ok) {
+                    notify(r.left ? `已同步 ${r.ok} 项，仍有 ${r.left} 项` : `已同步 ${r.ok} 项离线操作`, 'success');
+                    loadState();
+                    loadList({ silent: true });
+                  } else if (r.fail) notify(`${r.fail} 项同步失败，已保留待重试`, 'error');
+                }}
+              >
+                立即同步
               </button>
             </>
           ) : syncBad.length ? (

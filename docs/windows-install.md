@@ -22,6 +22,7 @@
 |------|------|
 | 配置与密钥 | `%APPDATA%\ZITO-EMAIL\config.json` |
 | 数据库与附件 | `%APPDATA%\ZITO-EMAIL\data\` |
+| 附件预览缓存 | `%APPDATA%\ZITO-EMAIL\data\att-cache\`（明文缩略图，勿同步到网盘） |
 
 卸载安装程序 **默认不删除** 上述数据（可保留客户邮件库）。若需彻底清除，请手动删除 `%APPDATA%\ZITO-EMAIL`。
 
@@ -39,6 +40,8 @@
 - 默认只监听 `127.0.0.1`；局域网访问需显式设 `DESKTOP_ALLOW_LAN=1`
 - 首装后注册默认关闭；需多人本机账号时设 `DESKTOP_OPEN_SIGNUP=1` 或邀请码
 - 托盘「立即备份」使用本机 `config.json` 中的 `desktopToken`，勿把该文件同步到公网
+- `config.json` 内邮箱密码等为**本机派生密封**（`d1.`），**不是** Windows DPAPI；同 Windows 用户可读配置即可解封——勿把 `%APPDATA%\ZITO-EMAIL` 拷到他人电脑或网盘
+- `data\att-cache\` 为附件预览**明文**缓存（进程会尽量收紧目录权限）；共享电脑请用独立 Windows 账号，或定期清空该目录
 
 ### 常见问题
 

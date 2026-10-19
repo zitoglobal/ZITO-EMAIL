@@ -702,6 +702,13 @@ assert('ftsEscape empty', ftsEscape('   ') === '');
   let calls = 0;
   const r = await flushActionQueue(async () => { calls += 1; return { ok: true }; });
   assert('queue flush ok', r.ok === 1 && calls === 1 && actionQueueLength() === 0);
+  enqueueAction({ ids: [9], action: 'done', extra: {} });
+  const bad = await flushActionQueue(async () => {
+    const err = new Error('server 500');
+    err.status = 500;
+    throw err;
+  });
+  assert('queue keeps failed', bad.fail === 1 && bad.left === 1 && actionQueueLength() === 1);
 }
 
 {

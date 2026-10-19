@@ -8,6 +8,27 @@ import { DATA_DIR } from './db.js';
 const ROOT = path.join(DATA_DIR, 'att-cache');
 const MAX_FILES = 2500;
 const MAX_BYTES = 800 * 1024 * 1024; // ~800MB
+const PRUNE_EVERY_WRITES = 24;
+const PRUNE_MIN_MS = 45_000;
+let writesSincePrune = 0;
+let lastPruneAt = 0;
+let pruneTimer = null;
+let rootEnsured = false;
+
+function ensureRoot() {
+  if (rootEnsured) return;
+  try {
+    fs.mkdirSync(ROOT, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(ROOT, 0o700);
+    } catch {
+      /* Windows 常无 POSIX 模式 */
+    }
+    rootEnsured = true;
+  } catch {
+    /* 首次写时再试 */
+  }
+}
 
 function filePaths(messagePk, index) {
   const dir = path.join(ROOT, String(messagePk));
@@ -44,10 +65,11 @@ export function writeAttCache(messagePk, index, { filename, contentType, content
   try {
     const buf = Buffer.isBuffer(content) ? content : Buffer.from(content || '');
     if (!buf.length || buf.length > 40 * 1024 * 1024) return null; // 过大不落盘
+    ensureRoot();
     const { dir, bin, meta } = filePaths(messagePk, index);
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const etag = `${messagePk}-${index}-${buf.length}`;
-    fs.writeFileSync(bin, buf);
+    fs.writeFileSync(bin, buf, { mode: 0o600 });
     fs.writeFileSync(
       meta,
       JSON.stringify({
@@ -56,14 +78,30 @@ export function writeAttCache(messagePk, index, { filename, contentType, content
         etag,
         size: buf.length,
         at: Date.now(),
-      })
+      }),
+      { mode: 0o600 }
     );
-    pruneAttCache();
+    schedulePruneAttCache();
     return etag;
   } catch (e) {
     console.warn('[att-cache] write', e.message);
     return null;
   }
+}
+
+/** 写满 N 次或距上次 ≥45s 再扫；避免每次写入全量 readdir */
+export function schedulePruneAttCache(force = false) {
+  writesSincePrune += 1;
+  const due = force || writesSincePrune >= PRUNE_EVERY_WRITES || Date.now() - lastPruneAt >= PRUNE_MIN_MS;
+  if (!due) return;
+  if (pruneTimer) return;
+  pruneTimer = setTimeout(() => {
+    pruneTimer = null;
+    writesSincePrune = 0;
+    lastPruneAt = Date.now();
+    pruneAttCache();
+  }, 0);
+  if (typeof pruneTimer.unref === 'function') pruneTimer.unref();
 }
 
 /** 按 mtime 淘汰最旧文件 */
