@@ -264,6 +264,12 @@ function stateFor(user, dayStart) {
   } catch (_) {
     teamStats = null;
   }
+  let fts = { busy: false, pending: false, backfillLeft: 0 };
+  try {
+    fts = repo.getFtsStatus();
+  } catch (_) {
+    /* ignore */
+  }
   return {
     mailboxes: mbs.map(repo.publicMailbox),
     folders: Object.fromEntries(mbs.map((m) => [m.id, repo.listFolders(m.id).map(folderPublic)])),
@@ -271,6 +277,7 @@ function stateFor(user, dayStart) {
     labels: labels.listLabels(user.id),
     mailRulesCount: mailRules.listRules(user.id).filter((r) => r.enabled).length,
     savedSearches: savedSearches.listSavedSearches(user.id),
+    fts,
   };
 }
 

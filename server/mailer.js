@@ -10,6 +10,7 @@ import { DATA_DIR, db } from './db.js';
 import * as deals from './deals.js';
 import * as users from './users.js';
 import * as priority from './priority.js';
+import { inlineDataImagesInHtml, mergeInlineAttachments } from './mail_mime.js';
 
 export const OUTBOX_DIR = path.join(DATA_DIR, 'outbox');
 
@@ -41,16 +42,18 @@ export async function buildMail(mb, payload, files) {
       }
     }
   }
+  // Outlook/企业网关常剥 HTML 内 data:image；抽成 cid 内联附件
+  const { html, attachments: inlineAtt } = inlineDataImagesInHtml(payload.html || '');
   return {
     to: parseRecipients(payload.to),
     cc: parseRecipients(payload.cc),
     bcc: parseRecipients(payload.bcc),
     subject: payload.subject || '',
-    html: payload.html,
+    html,
     text: payload.text,
     inReplyTo: payload.inReplyTo,
     references: payload.references,
-    attachments,
+    attachments: mergeInlineAttachments(attachments, inlineAtt),
   };
 }
 

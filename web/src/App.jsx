@@ -125,6 +125,7 @@ export default function App() {
   const [currentMsg, setCurrentMsg] = useState(null);
   const [netOnline, setNetOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
   const [queuePending, setQueuePending] = useState(() => readQueueLen());
+  const [fts, setFts] = useState({ busy: false, pending: false, backfillLeft: 0 });
 
   const [composers, setComposers] = useState([]);
   const [modal, setModal] = useState(null);
@@ -290,6 +291,7 @@ export default function App() {
     setCounts(s.counts);
     if (s.labels) setLabels(s.labels);
     if (s.savedSearches) setSavedSearches(s.savedSearches);
+    if (s.fts) setFts(s.fts);
   }, []);
 
   const loadState = useCallback(async () => {
@@ -299,6 +301,14 @@ export default function App() {
       if (e.status === 401) setBoot('auth');
     }
   }, [applyState]);
+
+  // 索引建立中定期刷新，搜索提示能自动消失
+  useEffect(() => {
+    if (boot !== 'ready') return undefined;
+    if (!(fts.busy || fts.pending || (fts.backfillLeft || 0) > 0)) return undefined;
+    const t = setInterval(() => loadState(), 12_000);
+    return () => clearInterval(t);
+  }, [boot, fts.busy, fts.pending, fts.backfillLeft, loadState]);
 
   function setView(v) {
     setViewState(v);
@@ -1609,7 +1619,9 @@ export default function App() {
                     notify(r.left ? `已同步 ${r.ok} 项，仍有 ${r.left} 项` : `已同步 ${r.ok} 项离线操作`, 'success');
                     loadState();
                     loadList({ silent: true });
-                  } else if (r.fail) notify(`${r.fail} 项同步失败，已保留待重试`, 'error');
+                  }
+                  if (r.fail && !r.ok) notify(`${r.fail} 项同步失败，已保留待重试`, 'error');
+                  if (r.dropped) notify(`${r.dropped} 项离线操作多次失败已放弃`, 'error');
                 }}
               >
                 立即同步
@@ -1781,6 +1793,7 @@ export default function App() {
           showCategories={showCategories}
           q={q}
           deep={deep}
+          ftsIndexing={!!(fts.busy || fts.pending || (fts.backfillLeft || 0) > 0)}
           onSearch={(nq, d) => {
             if (!nq && view.box === 'smart') {
               setView({ mailboxId: 'all', box: 'inbox' });

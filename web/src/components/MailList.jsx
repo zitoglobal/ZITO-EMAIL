@@ -363,6 +363,7 @@ export default function MailList({
   labels = [], onToggleLabels, onCreateLabel,
   onSaveSearch, onUpdateSavedSearch, activeSavedSearch = null,
   onMenu, error, compact, onMarkAllRead,
+  ftsIndexing = false,
 }) {
   const [input, setInput] = useState(q);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -523,7 +524,11 @@ export default function MailList({
         </form>
         {q && (
           <div className="search-hint">
-            {deep ? '已在邮件服务器上搜索全文（含正文）' : '当前搜索本地缓存的邮件'}
+            {ftsIndexing
+              ? '全文索引建立中，本地搜索结果可能不全；可稍后再搜或改用服务器搜索'
+              : deep
+                ? '已在邮件服务器上搜索全文（含正文）'
+                : '当前搜索本地缓存的邮件'}
             {!deep && <button className="link-btn" onClick={() => onSearch(q, true)}><ServerCrash size={12} /> 在服务器上搜索全文</button>}
             {onSaveSearch && (
               <button

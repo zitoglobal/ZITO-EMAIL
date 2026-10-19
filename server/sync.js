@@ -14,8 +14,12 @@ const INITIAL_INBOX = 400;
 const INITIAL_OTHER = 150;
 const FULL_INTERVAL = 5 * 60_000;
 const INBOX_INTERVAL = 90_000;
-/** Sent 无 IDLE 时的近实时轮询；有 Sent IDLE 时作兜底 */
+/**
+ * Sent 轮询（默认不再开第二条 IDLE，省每箱 1 路长连接）。
+ * 发后 forceSync + 本轮询已够「等对方」消待办；若需 Sent IDLE：SENT_IDLE=1
+ */
 const SENT_INTERVAL = 45_000;
+const SENT_IDLE = String(process.env.SENT_IDLE || '').trim() === '1';
 /** Drafts 无 IDLE，短轮询改善多端草稿 */
 const DRAFTS_INTERVAL = 45_000;
 
@@ -68,7 +72,7 @@ class Engine {
       }, DRAFTS_INTERVAL)
     );
     this.connectWatcher();
-    this.connectSentWatcher();
+    if (SENT_IDLE) this.connectSentWatcher();
     // 未识别 Sent 时「已回仍待办」会偏慢，打日志并给前端一次提示
     if (!this.sentPath()) {
       const mb = this.mb;
@@ -220,7 +224,7 @@ class Engine {
         repo.setMailboxStatus(mb.id, 'ok');
         emit(mb.user_id, 'mailbox', { id: mb.id, status: 'ok' });
         if (!this.watcher && !this.reconnectTimer) this.connectWatcher();
-        if (!this.sentWatcher && !this.sentReconnectTimer) this.connectSentWatcher();
+        if (SENT_IDLE && !this.sentWatcher && !this.sentReconnectTimer) this.connectSentWatcher();
       } catch (e) {
         const msg = e.message || String(e);
         // FTS 索引问题不应把整箱打成 error（收信仍可用）

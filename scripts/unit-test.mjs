@@ -704,6 +704,20 @@ assert('ftsEscape empty', ftsEscape('   ') === '');
 }
 
 {
+  const { inlineDataImagesInHtml, mergeInlineAttachments } = await import('../server/mail_mime.js');
+  const tiny =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const { html, attachments } = inlineDataImagesInHtml(`<p>x<img src="${tiny}" alt="a"></p>`);
+  assert('mime inline extracts cid', attachments.length === 1 && attachments[0].cid.includes('@zito.mail'));
+  assert('mime html uses cid', html.includes(`cid:${attachments[0].cid}`) && !/data:image/i.test(html));
+  assert('mime contentDisposition inline', attachments[0].contentDisposition === 'inline');
+  const merged = mergeInlineAttachments([{ filename: 'a.pdf' }], attachments);
+  assert('mime merge order', merged[0].cid && merged[1].filename === 'a.pdf');
+  const skip = inlineDataImagesInHtml('<p>no img</p>');
+  assert('mime no-op', skip.attachments.length === 0 && skip.html.includes('no img'));
+}
+
+{
   const { sealDesktopSecret, unsealDesktopSecret } = await import('../server/desktop_boot.js');
   const sealed = sealDesktopSecret('super-secret-token-xyz');
   assert('desk seal prefix', sealed.startsWith('d1.'));
