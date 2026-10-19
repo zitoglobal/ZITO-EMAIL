@@ -169,63 +169,101 @@ export function removeOutboxFiles(dir) {
 }
 
 // ---------- 后台调度 ----------
-let busy = false;
-async function tick() {
-  if (busy) return;
-  busy = true;
-  try {
-    for (const job of repo.dueOutbox()) {
-      // 与 DELETE 条件删除互斥：抢不到说明用户已撤销
-      if (!repo.claimOutboxSending(job.id)) continue;
-      const mb = repo.getMailboxById(job.mailbox_id);
-      try {
-        const payload = JSON.parse(job.payload);
-        await deliver(mb, payload, loadOutboxFiles(job.files_dir));
-        repo.deleteOutbox(job.id);
+const SEND_HARD_TIMEOUT_MS = 120_000;
+const STALE_SENDING_MS = 180_000;
+let sendBusy = false;
+
+function reclaimStaleSending() {
+  const stale = repo.reclaimStaleOutboxSending(STALE_SENDING_MS);
+  for (const r of stale) {
+    emit(r.userId, 'outbox', { id: r.id, status: 'failed', error: r.error });
+  }
+  return stale.length;
+}
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label || `操作超时（${Math.round(ms / 1000)}s）`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function processOutbox() {
+  for (const job of repo.dueOutbox()) {
+    const claimedAt = repo.claimOutboxSending(job.id);
+    if (claimedAt == null) continue;
+    const mb = repo.getMailboxById(job.mailbox_id);
+    try {
+      const payload = JSON.parse(job.payload);
+      await withTimeout(deliver(mb, payload, loadOutboxFiles(job.files_dir)), SEND_HARD_TIMEOUT_MS, '发送超时（120s）');
+      const finished = repo.finishOutboxIfClaim(job.id, claimedAt);
+      if (finished) {
         removeOutboxFiles(job.files_dir);
         emit(job.user_id, 'outbox', { id: job.id, status: 'sent' });
-        try {
-          const settings = users.settingsOf(job.user_id);
-          if (settings.sendAutoClaim !== 'off') {
-            const selfEmails = repo.listMailboxes(job.user_id).map((m) => m.email).filter(Boolean);
-            const meta = deals.afterOutboundSend(job.user_id, payload, { mode: 'auto', selfEmails });
-            if (meta?.claimed || meta?.conflict) {
-              for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
-            }
+      } else {
+        // 已被超时回收或用户重试；SMTP 可能已成功——勿删用户新任务
+        console.warn('[outbox] deliver ok but claim gone', job.id);
+      }
+      try {
+        const settings = users.settingsOf(job.user_id);
+        if (settings.sendAutoClaim !== 'off') {
+          const selfEmails = repo.listMailboxes(job.user_id).map((m) => m.email).filter(Boolean);
+          const meta = deals.afterOutboundSend(job.user_id, payload, { mode: 'auto', selfEmails });
+          if (meta?.claimed || meta?.conflict) {
+            for (const u of users.listUsers()) emit(u.id, 'sync', { local: true, deal: true });
           }
-        } catch (e) {
-          console.warn('[deals] outbox claim', e.message);
         }
       } catch (e) {
-        const msg = e.message || String(e);
-        const transient = isTransientSmtpError(msg);
-        const tries = Number(job.tries || 0) + 1;
-        if (transient && tries <= 2) {
-          const delay = tries === 1 ? 30_000 : 120_000;
-          repo.scheduleOutboxRetry(job.id, Date.now() + delay, tries, msg);
-          emit(job.user_id, 'outbox', { id: job.id, status: 'retry', tries, error: msg, sendAt: Date.now() + delay });
-        } else {
-          repo.setOutboxStatus(job.id, 'failed', msg);
-          emit(job.user_id, 'outbox', { id: job.id, status: 'failed', error: msg });
+        console.warn('[deals] outbox claim', e.message);
+      }
+    } catch (e) {
+      const msg = e.message || String(e);
+      const transient = isTransientSmtpError(msg);
+      const tries = Number(job.tries || 0) + 1;
+      if (transient && tries <= 2) {
+        const delay = tries === 1 ? 30_000 : 120_000;
+        const sendAt = Date.now() + delay;
+        if (repo.scheduleOutboxRetryIfClaim(job.id, claimedAt, sendAt, tries, msg)) {
+          emit(job.user_id, 'outbox', { id: job.id, status: 'retry', tries, error: msg, sendAt });
         }
+      } else if (repo.failOutboxIfClaim(job.id, claimedAt, msg)) {
+        emit(job.user_id, 'outbox', { id: job.id, status: 'failed', error: msg });
       }
     }
+  }
+}
 
-    const due = repo.dueSnoozes();
-    for (const m of due) {
-      repo.patchMessages([m.id], { snooze_until: null, sort_ts: Date.now(), seen: 0 });
-      const mb = repo.getMailboxById(m.mailbox_id);
-      imap.setFlags(mb, m.folder, [m.uid], { seen: false }).catch(() => {});
-      emit(m.user_id, 'new', {
-        mailboxId: m.mailbox_id,
-        snooze: true,
-        count: 1,
-        items: [{ id: m.id, subject: m.subject, from: { name: m.from_name, address: m.from_addr } }],
-      });
-      emit(m.user_id, 'sync', { mailboxId: m.mailbox_id, folder: m.folder });
-    }
+function processSnoozes() {
+  const due = repo.dueSnoozes();
+  for (const m of due) {
+    repo.patchMessages([m.id], { snooze_until: null, sort_ts: Date.now(), seen: 0 });
+    const mb = repo.getMailboxById(m.mailbox_id);
+    imap.setFlags(mb, m.folder, [m.uid], { seen: false }).catch(() => {});
+    emit(m.user_id, 'new', {
+      mailboxId: m.mailbox_id,
+      snooze: true,
+      count: 1,
+      items: [{ id: m.id, subject: m.subject, from: { name: m.from_name, address: m.from_addr } }],
+    });
+    emit(m.user_id, 'sync', { mailboxId: m.mailbox_id, folder: m.folder });
+  }
+}
+
+async function tick() {
+  reclaimStaleSending();
+  // 稍后提醒不因发信卡住而停
+  try {
+    processSnoozes();
+  } catch (e) {
+    console.error('[scheduler] snooze', e);
+  }
+  if (sendBusy) return;
+  sendBusy = true;
+  try {
+    await processOutbox();
   } finally {
-    busy = false;
+    sendBusy = false;
   }
 }
 
@@ -239,3 +277,6 @@ export function startScheduler() {
   setInterval(() => tick().catch((e) => console.error('[scheduler]', e)), 1_500).unref();
   setInterval(() => repo.pruneBodies(), 3600_000).unref();
 }
+
+/** 单测用：导出回收逻辑 */
+export { reclaimStaleSending, STALE_SENDING_MS };

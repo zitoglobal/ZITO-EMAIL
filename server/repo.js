@@ -971,12 +971,53 @@ export function deleteOutboxIfScheduled(id) {
 export function deleteOutboxIfCancellable(id) {
   return db.prepare("DELETE FROM outbox WHERE id = ? AND status IN ('scheduled', 'failed')").run(id).changes > 0;
 }
-/** 原子抢占发送权；失败表示已被撤销或他进程抢走 */
+/**
+ * 原子抢占发送权；成功返回 claimedAt（写入 send_at 作计时锚），失败返回 null。
+ * 完成/失败须带同一 claimedAt，避免超时回收后与用户重试竞态。
+ */
 export function claimOutboxSending(id) {
+  const claimedAt = Date.now();
+  const ok =
+    db
+      .prepare("UPDATE outbox SET status = 'sending', send_at = ? WHERE id = ? AND status = 'scheduled' AND send_at <= ?")
+      .run(claimedAt, id, claimedAt + 100).changes > 0;
+  return ok ? claimedAt : null;
+}
+
+/** 运行中卡住的 sending → failed（勿自动重发；提示核对已发送） */
+export function reclaimStaleOutboxSending(maxAgeMs = 180_000) {
+  const cutoff = Date.now() - maxAgeMs;
+  const error = '发送超时中断，请到「已发送」确认是否已发出后再重试';
+  const rows = db
+    .prepare("SELECT id, user_id AS userId FROM outbox WHERE status = 'sending' AND send_at < ?")
+    .all(cutoff);
+  if (!rows.length) return [];
+  db.prepare("UPDATE outbox SET status = 'failed', error = ? WHERE status = 'sending' AND send_at < ?").run(error, cutoff);
+  return rows.map((r) => ({ id: r.id, userId: r.userId, error }));
+}
+
+export function finishOutboxIfClaim(id, claimedAt) {
+  return (
+    db.prepare("DELETE FROM outbox WHERE id = ? AND status = 'sending' AND send_at = ?").run(id, claimedAt).changes > 0
+  );
+}
+
+export function failOutboxIfClaim(id, claimedAt, error) {
   return (
     db
-      .prepare("UPDATE outbox SET status = 'sending' WHERE id = ? AND status = 'scheduled' AND send_at <= ?")
-      .run(id, Date.now() + 100).changes > 0
+      .prepare("UPDATE outbox SET status = 'failed', error = ? WHERE id = ? AND status = 'sending' AND send_at = ?")
+      .run(error || '发送失败', id, claimedAt).changes > 0
+  );
+}
+
+export function scheduleOutboxRetryIfClaim(id, claimedAt, sendAt, tries, error) {
+  const msg = `将自动重试（${tries}/2）：${error || '发送失败'}`;
+  return (
+    db
+      .prepare(
+        "UPDATE outbox SET status = 'scheduled', send_at = ?, tries = ?, error = ? WHERE id = ? AND status = 'sending' AND send_at = ?"
+      )
+      .run(sendAt, tries, msg, id, claimedAt).changes > 0
   );
 }
 

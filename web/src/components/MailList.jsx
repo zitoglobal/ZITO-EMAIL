@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, RefreshCw, Star, Paperclip, MailOpen, Mail, Trash2, Archive, FolderInput, X, Menu, CornerUpLeft, Loader2, Inbox, Clock, Pin,
   ServerCrash, ShieldAlert, CheckCheck, Crown, Flame, Hourglass, Sparkles, CheckCircle2, Reply, BellOff, Send, Tag, Bookmark, Hand,
@@ -377,6 +377,10 @@ export default function MailList({
   const showMailbox = (view.mailboxId || 'all') === 'all' && Object.keys(mailboxMap).length > 1;
   const isSent = view.box === 'sent' || (view.box === 'folder' && view.special === '\\Sent');
   const all = [...pinned, ...messages];
+  const rowH = compact ? 44 : 64;
+  /** 无置顶且行数多时做轻量窗口化（无新依赖） */
+  const useVirt = pinned.length === 0 && messages.length > 60;
+  const [virt, setVirt] = useState({ start: 0, end: 50 });
 
   useEffect(() => setInput(q), [q]);
 
@@ -402,8 +406,18 @@ export default function MailList({
 
   useEffect(() => {
     if (!selectedId) return;
+    if (useVirt) {
+      const idx = messages.findIndex((m) => m.id === selectedId);
+      if (idx >= 0 && listBodyRef.current) {
+        const el = listBodyRef.current;
+        const top = idx * rowH;
+        if (top < el.scrollTop || top > el.scrollTop + el.clientHeight - rowH) {
+          el.scrollTop = Math.max(0, top - el.clientHeight / 3);
+        }
+      }
+    }
     document.querySelector(`.mail-row[data-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' });
-  }, [selectedId]);
+  }, [selectedId, useVirt, messages, rowH]);
 
   // 换箱/搜索前记下滚动；切回时恢复
   useEffect(() => {
@@ -419,6 +433,30 @@ export default function MailList({
       }
     };
   }, [scrollKey]);
+
+  useEffect(() => {
+    if (!useVirt) {
+      setVirt({ start: 0, end: messages.length });
+      return undefined;
+    }
+    const el = listBodyRef.current;
+    if (!el) return undefined;
+    const onScroll = () => {
+      const start = Math.max(0, Math.floor(el.scrollTop / rowH) - 10);
+      const visible = Math.ceil(el.clientHeight / rowH) + 20;
+      setVirt({ start, end: Math.min(messages.length, start + visible) });
+    };
+    onScroll();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [useVirt, messages.length, rowH]);
+
+  const visibleMessages = useMemo(() => {
+    if (!useVirt) return messages;
+    return messages.slice(virt.start, virt.end);
+  }, [useVirt, messages, virt.start, virt.end]);
+  const topPad = useVirt ? virt.start * rowH : 0;
+  const botPad = useVirt ? Math.max(0, (messages.length - virt.end) * rowH) : 0;
 
   function toggleCheck(id, range) {
     const next = new Set(checked);
@@ -602,7 +640,9 @@ export default function MailList({
             {messages.length > 0 && <div className="list-section">其他邮件</div>}
           </>
         )}
-        {messages.map((m) => <Row key={m.id} {...rowProps(m)} />)}
+        {topPad > 0 && <div style={{ height: topPad }} aria-hidden />}
+        {visibleMessages.map((m) => <Row key={m.id} {...rowProps(m)} />)}
+        {botPad > 0 && <div style={{ height: botPad }} aria-hidden />}
         {hasMore && (
           <div ref={sentinel} className="load-more">
             {loadingMore ? <><Loader2 size={14} className="spin" /> 正在加载更早的邮件…</> : ' '}

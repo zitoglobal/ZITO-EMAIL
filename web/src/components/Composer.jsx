@@ -154,6 +154,21 @@ export default function Composer({ initial, mailboxes, aiEnabled, aiMeta, onSend
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 全局 Esc → 最小化；同步 body 标记供 App 屏蔽列表快捷键
+  useEffect(() => {
+    const syncComposeClass = () => {
+      document.body.classList.toggle('zm-compose-open', !!document.querySelector('.composer:not(.minimized)'));
+    };
+    const raf = requestAnimationFrame(syncComposeClass);
+    const onEsc = () => setView((v) => (v === 'min' ? v : 'min'));
+    window.addEventListener('zm-composer-escape', onEsc);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('zm-composer-escape', onEsc);
+      requestAnimationFrame(syncComposeClass);
+    };
+  }, [view]);
+
   // 自动保存草稿（定时 + 切走标签页）
   const latest = useRef();
   latest.current = { saveDraft, hasContent, saving };

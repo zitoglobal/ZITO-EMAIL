@@ -1238,6 +1238,20 @@ export default function App() {
         if (e.key === 'Escape') setModal(null);
         return;
       }
+      // 写信窗展开时：Esc 最小化；禁止列表破坏性/导航快捷键（焦点可能在列表）
+      const composeOpen = typeof document !== 'undefined' && document.body.classList.contains('zm-compose-open');
+      if (composeOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent('zm-composer-escape'));
+          return;
+        }
+        const allowed = e.key === 'g' || e.key === 'c' || e.key === 'z' || e.key === '?';
+        if (!allowed) {
+          e.preventDefault();
+          return;
+        }
+      }
       const idx = s.allItems.findIndex((m) => m.id === s.selectedId);
       const step = (d) => {
         const m = s.allItems[Math.min(s.allItems.length - 1, Math.max(0, idx + d))];

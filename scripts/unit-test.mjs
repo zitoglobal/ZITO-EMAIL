@@ -23,11 +23,13 @@ import {
   FOLLOW_SEQ_DAYS, quoteSnippet, scopeMailMatch,
 } from '../server/deals.js';
 import { APPAREL_EMAIL_TEMPLATES, ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS as CLIENT_FOLLOW_SEQ } from '../web/src/apparelPresets.js';
-import { isBlockedHostname, assertSafeAiBaseUrl } from '../server/net_guard.js';
+import { isBlockedHostname, assertSafeAiBaseUrl, isLoopbackIp } from '../server/net_guard.js';
 import { sanitizeMailHtml, scrubStyleAttr } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
-import { conversationKey, ftsEscape, isSqliteCorrupt } from '../server/repo.js';
+import {
+  conversationKey, ftsEscape, isSqliteCorrupt, reclaimStaleOutboxSending, claimOutboxSending,
+} from '../server/repo.js';
 import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER } from '../server/imap.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
@@ -318,6 +320,10 @@ assert('invalid stage', !isValidStage('foobar'));
 assert('stageMeta quote', stageMeta('quote').label === '报价中');
 
 // ---------- SSRF host guard ----------
+assert('loopback 127', isLoopbackIp('127.0.0.1'));
+assert('loopback ::1', isLoopbackIp('::1'));
+assert('loopback mapped', isLoopbackIp('::ffff:127.0.0.1'));
+assert('not loopback lan', !isLoopbackIp('192.168.1.8'));
 assert('block localhost', isBlockedHostname('localhost'));
 assert('block 127.0.0.1', isBlockedHostname('127.0.0.1'));
 assert('block 10.x', isBlockedHostname('10.1.2.3'));
@@ -477,6 +483,8 @@ assert('smtp transient 421', isTransientSmtpError('421 Try again later'));
 assert('smtp auth not transient', !isTransientSmtpError('535 Authentication failed'));
 assert('outbox load rejects outside dir', loadOutboxFiles(path.join(os.tmpdir(), 'not-outbox-xyz')).length === 0);
 assert('outbox dir constant set', typeof OUTBOX_DIR === 'string' && OUTBOX_DIR.length > 0);
+assert('reclaimStaleOutboxSending export', typeof reclaimStaleOutboxSending === 'function');
+assert('claimOutboxSending export', typeof claimOutboxSending === 'function');
 assert('ASSET_KIND techpack label', ASSET_KIND_LABEL.techpack === 'Tech pack');
 assert('apparel template has stage', APPAREL_EMAIL_TEMPLATES.some((t) => t.stage === 'quote'));
 assert('FOLLOW_SEQ force days sample', FOLLOW_SEQ_DAYS.sample === 7 && FOLLOW_SEQ_DAYS.bulk === 5);

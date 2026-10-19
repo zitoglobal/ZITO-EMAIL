@@ -37,6 +37,16 @@ function ipBlocked(ip) {
   return false;
 }
 
+/** 本机回环（桌面特权 API 用；与 SSRF 黑名单语义相反） */
+export function isLoopbackIp(ip) {
+  const s = String(ip || '').trim().toLowerCase();
+  if (!s) return false;
+  if (s === '127.0.0.1' || s === '::1' || s === 'localhost') return true;
+  if (s === '::ffff:127.0.0.1') return true;
+  if (s.startsWith('127.')) return true;
+  return false;
+}
+
 export function isBlockedHostname(host) {
   const h = String(host || '')
     .trim()

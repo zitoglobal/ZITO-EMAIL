@@ -38,7 +38,7 @@ import * as brands from './brands.js';
 import * as customerAssets from './customer_assets.js';
 import * as threadNotes from './thread_notes.js';
 import * as deliverability from './deliverability.js';
-import { assertSafeMailHosts, assertSafeAiBaseUrl } from './net_guard.js';
+import { assertSafeMailHosts, assertSafeAiBaseUrl, isLoopbackIp } from './net_guard.js';
 import { sanitizeMailHtml } from './sanitize_mail.js';
 import * as totp from './totp.js';
 import * as analytics from './analytics.js';
@@ -233,9 +233,12 @@ function timingSafeEqualStr(a, b) {
   return crypto.timingSafeEqual(x, y);
 }
 
-/** 托盘本机特权：x-zm + 本地 desktopToken（仅桌面模式） */
+/** 托盘本机特权：x-zm + desktopToken + 必须本机回环（防 LAN 误暴露备份面） */
 function desktopLocalAuth(req, res, next) {
   if (!IS_DESKTOP) return res.status(404).json({ error: '非桌面模式' });
+  if (!isLoopbackIp(clientIp(req))) {
+    return res.status(403).json({ error: '仅本机可调用' });
+  }
   const token = desktopLocalToken();
   const got = req.headers['x-zm-desktop'] || '';
   if (!token || !timingSafeEqualStr(token, got)) {
