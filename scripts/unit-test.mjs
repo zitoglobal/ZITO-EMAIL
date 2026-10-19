@@ -23,7 +23,7 @@ import {
   FOLLOW_SEQ_DAYS, quoteSnippet, scopeMailMatch,
 } from '../server/deals.js';
 import { APPAREL_EMAIL_TEMPLATES, ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS as CLIENT_FOLLOW_SEQ } from '../web/src/apparelPresets.js';
-import { isBlockedHostname } from '../server/net_guard.js';
+import { isBlockedHostname, assertSafeAiBaseUrl } from '../server/net_guard.js';
 import { sanitizeMailHtml } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
@@ -339,6 +339,14 @@ assert(
   sanitizeMailHtml('<p>Alice</p><img src="data:image/png;base64,iVBORw0KGgo=" alt="logo">').includes('data:image/png')
 );
 assert('block data:text scheme', !sanitizeMailHtml('<a href="data:text/html,hi">x</a>').includes('data:text'));
+assert(
+  'block data html img',
+  !sanitizeMailHtml('<img src="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">').includes('data:text/html')
+);
+assert(
+  'block svg data img',
+  !sanitizeMailHtml('<img src="data:image/svg+xml;base64,PHN2Zy8+">').includes('svg+xml')
+);
 
 // ---------- password + totp ----------
 assert('pwd too short fails', (() => { try { assertPasswordStrength('Ab1'); return false; } catch { return true; } })());
@@ -612,6 +620,23 @@ assert('isSqliteCorrupt SQLITE_CORRUPT', isSqliteCorrupt({ message: 'SQLITE_CORR
 assert('isSqliteCorrupt contentless', isSqliteCorrupt(new Error('cannot DELETE from contentless fts5 table: messages_fts')));
 assert('isSqliteCorrupt legacy trigger cols', isSqliteCorrupt(new Error('table messages_fts has no column named from_name')));
 assert('isSqliteCorrupt ignores other', !isSqliteCorrupt(new Error('UNIQUE constraint failed')));
+
+{
+  let aiHttpRejected = false;
+  try {
+    await assertSafeAiBaseUrl('http://example.com/v1');
+  } catch {
+    aiHttpRejected = true;
+  }
+  assert('reject AI http base', aiHttpRejected);
+  let aiLocalRejected = false;
+  try {
+    await assertSafeAiBaseUrl('https://127.0.0.1/v1');
+  } catch {
+    aiLocalRejected = true;
+  }
+  assert('reject AI loopback base', aiLocalRejected);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

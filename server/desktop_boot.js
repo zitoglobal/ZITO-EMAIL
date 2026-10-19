@@ -51,7 +51,13 @@ export function writeDesktopConfig(patch = {}) {
   const home = desktopHome();
   fs.mkdirSync(home, { recursive: true });
   const next = { ...readDesktopConfig(), ...patch };
-  fs.writeFileSync(desktopConfigPath(), JSON.stringify(next, null, 2), 'utf8');
+  const p = desktopConfigPath();
+  fs.writeFileSync(p, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 });
+  try {
+    fs.chmodSync(p, 0o600);
+  } catch {
+    /* Windows 可能忽略 */
+  }
   return next;
 }
 
@@ -60,11 +66,16 @@ export function applyDesktopEnv() {
   if (!IS_DESKTOP) return { applied: false };
 
   process.env.NODE_ENV = process.env.NODE_ENV || 'production';
-  process.env.BIND_HOST = process.env.BIND_HOST || '127.0.0.1';
+  // 默认只绑本机；显式 DESKTOP_ALLOW_LAN=1 才允许改 BIND_HOST（局域网版）
+  if (!truthy(process.env.DESKTOP_ALLOW_LAN)) {
+    process.env.BIND_HOST = '127.0.0.1';
+  } else {
+    process.env.BIND_HOST = process.env.BIND_HOST || '127.0.0.1';
+  }
   if (process.env.COOKIE_SECURE == null || process.env.COOKIE_SECURE === '') {
     process.env.COOKIE_SECURE = '0';
   }
-  // 桌面首装允许创建管理员；已有用户后仍走 signupMode
+  // 首装开放注册；有用户后默认关闭（可用 SIGNUP_CODE / ALLOW_SIGNUP=1 覆盖）
   if (process.env.ALLOW_SIGNUP == null || process.env.ALLOW_SIGNUP === '') {
     process.env.ALLOW_SIGNUP = '1';
   }
@@ -90,6 +101,11 @@ export function applyDesktopEnv() {
     writeDesktopConfig({ mailSecret: process.env.MAIL_SECRET });
   }
 
+  // 托盘本机调用用的短令牌（勿进前端）
+  if (!cfg.desktopToken || String(cfg.desktopToken).length < 32) {
+    writeDesktopConfig({ desktopToken: crypto.randomBytes(32).toString('hex') });
+  }
+
   if (!process.env.AI_API_KEY && cfg.aiApiKey) {
     process.env.AI_API_KEY = String(cfg.aiApiKey);
   }
@@ -100,12 +116,25 @@ export function applyDesktopEnv() {
     process.env.PORT = String(cfg.port);
   }
 
+  try {
+    fs.chmodSync(desktopConfigPath(), 0o600);
+  } catch {
+    /* Windows 可能忽略 */
+  }
+
   return {
     applied: true,
     home,
     dataDir: process.env.DATA_DIR,
     configPath: desktopConfigPath(),
   };
+}
+
+/** 托盘 / 本机特权接口令牌 */
+export function desktopLocalToken() {
+  if (!IS_DESKTOP) return '';
+  const cfg = readDesktopConfig();
+  return String(cfg.desktopToken || '').trim();
 }
 
 // 作为 side-effect import 时立即生效

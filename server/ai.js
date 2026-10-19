@@ -2,6 +2,7 @@ import dns from 'node:dns';
 import https from 'node:https';
 import { URL } from 'node:url';
 import { sanitizeGlossary } from './glossary.js';
+import { isBlockedHostname } from './net_guard.js';
 
 // Prefer IPv4 for outbound AI calls. Production Node fetch to Aliyun Bailian
 // token-plan ETIMEDOUT under IPv6/Happy Eyeballs; NODE_OPTIONS ipv4first alone
@@ -145,10 +146,25 @@ export function aiVendorHost() {
 const AI_TIMEOUT_MS = 90_000;
 
 /** POST JSON over IPv4-only https.request (avoids bare fetch/undici path). */
-function httpsPostJson(urlStr, bodyObj, { headers = {}, timeoutMs = AI_TIMEOUT_MS } = {}) {
+async function httpsPostJson(urlStr, bodyObj, { headers = {}, timeoutMs = AI_TIMEOUT_MS } = {}) {
   const u = new URL(urlStr);
   if (u.protocol !== 'https:') {
-    return Promise.reject(new Error(`AI_BASE_URL must be https (got ${u.protocol})`));
+    throw new Error(`AI_BASE_URL must be https (got ${u.protocol})`);
+  }
+  if (isBlockedHostname(u.hostname)) {
+    throw new Error('AI_BASE_URL 不允许指向内网或本机地址');
+  }
+  // 连接前解析 DNS，拒绝落到私网（防 DNS 重绑定 / 误配）
+  try {
+    const addrs = await dns.promises.lookup(u.hostname, { all: true, verbatim: true });
+    for (const a of addrs || []) {
+      if (isBlockedHostname(a.address)) {
+        throw new Error('AI_BASE_URL 解析到内网地址，已拒绝连接');
+      }
+    }
+  } catch (e) {
+    if (/内网|不允许/.test(e.message || '')) throw e;
+    throw new Error(`无法解析 AI 服务域名：${u.hostname}`);
   }
   const body = JSON.stringify(bodyObj);
   return new Promise((resolve, reject) => {

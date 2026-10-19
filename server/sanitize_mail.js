@@ -68,6 +68,20 @@ const MAIL_OPTIONS = {
   transformTags: {
     a: sanitizeHtml.simpleTransform('a', { rel: 'noopener noreferrer', target: '_blank' }),
   },
+  exclusiveFilter(frame) {
+    // 拒绝 SVG / HTML data URI（防 XSS）；仅允许常见位图 data:image/*
+    if (frame.tag === 'img' && frame.attribs?.src) {
+      const src = String(frame.attribs.src);
+      if (/^data:/i.test(src) && !/^data:image\/(png|jpe?g|gif|webp|bmp);base64,/i.test(src)) {
+        return true;
+      }
+    }
+    if (frame.attribs?.background && /^data:/i.test(String(frame.attribs.background))) {
+      const bg = String(frame.attribs.background);
+      if (!/^data:image\/(png|jpe?g|gif|webp|bmp);base64,/i.test(bg)) return true;
+    }
+    return false;
+  },
 };
 
 export function sanitizeMailHtml(html) {

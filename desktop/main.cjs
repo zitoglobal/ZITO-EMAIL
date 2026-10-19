@@ -201,6 +201,16 @@ function dataHomePath() {
     || path.join(process.env.APPDATA || path.join(require('os').homedir(), 'AppData', 'Roaming'), 'ZITO-EMAIL');
 }
 
+function readDesktopToken() {
+  try {
+    const p = path.join(dataHomePath(), 'config.json');
+    const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return String(cfg.desktopToken || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 function isOpenAtLogin() {
   try {
     return !!app.getLoginItemSettings().openAtLogin;
@@ -239,7 +249,12 @@ function rebuildTrayMenu() {
       label: '立即备份',
       click: async () => {
         try {
-          const r = await fetch(`http://127.0.0.1:${serverPort}/api/desktop/backup`, { method: 'POST' });
+          const token = readDesktopToken();
+          if (!token) throw new Error('本机令牌未就绪，请重启应用后再试');
+          const r = await fetch(`http://127.0.0.1:${serverPort}/api/desktop/backup`, {
+            method: 'POST',
+            headers: { 'x-zm': '1', 'x-zm-desktop': token },
+          });
           const j = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
           const dir = j.dir || path.join(dataHomePath(), 'data', 'backups');

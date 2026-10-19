@@ -78,3 +78,27 @@ export async function assertSafeMailHosts(conn) {
   await assertSafeMailHost(conn.imap_host, 'IMAP');
   await assertSafeMailHost(conn.smtp_host, 'SMTP');
 }
+
+/**
+ * AI_BASE_URL：仅 https + 公网主机（防桌面用户把密钥打到内网/metadata）。
+ * @returns {string} 规范化后的 origin（无尾斜杠）
+ */
+export async function assertSafeAiBaseUrl(urlStr, label = 'AI 服务地址') {
+  const raw = String(urlStr || '').trim();
+  if (!raw) throw Object.assign(new Error(`请填写${label}`), { status: 400 });
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw Object.assign(new Error(`${label}不是合法 URL`), { status: 400 });
+  }
+  if (u.protocol !== 'https:') {
+    throw Object.assign(new Error(`${label}必须使用 https`), { status: 400 });
+  }
+  if (u.username || u.password) {
+    throw Object.assign(new Error(`${label}不可包含用户名/密码`), { status: 400 });
+  }
+  await assertSafeMailHost(u.hostname, label);
+  const path = u.pathname.replace(/\/+$/, '') || '';
+  return `${u.origin}${path}`;
+}

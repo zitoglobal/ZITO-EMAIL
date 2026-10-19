@@ -1,5 +1,12 @@
 /** 桌面模式必须先于 dotenv / db / security，以写入 DATA_DIR 与 MAIL_SECRET */
-import { IS_DESKTOP, desktopBootInfo, readDesktopConfig, writeDesktopConfig, desktopHome } from './desktop_boot.js';
+import {
+  IS_DESKTOP,
+  desktopBootInfo,
+  readDesktopConfig,
+  writeDesktopConfig,
+  desktopHome,
+  desktopLocalToken,
+} from './desktop_boot.js';
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -31,7 +38,7 @@ import * as brands from './brands.js';
 import * as customerAssets from './customer_assets.js';
 import * as threadNotes from './thread_notes.js';
 import * as deliverability from './deliverability.js';
-import { assertSafeMailHosts } from './net_guard.js';
+import { assertSafeMailHosts, assertSafeAiBaseUrl } from './net_guard.js';
 import { sanitizeMailHtml } from './sanitize_mail.js';
 import * as totp from './totp.js';
 import * as analytics from './analytics.js';
@@ -201,7 +208,30 @@ function messageOf(req, id = req.params.id) {
 
 function signupMode() {
   if (process.env.SIGNUP_CODE) return 'code';
+  // 桌面：首装开放；已有账号后默认关闭（DESKTOP_OPEN_SIGNUP=1 才继续开放）
+  if (IS_DESKTOP) {
+    if (users.userCount() === 0) return 'open';
+    return process.env.DESKTOP_OPEN_SIGNUP === '1' ? 'open' : 'closed';
+  }
   return process.env.ALLOW_SIGNUP === '1' ? 'open' : 'closed';
+}
+
+function timingSafeEqualStr(a, b) {
+  const x = Buffer.from(String(a || ''), 'utf8');
+  const y = Buffer.from(String(b || ''), 'utf8');
+  if (x.length !== y.length || !x.length) return false;
+  return crypto.timingSafeEqual(x, y);
+}
+
+/** 托盘本机特权：x-zm + 本地 desktopToken（仅桌面模式） */
+function desktopLocalAuth(req, res, next) {
+  if (!IS_DESKTOP) return res.status(404).json({ error: '非桌面模式' });
+  const token = desktopLocalToken();
+  const got = req.headers['x-zm-desktop'] || '';
+  if (!token || !timingSafeEqualStr(token, got)) {
+    return res.status(403).json({ error: '本机令牌无效' });
+  }
+  next();
 }
 
 function folderPublic(f) {
@@ -239,13 +269,11 @@ app.get('/api/health', (req, res) => {
   } catch (e) {
     console.error('[health]', e.message);
   }
+  const localProbe =
+    req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
+  // 生产禁止 ?detail=1 对外暴露；仅 HEALTH_DETAIL=1、非生产或本机探针
   const detail =
-    process.env.HEALTH_DETAIL === '1' ||
-    req.query.detail === '1' ||
-    !IS_PROD ||
-    req.ip === '127.0.0.1' ||
-    req.ip === '::1' ||
-    req.ip === '::ffff:127.0.0.1';
+    process.env.HEALTH_DETAIL === '1' || !IS_PROD || localProbe;
   if (!detail) {
     return res.status(dbOk ? 200 : 503).json({ ok: dbOk });
   }
@@ -272,25 +300,32 @@ app.get('/api/health', (req, res) => {
 app.get('/api/desktop/status', (req, res) => {
   if (!IS_DESKTOP) return res.status(404).json({ error: '非桌面模式' });
   const cfg = readDesktopConfig();
-  res.json({
+  const u = users.sessionUser(readCookie(req, COOKIE));
+  const base = {
     desktop: true,
-    home: desktopHome(),
-    dataDir: process.env.DATA_DIR,
-    backupDir: backup.BACKUP_DIR,
-    lastBackupAt: backup.lastBackupAt(),
-    port: PORT,
     hasUsers: users.userCount() > 0,
     aiConfigured: ai.aiConfigured(),
     setupComplete: !!cfg.setupComplete || users.userCount() > 0,
     version: process.env.npm_package_version || '1.0.0',
+    lastBackupAt: backup.lastBackupAt(),
+  };
+  // 未登录不泄露本机绝对路径
+  if (!u) return res.json(base);
+  res.json({
+    ...base,
+    home: desktopHome(),
+    dataDir: process.env.DATA_DIR,
+    backupDir: backup.BACKUP_DIR,
+    port: PORT,
   });
 });
 
-/** 桌面本机：托盘一键备份（仅 127.0.0.1 可达） */
+/** 桌面本机：托盘一键备份（需 x-zm + x-zm-desktop 令牌） */
 app.post(
   '/api/desktop/backup',
+  desktopLocalAuth,
   wrap(async (req, res) => {
-    if (!IS_DESKTOP) throw Object.assign(new Error('非桌面模式'), { status: 404 });
+    rateLimit('desktop-backup:' + (req.ip || 'local'), 10, 3600_000);
     const dest = await backup.backupOnce();
     res.json({
       ok: true,
@@ -343,9 +378,14 @@ app.post(
     }
     if ('aiBaseUrl' in body && body.aiBaseUrl != null) {
       const url = String(body.aiBaseUrl || '').trim();
-      patch.aiBaseUrl = url;
-      if (url) process.env.AI_BASE_URL = url;
-      else delete process.env.AI_BASE_URL;
+      if (url) {
+        const safe = await assertSafeAiBaseUrl(url);
+        patch.aiBaseUrl = safe;
+        process.env.AI_BASE_URL = safe;
+      } else {
+        patch.aiBaseUrl = '';
+        delete process.env.AI_BASE_URL;
+      }
     }
     writeDesktopConfig(patch);
     res.json({
