@@ -136,10 +136,11 @@ export default function MailFrame({
   }, [html, text, collapseQuotes, showQuote]);
 
   // 始终放行同源附件 URL（大图 CID → /api/.../attachments），与「外部图片」策略解耦
+  // style-src 仅 unsafe-inline（服务端已消毒）；禁 * 防外链 CSS 追踪
   const imgSrc = allowImages
     ? "img-src 'self' https: http: data: blob: cid:"
     : "img-src 'self' data: blob: cid:";
-  const doc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; object-src 'none'; style-src 'unsafe-inline' *; font-src * data:; ${imgSrc}; media-src 'self' data: blob:"><meta name="referrer" content="no-referrer"><base target="_blank"><style>${FRAME_STYLE}${
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; style-src 'unsafe-inline'; font-src data: https:; ${imgSrc}; media-src 'self' data: blob:; frame-ancestors 'none'"><meta name="referrer" content="no-referrer"><base target="_blank"><style>${FRAME_STYLE}${
     dark && !html ? ':root{color-scheme:dark}body{color:#e6e8f0}a{color:#a5b4fc}' : ':root{color-scheme:light}'
   }</style></head><body>${content}</body></html>`;
 

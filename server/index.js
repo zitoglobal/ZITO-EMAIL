@@ -70,9 +70,19 @@ const MAX_MAILBOXES = Number(process.env.MAX_MAILBOXES_PER_USER || 20);
 const COLORS = ['#0a66ff', '#00b4e6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#64748b'];
 
 const app = express();
-app.set('trust proxy', 1);
+// 桌面本机勿信任 X-Forwarded-For（防伪造刷限流）；云端经 Nginx 一层代理
+if (!IS_DESKTOP) app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(express.json({ limit: '5mb' }));
+
+/** 限流/审计用客户端 IP：桌面只用 socket，忽略伪造转发头 */
+function clientIp(req) {
+  if (IS_DESKTOP) {
+    const ra = req.socket?.remoteAddress || '';
+    return ra === '::ffff:127.0.0.1' ? '127.0.0.1' : ra || '127.0.0.1';
+  }
+  return req.ip || req.socket?.remoteAddress || '0.0.0.0';
+}
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -178,7 +188,7 @@ function adminNeedsTotpSetup(user) {
 function admin(req, res, next) {
   if (req.user.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
   try {
-    rateLimit('admin:' + req.user.id + ':' + req.ip, 90, 60_000);
+    rateLimit('admin:' + req.user.id + ':' + clientIp(req), 90, 60_000);
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       rateLimit('admin-write:' + req.user.id, 30, 60_000);
     }
@@ -269,8 +279,8 @@ app.get('/api/health', (req, res) => {
   } catch (e) {
     console.error('[health]', e.message);
   }
-  const localProbe =
-    req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1';
+  const ip = clientIp(req);
+  const localProbe = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
   // 生产禁止 ?detail=1 对外暴露；仅 HEALTH_DETAIL=1、非生产或本机探针
   const detail =
     process.env.HEALTH_DETAIL === '1' || !IS_PROD || localProbe;
@@ -325,7 +335,7 @@ app.post(
   '/api/desktop/backup',
   desktopLocalAuth,
   wrap(async (req, res) => {
-    rateLimit('desktop-backup:' + (req.ip || 'local'), 10, 3600_000);
+    rateLimit('desktop-backup:' + clientIp(req), 10, 3600_000);
     const dest = await backup.backupOnce();
     res.json({
       ok: true,
@@ -364,7 +374,7 @@ app.post(
     return next();
   },
   wrap(async (req, res) => {
-    rateLimit('desktop-setup:' + (req.user?.id || req.ip), 20, 3600_000);
+    rateLimit('desktop-setup:' + (req.user?.id || clientIp(req)), 20, 3600_000);
     const body = req.body || {};
     const patch = { setupComplete: true };
     if ('aiApiKey' in body) {
@@ -410,7 +420,7 @@ app.get('/api/auth/status', (req, res) => {
 app.post(
   '/api/auth/register',
   wrap(async (req, res) => {
-    rateLimit('reg:' + req.ip, 5, 3600_000);
+    rateLimit('reg:' + clientIp(req), 5, 3600_000);
     const first = users.userCount() === 0;
     const mode = signupMode();
     if (!first) {
@@ -426,7 +436,7 @@ app.post(
 app.post(
   '/api/auth/login',
   wrap(async (req, res) => {
-    rateLimit('login:' + req.ip, 10, 10 * 60_000);
+    rateLimit('login:' + clientIp(req), 10, 10 * 60_000);
     const loginKey = String(req.body?.email || '')
       .trim()
       .toLowerCase()
@@ -434,7 +444,7 @@ app.post(
     if (loginKey) rateLimit('login-user:' + loginKey, 8, 15 * 60_000);
     const u = users.authenticate(req.body.email, req.body.password);
     if (!u) throw httpError(401, '账号或密码错误');
-    buckets.delete('login:' + req.ip);
+    buckets.delete('login:' + clientIp(req));
     if (totp.isTotpEnabled(u)) {
       const ticket = totp.createLoginTicket(u.id);
       return res.json({ needsTotp: true, ticket });
@@ -449,7 +459,7 @@ app.post(
 app.post(
   '/api/auth/login/totp',
   wrap(async (req, res) => {
-    rateLimit('login-totp:' + req.ip, 20, 10 * 60_000);
+    rateLimit('login-totp:' + clientIp(req), 20, 10 * 60_000);
     const ticketKey = String(req.body?.ticket || '').slice(0, 80);
     if (ticketKey) rateLimit('login-totp-ticket:' + ticketKey, 8, 10 * 60_000);
     const { user: u, via, recoveryLeft } = totp.consumeLoginTicket(req.body?.ticket, req.body?.code);
@@ -1149,11 +1159,15 @@ app.get(
     if (!inline && isText) contentType = 'application/octet-stream';
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', contentDisposition(inline ? 'inline' : 'attachment', name));
-    // PDF 不设 sandbox CSP，便于浏览器内置阅读器；其它 inline 收紧
-    if (!(inline && isPdf)) {
-      res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'");
-    }
+    // 一律带隔离 CSP；PDF 阅读器可能忽略 sandbox，仍限制外联脚本面
+    res.setHeader(
+      'Content-Security-Policy',
+      isPdf && inline
+        ? "default-src 'none'; sandbox; object-src 'none'; frame-ancestors 'self'; base-uri 'none'"
+        : "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'"
+    );
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Download-Options', 'noopen');
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.send(a.content);
   })

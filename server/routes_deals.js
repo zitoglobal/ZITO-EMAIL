@@ -358,13 +358,14 @@ export function registerDealsRoutes(app, ctx) {
       if (!inline && isText) contentType = 'application/octet-stream';
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', assetContentDisposition(inline ? 'inline' : 'attachment', name));
-      if (!(inline && isPdf)) {
-        res.setHeader(
-          'Content-Security-Policy',
-          "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'"
-        );
-      }
+      res.setHeader(
+        'Content-Security-Policy',
+        isPdf && inline
+          ? "default-src 'none'; sandbox; object-src 'none'; frame-ancestors 'self'; base-uri 'none'"
+          : "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'"
+      );
       res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Download-Options', 'noopen');
       res.setHeader('Cache-Control', 'private, max-age=3600');
       res.send(a.content);
     })

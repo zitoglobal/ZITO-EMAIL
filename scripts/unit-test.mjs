@@ -24,7 +24,7 @@ import {
 } from '../server/deals.js';
 import { APPAREL_EMAIL_TEMPLATES, ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS as CLIENT_FOLLOW_SEQ } from '../web/src/apparelPresets.js';
 import { isBlockedHostname, assertSafeAiBaseUrl } from '../server/net_guard.js';
-import { sanitizeMailHtml } from '../server/sanitize_mail.js';
+import { sanitizeMailHtml, scrubStyleAttr } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
 import { conversationKey, isSqliteCorrupt } from '../server/repo.js';
@@ -346,6 +346,13 @@ assert(
 assert(
   'block svg data img',
   !sanitizeMailHtml('<img src="data:image/svg+xml;base64,PHN2Zy8+">').includes('svg+xml')
+);
+assert('scrub style url()', scrubStyleAttr('color:red;background:url(https://evil.test/x)') === '');
+assert('scrub style expression', scrubStyleAttr('width:expression(alert(1))') === '');
+assert('keep safe style color', /color:\s*red/i.test(sanitizeMailHtml('<p style="color:red">x</p>')));
+assert(
+  'strip style url in html',
+  !/url\(/i.test(sanitizeMailHtml('<p style="background:url(https://evil.test/t.png)">x</p>'))
 );
 
 // ---------- password + totp ----------
