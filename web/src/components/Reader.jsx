@@ -13,6 +13,7 @@ import {
 } from '../utils.js';
 import { buildComposeState, signatureHtml, toPayload } from '../compose.js';
 import MailFrame from './MailFrame.jsx';
+import { getMessageCache, putMessageCache } from '../messageCache.js';
 import { BrandSymbol } from './Brand.jsx';
 import TimeMenu from './TimeMenu.jsx';
 import LabelMenu from './LabelMenu.jsx';
@@ -756,15 +757,34 @@ export default function Reader({
   const displayLabels = (listItem?.labels || base?.labels || []);
 
   function loadDetail(mid, token, { markSeen = false, refresh = false } = {}) {
+    if (!refresh) {
+      const hit = getMessageCache(mid);
+      if (hit) {
+        if (token === alive.current) setDetails((s) => ({ ...s, [mid]: hit }));
+        if (markSeen && !hit.seen) {
+          api(`/messages/${mid}/seen`, { method: 'POST', body: {} })
+            .then(() => {
+              if (token !== alive.current) return;
+              const next = { ...hit, seen: true };
+              putMessageCache(mid, next);
+              setDetails((s) => (s[mid] ? { ...s, [mid]: { ...s[mid], seen: true } } : s));
+            })
+            .catch(() => {});
+        }
+        return Promise.resolve(hit);
+      }
+    }
     return api(`/messages/${mid}` + (refresh ? '?refresh=1' : ''))
       .then((d) => {
         if (token !== alive.current) return;
+        putMessageCache(mid, d);
         setDetails((s) => ({ ...s, [mid]: d }));
         // 读信标已读走 POST，避免 GET 链接诱导
         if (markSeen && !d.seen) {
           api(`/messages/${mid}/seen`, { method: 'POST', body: {} })
             .then(() => {
               if (token !== alive.current) return;
+              putMessageCache(mid, { ...d, seen: true });
               setDetails((s) => (s[mid] ? { ...s, [mid]: { ...s[mid], seen: true } } : s));
             })
             .catch(() => {});
@@ -805,7 +825,11 @@ export default function Reader({
     if (!id) return;
     const token = ++alive.current;
     setThread(null);
-    setDetails({});
+    // 保留 LRU 命中，换封不整表清空（配合 J/K 预取）
+    setDetails((prev) => {
+      const hit = prev[id] || getMessageCache(id);
+      return hit ? { [id]: hit } : {};
+    });
     setSummary(null);
     setSummaryError('');
     setTranslated(null);

@@ -36,12 +36,73 @@ export function desktopConfigPath() {
   return path.join(desktopHome(), 'config.json');
 }
 
+/** 本机派生密钥封装敏感字段（防 config.json 明文被顺手复制） */
+const SEAL_PREFIX = 'd1.';
+const SECRET_KEYS = ['mailSecret', 'desktopToken', 'aiApiKey'];
+
+function deskSealKey() {
+  let user = 'user';
+  try {
+    user = os.userInfo().username || user;
+  } catch {
+    /* ignore */
+  }
+  return crypto.createHash('sha256').update(`zm-desk-v1|${user}|${os.homedir()}|${desktopHome()}`).digest();
+}
+
+export function sealDesktopSecret(plain) {
+  const s = String(plain ?? '');
+  if (!s || s.startsWith(SEAL_PREFIX)) return s;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', deskSealKey(), iv);
+  const enc = Buffer.concat([cipher.update(s, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return (
+    SEAL_PREFIX +
+    [iv, tag, enc]
+      .map((b) => b.toString('base64'))
+      .join('.')
+  );
+}
+
+export function unsealDesktopSecret(payload) {
+  const s = String(payload ?? '');
+  if (!s.startsWith(SEAL_PREFIX)) return s;
+  try {
+    const parts = s.slice(SEAL_PREFIX.length).split('.');
+    if (parts.length !== 3) return '';
+    const [iv, tag, enc] = parts.map((x) => Buffer.from(x, 'base64'));
+    const decipher = crypto.createDecipheriv('aes-256-gcm', deskSealKey(), iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+  } catch {
+    return '';
+  }
+}
+
+function decodeConfigSecrets(raw) {
+  const out = { ...raw };
+  for (const k of SECRET_KEYS) {
+    if (out[k] != null && out[k] !== '') out[k] = unsealDesktopSecret(out[k]);
+  }
+  return out;
+}
+
+function encodeConfigSecrets(obj) {
+  const out = { ...obj };
+  for (const k of SECRET_KEYS) {
+    if (out[k] != null && out[k] !== '') out[k] = sealDesktopSecret(out[k]);
+  }
+  return out;
+}
+
 export function readDesktopConfig() {
   const p = desktopConfigPath();
   try {
     if (!fs.existsSync(p)) return {};
     const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
-    return raw && typeof raw === 'object' ? raw : {};
+    if (!raw || typeof raw !== 'object') return {};
+    return decodeConfigSecrets(raw);
   } catch {
     return {};
   }
@@ -52,12 +113,14 @@ export function writeDesktopConfig(patch = {}) {
   fs.mkdirSync(home, { recursive: true });
   const next = { ...readDesktopConfig(), ...patch };
   const p = desktopConfigPath();
-  fs.writeFileSync(p, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 });
+  const sealed = encodeConfigSecrets(next);
+  fs.writeFileSync(p, JSON.stringify(sealed, null, 2), { encoding: 'utf8', mode: 0o600 });
   try {
     fs.chmodSync(p, 0o600);
   } catch {
     /* Windows 可能忽略 */
   }
+  // 读回已解封视图，调用方拿到明文
   return next;
 }
 
@@ -120,6 +183,18 @@ export function applyDesktopEnv() {
     fs.chmodSync(desktopConfigPath(), 0o600);
   } catch {
     /* Windows 可能忽略 */
+  }
+
+  // 旧版明文密钥 → 封装重写（幂等）
+  try {
+    const p = desktopConfigPath();
+    if (fs.existsSync(p)) {
+      const disk = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const needsSeal = SECRET_KEYS.some((k) => disk[k] && !String(disk[k]).startsWith(SEAL_PREFIX));
+      if (needsSeal) writeDesktopConfig({});
+    }
+  } catch {
+    /* ignore */
   }
 
   return {

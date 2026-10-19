@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, Menu, CheckCircle2 } from 'lucide-react';
 import { api, qs } from './api.js';
+import { putMessageCache } from './messageCache.js';
 import Auth, { HeroBrand } from './components/Auth.jsx';
 import { BrandIcon } from './components/Brand.jsx';
 import Sidebar from './components/Sidebar.jsx';
@@ -802,7 +803,9 @@ export default function App() {
     const t = setTimeout(() => {
       if (cancelled || typeof navigator !== 'undefined' && navigator.onLine === false) return;
       neighbors.forEach((m) => {
-        api(`/messages/${m.id}?markSeen=0`).catch(() => {});
+        api(`/messages/${m.id}?markSeen=0`)
+          .then((d) => putMessageCache(m.id, d))
+          .catch(() => {});
       });
     }, 280);
     return () => {

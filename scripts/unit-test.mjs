@@ -394,12 +394,15 @@ assert('FOLLOW_SEQ client aligned', CLIENT_FOLLOW_SEQ.quote === FOLLOW_SEQ_DAYS.
     [
       '--input-type=module',
       '-e',
-      `import { applyDesktopEnv, readDesktopConfig, IS_DESKTOP } from './server/desktop_boot.js';
+      `import fs from 'node:fs';
+       import { applyDesktopEnv, readDesktopConfig, IS_DESKTOP, desktopConfigPath } from './server/desktop_boot.js';
        const info = applyDesktopEnv();
        const cfg = readDesktopConfig();
        if (!IS_DESKTOP) { console.log('FAIL not desktop'); process.exit(2); }
        if (!info.applied || !cfg.mailSecret || cfg.mailSecret.length < 32) { console.log('FAIL secret'); process.exit(3); }
        if (!process.env.DATA_DIR.includes('data')) { console.log('FAIL data'); process.exit(4); }
+       const disk = JSON.parse(fs.readFileSync(desktopConfigPath(), 'utf8'));
+       if (!String(disk.mailSecret || '').startsWith('d1.')) { console.log('FAIL not sealed'); process.exit(5); }
        console.log('OK');`,
     ],
     {
@@ -646,6 +649,25 @@ assert('ftsEscape latin phrase', ftsEscape('cotton jersey') === '"cotton"* "jers
 assert('ftsEscape mixed CJK+latin', ftsEscape('报价 PO123').includes('报 NEAR/1 价') && ftsEscape('报价 PO123').includes('"PO123"*'));
 assert('ftsEscape strips input quotes', ftsEscape('ab"cd') === '"ab"* "cd"*');
 assert('ftsEscape empty', ftsEscape('   ') === '');
+
+{
+  const { sealDesktopSecret, unsealDesktopSecret } = await import('../server/desktop_boot.js');
+  const sealed = sealDesktopSecret('super-secret-token-xyz');
+  assert('desk seal prefix', sealed.startsWith('d1.'));
+  assert('desk unseal roundtrip', unsealDesktopSecret(sealed) === 'super-secret-token-xyz');
+  assert('desk unseal plaintext passthrough', unsealDesktopSecret('plain-legacy') === 'plain-legacy');
+  assert('desk seal idempotent', sealDesktopSecret(sealed) === sealed);
+}
+
+{
+  const { putMessageCache, getMessageCache, clearMessageCache } = await import('../web/src/messageCache.js');
+  clearMessageCache();
+  putMessageCache(7, { id: 7, subject: 'hi', html: '<b>x</b>' });
+  assert('messageCache hit', getMessageCache(7)?.subject === 'hi');
+  assert('messageCache miss', getMessageCache(8) == null);
+  clearMessageCache();
+  assert('messageCache clear', getMessageCache(7) == null);
+}
 
 {
   let aiHttpRejected = false;

@@ -11,6 +11,10 @@ const FRAME_STYLE = `
     background:repeating-linear-gradient(-45deg,#f4f5f8,#f4f5f8 6px,#eef0f5 6px,#eef0f5 12px);
     object-fit:none;padding:8px;box-sizing:border-box;
   }
+  img.zm-img-blocked{
+    cursor:default;outline:1px dashed #d0d4de;min-width:56px;min-height:36px;
+    background:color-mix(in srgb,#eef0f5 80%,transparent);
+  }
   table{max-width:100%!important;border-collapse:collapse;table-layout:auto}
   td,th{word-break:break-word;overflow-wrap:anywhere;vertical-align:top}
   caption{caption-side:top;text-align:left;padding:4px 0;font-weight:600}
@@ -21,6 +25,8 @@ const FRAME_STYLE = `
 `;
 
 const QUOTE_SELECTOR = '.gmail_quote, blockquote[type="cite"], .zm-quote, .zm-forward, #divRplyFwdMsg, #isReplyContent, .yahoo_quoted, #reply-content, .ms-outlook-mobile-reference-message';
+const PLACEHOLDER =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 /** 把引用部分（以及之后的内容）标记为隐藏，返回是否存在引用；只改 body 片段，勿返回整页 html */
 function markQuotes(html) {
@@ -45,6 +51,37 @@ function markQuotes(html) {
   return { html: root.innerHTML, hasQuote: true };
 }
 
+/** 外链图挪到 data-zm-src，放行时只改 DOM 不重建 iframe */
+function parkRemoteImages(html) {
+  if (!html) return html;
+  const doc = new DOMParser().parseFromString(`<div id="zm-root">${html}</div>`, 'text/html');
+  const root = doc.getElementById('zm-root') || doc.body;
+  root.querySelectorAll('img').forEach((img) => {
+    const src = img.getAttribute('src') || '';
+    if (!src) return;
+    if (/^(\/api\/|data:|blob:|cid:)/i.test(src)) return;
+    if (!/^https?:\/\//i.test(src)) return;
+    img.setAttribute('data-zm-src', src);
+    img.setAttribute('src', PLACEHOLDER);
+    img.classList.add('zm-img-blocked');
+  });
+  return root.innerHTML;
+}
+
+function revealParkedImages(doc) {
+  if (!doc) return 0;
+  let n = 0;
+  doc.querySelectorAll('img[data-zm-src]').forEach((img) => {
+    const real = img.getAttribute('data-zm-src');
+    if (!real) return;
+    img.setAttribute('src', real);
+    img.removeAttribute('data-zm-src');
+    img.classList.remove('zm-img-blocked');
+    n += 1;
+  });
+  return n;
+}
+
 function hasVisibleBody(html, text) {
   const t = String(text || '').replace(/\s+/g, '').trim();
   if (t) return true;
@@ -65,10 +102,10 @@ function wireImages(doc, { onImageClick, onBrokenChange }) {
 
   const cleanups = imgs.map((img) => {
     const onErr = () => {
+      if (img.classList.contains('zm-img-blocked')) return;
       img.classList.add('zm-broken');
       if (!img.getAttribute('alt')) img.setAttribute('alt', '图片加载失败');
       broken.add(img);
-      // 同源附件偶发失败：自动重试一次
       const src = img.getAttribute('src') || '';
       if (/^\/api\/messages\/\d+\/attachments\//i.test(src) && !img.dataset.zmRetry) {
         img.dataset.zmRetry = '1';
@@ -84,9 +121,9 @@ function wireImages(doc, { onImageClick, onBrokenChange }) {
       report();
     };
     const onClick = (e) => {
-      if (img.classList.contains('zm-broken')) return;
+      if (img.classList.contains('zm-broken') || img.classList.contains('zm-img-blocked')) return;
       const src = img.currentSrc || img.src;
-      if (!src || src.startsWith('data:image/gif;base64,R0lGOD')) return; // 追踪像素极小图可略过放大
+      if (!src || src.startsWith('data:image/gif;base64,R0lGOD')) return;
       if (img.naturalWidth > 0 && img.naturalWidth <= 3 && img.naturalHeight <= 3) return;
       e.preventDefault();
       e.stopPropagation();
@@ -95,7 +132,7 @@ function wireImages(doc, { onImageClick, onBrokenChange }) {
     img.addEventListener('error', onErr);
     img.addEventListener('load', onOk);
     img.addEventListener('click', onClick);
-    if (img.complete && img.naturalWidth === 0) onErr();
+    if (img.complete && img.naturalWidth === 0 && !img.classList.contains('zm-img-blocked')) onErr();
     return () => {
       img.removeEventListener('error', onErr);
       img.removeEventListener('load', onOk);
@@ -106,10 +143,9 @@ function wireImages(doc, { onImageClick, onBrokenChange }) {
   return () => cleanups.forEach((fn) => fn());
 }
 
-function buildSrcDoc(content, { allowImages, dark, isHtml }) {
-  const imgSrc = allowImages
-    ? "img-src 'self' https: http: data: blob: cid:"
-    : "img-src 'self' data: blob: cid:";
+/** CSP 始终允许 https 图；未放行时用 data-zm-src 停泊，避免点「显示外部图片」整页重建 */
+function buildSrcDoc(content, { dark, isHtml }) {
+  const imgSrc = "img-src 'self' https: http: data: blob: cid:";
   const color = dark && !isHtml ? ':root{color-scheme:dark}body{color:#e6e8f0}a{color:#a5b4fc}' : ':root{color-scheme:light}';
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; style-src 'unsafe-inline'; font-src data: https:; ${imgSrc}; media-src 'self' data: blob:; frame-ancestors 'none'"><meta name="referrer" content="no-referrer"><base target="_blank"><style>${FRAME_STYLE}${color}</style></head><body>${content}</body></html>`;
 }
@@ -128,8 +164,10 @@ export default function MailFrame({
   const [showQuote, setShowQuote] = useState(false);
   const handlers = useRef({ onImageClick, onBrokenChange });
   handlers.current = { onImageClick, onBrokenChange };
+  const allowRef = useRef(allowImages);
+  allowRef.current = allowImages;
 
-  // 引用折叠写入 HTML 一次；展开时只在 iframe 内去 class，避免整页 srcDoc 重建
+  // 外链图始终 park；allowImages 不进依赖，避免重建 srcDoc
   const { content, hasQuote, empty } = useMemo(() => {
     const rawHtml = html && String(html).trim() ? html : '';
     const rawText = text && String(text).trim() ? text : '';
@@ -140,17 +178,17 @@ export default function MailFrame({
         empty: true,
       };
     }
-    const raw = rawHtml || `<div style="white-space:normal">${textToHtml(rawText)}</div>`;
-    if (!collapseQuotes) return { content: raw, hasQuote: false, empty: false };
-    const r = markQuotes(raw);
-    return { content: r.html, hasQuote: r.hasQuote, empty: false };
+    let raw = rawHtml || `<div style="white-space:normal">${textToHtml(rawText)}</div>`;
+    if (collapseQuotes) {
+      const r = markQuotes(raw);
+      raw = r.html;
+      return { content: parkRemoteImages(raw), hasQuote: r.hasQuote, empty: false };
+    }
+    return { content: parkRemoteImages(raw), hasQuote: false, empty: false };
   }, [html, text, collapseQuotes]);
 
   const isHtml = !!(html && String(html).trim()) && !empty;
-  const doc = useMemo(
-    () => buildSrcDoc(content, { allowImages, dark, isHtml }),
-    [content, allowImages, dark, isHtml]
-  );
+  const doc = useMemo(() => buildSrcDoc(content, { dark, isHtml }), [content, dark, isHtml]);
 
   useEffect(() => {
     const frame = ref.current;
@@ -163,13 +201,14 @@ export default function MailFrame({
         const b = frame.contentDocument?.body;
         if (b) setHeight(Math.max(40, b.scrollHeight + 6));
       } catch {
-        // 跨域时忽略
+        /* ignore */
       }
     };
     const onLoad = () => {
       measure();
       unwire();
       try {
+        if (allowRef.current) revealParkedImages(frame.contentDocument);
         unwire = wireImages(frame.contentDocument, {
           onImageClick: (...a) => handlers.current.onImageClick?.(...a),
           onBrokenChange: (...a) => handlers.current.onBrokenChange?.(...a),
@@ -177,7 +216,6 @@ export default function MailFrame({
       } catch {
         unwire = () => {};
       }
-      // 若用户已点「展开引用」，srcDoc 重载后补去隐藏
       if (showQuote) {
         try {
           frame.contentDocument?.querySelectorAll('.zm-hidden-quote').forEach((el) => el.classList.remove('zm-hidden-quote'));
@@ -196,12 +234,11 @@ export default function MailFrame({
         if (frame.contentDocument?.body) ro.observe(frame.contentDocument.body);
         frame.contentDocument?.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
       } catch {
-        // ignore
+        /* ignore */
       }
     };
     frame.addEventListener('load', onLoad);
     requestAnimationFrame(measure);
-    // srcDoc 更新后部分浏览器不触发 load
     const t = setTimeout(onLoad, 30);
     return () => {
       clearTimeout(t);
@@ -209,11 +246,24 @@ export default function MailFrame({
       ro?.disconnect();
       unwire();
     };
-    // showQuote 故意不进依赖：展开走下方轻量 effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc]);
 
-  // 展开引用：只改 iframe DOM，不重建 srcDoc
+  // 放行外部图：只恢复 data-zm-src，不重建 iframe
+  useEffect(() => {
+    if (!allowImages) return;
+    const frame = ref.current;
+    try {
+      const n = revealParkedImages(frame?.contentDocument);
+      if (n) {
+        const b = frame.contentDocument?.body;
+        if (b) setHeight(Math.max(40, b.scrollHeight + 6));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [allowImages]);
+
   useEffect(() => {
     if (!showQuote) return;
     const frame = ref.current;
