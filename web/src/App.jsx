@@ -1099,6 +1099,7 @@ export default function App() {
         });
       }
       loadState();
+      if (key) clearComposeWal(key);
       // 发信后尽快拉 Sent / 刷新 Focus，缩短「已回仍待办」窗口
       setTimeout(() => loadList({ silent: true }), 800);
       setTimeout(() => loadList({ silent: true }), 2800);
