@@ -40,6 +40,7 @@ import * as threadNotes from './thread_notes.js';
 import * as deliverability from './deliverability.js';
 import { assertSafeMailHosts, assertSafeAiBaseUrl, isLoopbackIp } from './net_guard.js';
 import { sanitizeMailHtml } from './sanitize_mail.js';
+import { buildMessageDeepLink } from './mail_links.js';
 import { readAttCache, writeAttCache, attCacheEtag } from './att_cache.js';
 import * as totp from './totp.js';
 import * as analytics from './analytics.js';

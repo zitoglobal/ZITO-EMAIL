@@ -7,6 +7,7 @@ import * as deals from './deals.js';
 import * as mailRules from './mail_rules.js';
 import * as push from './push.js';
 import * as users from './users.js';
+import { buildMessageDeepLink } from './mail_links.js';
 
 const SYNC_SPECIALS = ['\\Inbox', '\\Sent', '\\Drafts', '\\Archive', '\\Junk', '\\Trash'];
 const INITIAL_INBOX = 400;

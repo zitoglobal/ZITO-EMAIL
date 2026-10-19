@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { textToHtml } from '../utils.js';
+import { classifyMailHref, linkDisplayMismatch, parseMailto } from '../../../server/mail_links.js';
 
 const FRAME_STYLE = `
   html,body{margin:0;padding:0;background:transparent}
@@ -20,7 +21,8 @@ const FRAME_STYLE = `
   caption{caption-side:top;text-align:left;padding:4px 0;font-weight:600}
   pre{white-space:pre-wrap}
   blockquote{margin:8px 0;padding-left:12px;border-left:3px solid #d8dbe6;color:#5b6172}
-  a{color:#4f46e5}
+  a{color:#4f46e5;cursor:pointer}
+  a[data-zm-mismatch]{text-decoration-style:wavy;text-decoration-color:#c45c26}
   .zm-hidden-quote{display:none!important}
 `;
 
@@ -94,6 +96,35 @@ function hasVisibleBody(html, text) {
   return !!h;
 }
 
+function wireLinks(doc, { onLinkIntent }) {
+  if (!doc) return () => {};
+  const onClick = (e) => {
+    const a = e.target?.closest?.('a[href]');
+    if (!a || !doc.contains(a)) return;
+    const href = a.getAttribute('href') || '';
+    if (!href || href.startsWith('#')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const info = classifyMailHref(href);
+    const tracked = a.getAttribute('data-zm-tracked') || '';
+    const mismatchAttr = a.getAttribute('data-zm-mismatch');
+    const mismatch =
+      (mismatchAttr && (() => {
+        const [shown, real] = mismatchAttr.split('|');
+        return shown && real ? { shown, real } : null;
+      })()) ||
+      linkDisplayMismatch(a.textContent || '', info.final || href);
+    onLinkIntent?.({
+      ...info,
+      tracked: tracked || (info.unwrapped ? info.href : ''),
+      mismatch,
+      text: String(a.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+    });
+  };
+  doc.addEventListener('click', onClick, true);
+  return () => doc.removeEventListener('click', onClick, true);
+}
+
 function wireImages(doc, { onImageClick, onBrokenChange }) {
   if (!doc) return () => {};
   const imgs = [...doc.querySelectorAll('img')];
@@ -158,12 +189,14 @@ export default function MailFrame({
   collapseQuotes = false,
   onImageClick,
   onBrokenChange,
+  onMailto,
 }) {
   const ref = useRef();
   const [height, setHeight] = useState(40);
   const [showQuote, setShowQuote] = useState(false);
-  const handlers = useRef({ onImageClick, onBrokenChange });
-  handlers.current = { onImageClick, onBrokenChange };
+  const [linkPrompt, setLinkPrompt] = useState(null);
+  const handlers = useRef({ onImageClick, onBrokenChange, onMailto });
+  handlers.current = { onImageClick, onBrokenChange, onMailto };
   const allowRef = useRef(allowImages);
   allowRef.current = allowImages;
 
@@ -194,7 +227,8 @@ export default function MailFrame({
     const frame = ref.current;
     if (!frame) return undefined;
     let ro;
-    let unwire = () => {};
+    let unwireImg = () => {};
+    let unwireLink = () => {};
     let tries = 0;
     const measure = () => {
       try {
@@ -204,17 +238,35 @@ export default function MailFrame({
         /* ignore */
       }
     };
+    const onLinkIntent = (intent) => {
+      if (intent.kind === 'mailto') {
+        const m = intent.mailto || parseMailto(intent.href);
+        if (m && handlers.current.onMailto) {
+          handlers.current.onMailto(m);
+          return;
+        }
+      }
+      if (intent.kind === 'blocked' || intent.kind === 'other') return;
+      if (intent.kind === 'tel') {
+        window.open(intent.href, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      setLinkPrompt(intent);
+    };
     const onLoad = () => {
       measure();
-      unwire();
+      unwireImg();
+      unwireLink();
       try {
         if (allowRef.current) revealParkedImages(frame.contentDocument);
-        unwire = wireImages(frame.contentDocument, {
+        unwireImg = wireImages(frame.contentDocument, {
           onImageClick: (...a) => handlers.current.onImageClick?.(...a),
           onBrokenChange: (...a) => handlers.current.onBrokenChange?.(...a),
         });
+        unwireLink = wireLinks(frame.contentDocument, { onLinkIntent });
       } catch {
-        unwire = () => {};
+        unwireImg = () => {};
+        unwireLink = () => {};
       }
       if (showQuote) {
         try {
@@ -244,7 +296,8 @@ export default function MailFrame({
       clearTimeout(t);
       frame.removeEventListener('load', onLoad);
       ro?.disconnect();
-      unwire();
+      unwireImg();
+      unwireLink();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc]);
@@ -278,18 +331,61 @@ export default function MailFrame({
     }
   }, [showQuote]);
 
+  const openExternal = (url) => {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setLinkPrompt(null);
+  };
+
+  const copyLink = async (url) => {
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      /* ignore */
+    }
+    setLinkPrompt(null);
+  };
+
   return (
     <div className="mail-frame-shell">
       {isHtml ? (
-        <span className="mail-trust-badge" title="脚本已禁用 · 外链新窗口打开 · 内嵌图可点击放大">
+        <span className="mail-trust-badge" title="脚本已禁用 · 外链需确认后打开 · 追踪链已解包">
           已隔离
         </span>
       ) : null}
+      {linkPrompt?.kind === 'http' && (
+        <div className={'mail-link-prompt' + (linkPrompt.mismatch ? ' warn' : '')} role="dialog" aria-label="打开链接">
+          <div className="mail-link-prompt-body">
+            <b>打开链接？</b>
+            <code className="mail-link-url" title={linkPrompt.final}>
+              {linkPrompt.final}
+            </code>
+            {linkPrompt.unwrapped || linkPrompt.tracked ? (
+              <small className="mail-link-meta">已解开追踪跳转{linkPrompt.host ? ` · ${linkPrompt.host}` : ''}</small>
+            ) : null}
+            {linkPrompt.mismatch ? (
+              <small className="mail-link-meta warn">
+                显示为 {linkPrompt.mismatch.shown}，实际指向 {linkPrompt.mismatch.real}
+              </small>
+            ) : null}
+          </div>
+          <div className="mail-link-prompt-actions">
+            <button type="button" className="btn-primary sm" onClick={() => openExternal(linkPrompt.final)}>
+              打开
+            </button>
+            <button type="button" className="btn-ghost sm" onClick={() => copyLink(linkPrompt.final)}>
+              复制
+            </button>
+            <button type="button" className="btn-ghost sm" onClick={() => setLinkPrompt(null)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
       <iframe
         ref={ref}
         title="mail-body"
         className={'mail-frame' + (isHtml ? ' html' : '')}
-        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        sandbox="allow-same-origin"
         srcDoc={doc}
         style={{ height }}
       />

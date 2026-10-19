@@ -3,6 +3,7 @@ import { Loader2, X, LogOut, Keyboard, ListTodo, Inbox, AlertCircle, RefreshCw, 
 import { api, qs } from './api.js';
 import { putMessageCache } from './messageCache.js';
 import { enqueueAction, flushActionQueue, actionQueueLength, peekActionQueue, QUEUEABLE_ACTIONS } from './actionQueue.js';
+import { parseMessageDeepLink } from '../../server/mail_links.js';
 
 function readQueueLen() {
   try {
@@ -906,25 +907,45 @@ export default function App() {
     pushComposer(buildComposeState(mode, msg, composeCtx, extra));
   }
 
-  /* 深链：?compose=1 写信；?box=&messageId= Push / 服务号点达读信 */
+  /* 深链：?compose=1 写信；?box=&messageId=&mailboxId= Push / 复制链接 / 服务号点达 */
   useEffect(() => {
     if (boot !== 'ready' || !user) return;
-    try {
-      const sp = new URLSearchParams(window.location.search);
-      const mid = Number(sp.get('messageId') || sp.get('id'));
-      const box = sp.get('box') || 'today';
-      if (Number.isInteger(mid) && mid > 0) {
-        openMessage(mid, { box: ['today', 'waiting', 'inbox', 'unread', 'team'].includes(box) ? box : 'today' });
-        window.history.replaceState({}, '', window.location.pathname);
-        return;
+    const applyDeepLink = (search) => {
+      try {
+        const d = parseMessageDeepLink(search || window.location.search);
+        const boxes = ['today', 'waiting', 'inbox', 'unread', 'team', 'sent', 'starred', 'archive', 'trash', 'junk'];
+        if (d.messageId) {
+          openMessage(d.messageId, {
+            box: boxes.includes(d.box) ? d.box : 'inbox',
+            mailboxId: d.mailboxId || 'all',
+          });
+          window.history.replaceState({}, '', window.location.pathname);
+          return true;
+        }
+        if (d.compose) {
+          window.history.replaceState({}, '', window.location.pathname);
+          openCompose();
+          return true;
+        }
+      } catch {
+        /* ignore */
       }
-      if (sp.get('compose') !== '1') return;
-      window.history.replaceState({}, '', window.location.pathname);
-      openCompose();
-    } catch {
-      /* ignore */
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首屏 ready 时读一次 URL
+      return false;
+    };
+    applyDeepLink();
+    const onSw = (ev) => {
+      const url = ev?.data?.url;
+      if (ev?.data?.type !== 'zm-open' || !url) return;
+      try {
+        const u = new URL(url, window.location.origin);
+        applyDeepLink(u.search);
+      } catch {
+        /* ignore */
+      }
+    };
+    navigator.serviceWorker?.addEventListener?.('message', onSw);
+    return () => navigator.serviceWorker?.removeEventListener?.('message', onSw);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首屏 ready 时读一次 URL；SW 消息可再触发
   }, [boot, user?.id]);
 
   async function followUp(m) {

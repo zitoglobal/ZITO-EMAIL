@@ -1,5 +1,5 @@
 /* ZITO Mail service worker — 缓存壳 + Web Push */
-const CACHE = 'zm-shell-v1';
+const CACHE = 'zm-shell-v2';
 const SHELL = ['/', '/manifest.webmanifest', '/favicon-180.png', '/zito-icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -66,13 +66,25 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || '/';
+  const raw = event.notification.data?.url || '/';
+  const url = new URL(raw, self.location.origin).href;
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      for (const c of clients) {
-        if (c.url.includes(self.location.origin) && 'focus' in c) {
-          c.focus();
-          if (c.navigate) c.navigate(url);
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clientList) => {
+      for (const c of clientList) {
+        if (c.url.startsWith(self.location.origin) && 'focus' in c) {
+          await c.focus();
+          try {
+            c.postMessage({ type: 'zm-open', url });
+          } catch {
+            /* ignore */
+          }
+          if (typeof c.navigate === 'function') {
+            try {
+              await c.navigate(url);
+            } catch {
+              /* postMessage 已足够 */
+            }
+          }
           return;
         }
       }

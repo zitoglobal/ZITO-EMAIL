@@ -13,6 +13,7 @@ import {
 } from '../utils.js';
 import { buildComposeState, signatureHtml, toPayload } from '../compose.js';
 import MailFrame from './MailFrame.jsx';
+import { buildMessageDeepLink, unwrapTrackingUrl } from '../../../server/mail_links.js';
 import { getMessageCache, putMessageCache } from '../messageCache.js';
 import { BrandSymbol } from './Brand.jsx';
 import TimeMenu from './TimeMenu.jsx';
@@ -545,6 +546,15 @@ function InternalNotes({ threadId, address, notes: initialNotes = [], onNotify }
   );
 }
 
+function handleMailtoCompose(onCompose, m) {
+  if (!m || !onCompose) return;
+  onCompose('new', null, {
+    to: [m.to, m.cc].filter(Boolean).join(', '),
+    subject: m.subject || '',
+    body: m.body ? `<div>${String(m.body).replace(/\n/g, '<br>')}</div>` : undefined,
+  });
+}
+
 function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast, primary, onCompose, mailbox, onRule, slaHours, onOpenCustomer, onNotify, onDealChange, viewers, onReloadBody, reloadBusy }) {
   const [allowImages, setAllowImages] = useState(false);
   const [brokenN, setBrokenN] = useState(0);
@@ -709,11 +719,11 @@ function MessageCard({ item, detail, expanded, onToggle, settings, dark, isLast,
           <BodyGuard>
             {isDraft ? (
               <div className="draft-box">
-                <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} onImageClick={onImageClick} onBrokenChange={onBrokenChange} />
+                <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} onImageClick={onImageClick} onBrokenChange={onBrokenChange} onMailto={(x) => handleMailtoCompose(onCompose, x)} />
                 <button type="button" className="btn-ghost sm" onClick={() => onCompose('draft', m)}><FileText size={14} /> 继续编辑草稿</button>
               </div>
             ) : (
-              <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} collapseQuotes onImageClick={onImageClick} onBrokenChange={onBrokenChange} />
+              <MailFrame html={m.html} text={m.text || item.snippet} dark={dark} allowImages={showImages} collapseQuotes onImageClick={onImageClick} onBrokenChange={onBrokenChange} onMailto={(x) => handleMailtoCompose(onCompose, x)} />
             )}
           </BodyGuard>
           <Attachments
@@ -1237,6 +1247,27 @@ export default function Reader({
                 )}
                 <button type="button" role="menuitem" onClick={() => setMenu('move')}><FolderInput size={13} /> 移动到…</button>
                 {base?.snoozeUntil && <button type="button" role="menuitem" onClick={() => act('unsnooze')}><Clock size={13} /> 取消稍后提醒</button>}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={async () => {
+                    setMenu(null);
+                    const link = buildMessageDeepLink({
+                      origin: window.location.origin,
+                      messageId: id,
+                      box: listItem?._section === 'follow' ? 'waiting' : listItem?._section === 'reply' ? 'today' : 'inbox',
+                      mailboxId: base?.mailboxId,
+                    });
+                    try {
+                      await navigator.clipboard.writeText(link);
+                      notify?.('已复制邮件链接', 'success');
+                    } catch {
+                      notify?.(link, 'info', null, 8000);
+                    }
+                  }}
+                >
+                  <ExternalLink size={13} /> 复制邮件链接
+                </button>
                 <a href={`/api/messages/${id}/raw`} role="menuitem" onClick={() => setMenu(null)}><Download size={13} /> 下载原始邮件</a>
                 <button type="button" role="menuitem" onClick={() => { setMenu(null); window.print(); }}><Printer size={13} /> 打印</button>
               </div>
@@ -1299,8 +1330,11 @@ export default function Reader({
                 <button
                   className="folder-chip action"
                   onClick={() => {
-                    if (msg.unsubscribe.url) window.open(msg.unsubscribe.url, '_blank', 'noopener,noreferrer');
-                    else onCompose('new', null, { to: msg.unsubscribe.mail, subject: 'unsubscribe' });
+                    if (msg.unsubscribe.url) {
+                      const final = unwrapTrackingUrl(msg.unsubscribe.url);
+                      const ok = window.confirm(`确认打开退订链接？\n\n${final}`);
+                      if (ok) window.open(final, '_blank', 'noopener,noreferrer');
+                    } else onCompose('new', null, { to: msg.unsubscribe.mail, subject: 'unsubscribe' });
                   }}
                   title="退订此邮件列表"
                 >
@@ -1583,15 +1617,15 @@ export default function Reader({
                   <div className="translate-compare">
                     <div className="tc-pane">
                       <div className="tc-head">原文{translated.sourceLang ? ` · ${translated.sourceLang}` : ''}</div>
-                      <MailFrame html={msg?.html} text={msg?.text || mailPlainText()} dark={dark} collapseQuotes />
+                      <MailFrame html={msg?.html} text={msg?.text || mailPlainText()} dark={dark} collapseQuotes onMailto={(x) => handleMailtoCompose(onCompose, x)} />
                     </div>
                     <div className="tc-pane">
                       <div className="tc-head">译文 · {lastTranslateTarget === 'English' ? 'English' : '简体中文'}</div>
-                      <MailFrame text={translated.body} dark={dark} />
+                      <MailFrame text={translated.body} dark={dark} onMailto={(x) => handleMailtoCompose(onCompose, x)} />
                     </div>
                   </div>
                 ) : (
-                  <MailFrame text={translated.body} dark={dark} />
+                  <MailFrame text={translated.body} dark={dark} onMailto={(x) => handleMailtoCompose(onCompose, x)} />
                 )}
                 {lastTranslateTarget && (
                   <div style={{ marginTop: 8 }}>

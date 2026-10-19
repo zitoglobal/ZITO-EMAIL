@@ -652,6 +652,50 @@ assert('ftsEscape strips input quotes', ftsEscape('ab"cd') === '"ab"* "cd"*');
 assert('ftsEscape empty', ftsEscape('   ') === '');
 
 {
+  const {
+    unwrapTrackingUrl,
+    decodeProofpointU,
+    linkDisplayMismatch,
+    linkifyPlainText,
+    buildMessageDeepLink,
+    parseMessageDeepLink,
+    classifyMailHref,
+  } = await import('../server/mail_links.js');
+  const safe =
+    'https://nam11.safelinks.protection.outlook.com/?url=' +
+    encodeURIComponent('https://buyer.example.com/po/88') +
+    '&data=xx';
+  assert('unwrap safelinks', unwrapTrackingUrl(safe) === 'https://buyer.example.com/po/88');
+  assert(
+    'unwrap google url',
+    unwrapTrackingUrl('https://www.google.com/url?q=' + encodeURIComponent('https://fabric.example/x')) ===
+      'https://fabric.example/x'
+  );
+  const pp = decodeProofpointU('https-3A__vendor.example.com_quote');
+  assert('proofpoint u decode', pp === 'https://vendor.example.com/quote');
+  assert(
+    'mismatch phishing',
+    !!linkDisplayMismatch('Click www.nike.com now', 'https://evil.example/phish')
+  );
+  assert('mismatch same host ok', !linkDisplayMismatch('nike.com', 'https://www.nike.com/a'));
+  const linked = linkifyPlainText('见 www.zito.test/a 与 sales@brand.com 谢谢。');
+  assert('linkify www', linked.includes('href="https://www.zito.test/a"'));
+  assert('linkify mailto', linked.includes('href="mailto:sales@brand.com"'));
+  assert('linkify trim punct', !linked.includes('谢谢。</a>'));
+  const deep = buildMessageDeepLink({ origin: 'https://mail.zitoglobal.com', messageId: 42, box: 'inbox', mailboxId: 3 });
+  assert('deep link shape', deep === 'https://mail.zitoglobal.com/?messageId=42&box=inbox&mailboxId=3');
+  const parsed = parseMessageDeepLink(deep);
+  assert('deep link parse', parsed.messageId === 42 && parsed.box === 'inbox' && parsed.mailboxId === '3');
+  const mailto = classifyMailHref('mailto:a@b.com?subject=Hi');
+  assert('classify mailto', mailto.kind === 'mailto' && mailto.mailto?.to === 'a@b.com');
+  const enriched = sanitizeMailHtml(
+    `<a href="${safe}">报价</a>`
+  );
+  assert('sanitize unwraps safelinks href', enriched.includes('href="https://buyer.example.com/po/88"'));
+  assert('sanitize keeps tracked attr', enriched.includes('data-zm-tracked='));
+}
+
+{
   const st0 = getFtsStatus();
   assert('fts status shape', typeof st0.busy === 'boolean' && typeof st0.pending === 'boolean' && typeof st0.backfillLeft === 'number');
   // 勿在单测里调用 rebuildFtsIndex（会 DROP 真实库 FTS）；只探一片差量回填
