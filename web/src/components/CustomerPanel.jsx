@@ -57,7 +57,8 @@ export default function CustomerPanel({
   const [styles, setStyles] = useState([]);
   const [samples, setSamples] = useState([]);
   const [assets, setAssets] = useState([]);
-  const [styleDraft, setStyleDraft] = useState({ styleNo: '', colorway: '', unitPrice: '', moq: '', currency: 'USD' });
+  const [styleDraft, setStyleDraft] = useState({ styleNo: '', colorway: '', sizeRange: '', unitPrice: '', moq: '', currency: 'USD' });
+  const [sampleDraft, setSampleDraft] = useState({ sampleType: 'sms', trackingNo: '', status: 'planned' });
   const noteTimer = useRef(null);
 
   const peerAddr = useMemo(() => peerAddressOf(address, sender, listItem), [address, sender, listItem]);
@@ -482,14 +483,15 @@ export default function CustomerPanel({
                       body: {
                         styleNo: styleDraft.styleNo.trim(),
                         colorway: styleDraft.colorway.trim(),
+                        sizeRange: styleDraft.sizeRange.trim(),
                         unitPrice: styleDraft.unitPrice === '' ? null : Number(styleDraft.unitPrice),
                         moq: styleDraft.moq.trim(),
                         currency: styleDraft.currency || 'USD',
                       },
                     });
                     setStyles(r.styles || []);
-                    setStyleDraft({ styleNo: '', colorway: '', unitPrice: '', moq: '', currency: styleDraft.currency || 'USD' });
-                    window.dispatchEvent(new CustomEvent('zm-deal', { detail: { reason: 'style' } }));
+                    setStyleDraft({ styleNo: '', colorway: '', sizeRange: '', unitPrice: '', moq: '', currency: styleDraft.currency || 'USD' });
+                    window.dispatchEvent(new CustomEvent('zm-deal', { detail: { dealId, reason: 'style' } }));
                   } finally {
                     setBusy('');
                   }
@@ -504,6 +506,11 @@ export default function CustomerPanel({
                   value={styleDraft.colorway}
                   onChange={(e) => setStyleDraft((d) => ({ ...d, colorway: e.target.value }))}
                   placeholder="色组"
+                />
+                <input
+                  value={styleDraft.sizeRange}
+                  onChange={(e) => setStyleDraft((d) => ({ ...d, sizeRange: e.target.value }))}
+                  placeholder="尺码"
                 />
                 <input
                   value={styleDraft.unitPrice}
@@ -532,6 +539,40 @@ export default function CustomerPanel({
               ))}
               {!samples.length && <li className="muted"><small>暂无样品记录</small></li>}
             </ul>
+            {dealId && (
+              <form
+                className="glossary-add compact"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setBusy('sample');
+                  try {
+                    const r = await api(`/deals/${dealId}/samples`, { method: 'POST', body: sampleDraft });
+                    setSamples(r.samples || []);
+                    setSampleDraft({ sampleType: 'sms', trackingNo: '', status: 'planned' });
+                    window.dispatchEvent(
+                      new CustomEvent('zm-deal', { detail: { dealId, reason: 'sample', deal: r.deal } })
+                    );
+                  } catch {
+                    /* ignore */
+                  } finally {
+                    setBusy('');
+                  }
+                }}
+              >
+                <select value={sampleDraft.sampleType} onChange={(e) => setSampleDraft((s) => ({ ...s, sampleType: e.target.value }))}>
+                  {Object.entries(SAMPLE_TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <select value={sampleDraft.status} onChange={(e) => setSampleDraft((s) => ({ ...s, status: e.target.value }))}>
+                  {Object.entries(SAMPLE_STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <input
+                  value={sampleDraft.trackingNo}
+                  onChange={(e) => setSampleDraft((s) => ({ ...s, trackingNo: e.target.value }))}
+                  placeholder="快递单号"
+                />
+                <button type="submit" className="btn-ghost xs" disabled={busy === 'sample'}>记样品</button>
+              </form>
+            )}
 
             <div className="customer-section-title" style={{ marginTop: 10 }}>
               <FolderOpen size={12} /> 资料库

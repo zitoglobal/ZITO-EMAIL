@@ -16,7 +16,8 @@ export const LAYOUT_LIMITS = {
   salesListDef: 320,
   salesListCap: 360,
   /** 销售台四栏所需最小视口宽度 */
-  salesRailMinViewport: 1180,
+  /** 销售台四栏；略降以便 13–14″ 笔记本也能常驻客户栏 */
+  salesRailMinViewport: 1100,
 };
 
 const LS_KEY = 'zm_layout_v1';

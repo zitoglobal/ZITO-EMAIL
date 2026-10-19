@@ -1,5 +1,5 @@
 import { db, now } from './db.js';
-import { resolveScopes } from './deals.js';
+import { assertScopeReadable, resolveScopes } from './deals.js';
 
 const KINDS = new Set(['techpack', 'swatch', 'sizechart', 'other']);
 
@@ -17,8 +17,9 @@ function publicAsset(r) {
     styleNo: r.style_no || '',
     createdAt: r.created_at,
     mine: false,
-    previewUrl: `/api/messages/${r.message_id}/attachments/${r.att_index}?inline=1`,
-    downloadUrl: `/api/messages/${r.message_id}/attachments/${r.att_index}`,
+    // 走资料库代理，认领范围内同事可打开（不依赖本箱是否有该邮件）
+    previewUrl: `/api/customer-assets/${r.id}/content?inline=1`,
+    downloadUrl: `/api/customer-assets/${r.id}/content`,
   };
 }
 
@@ -41,7 +42,7 @@ function scopeKeysFor(address, scopeKey) {
 
 /**
  * 认领范围内团队可读：按 scope_key 列资料，不限上传者。
- * 预览/下载仍走原附件 API（需对该邮件有权，或后续统一代理）。
+ * 预览/下载走 /api/customer-assets/:id/content 代理。
  */
 export function listAssets(userId, { address, scopeKey, limit = 50 } = {}) {
   const uniq = scopeKeysFor(address, scopeKey);
@@ -59,6 +60,29 @@ export function listAssets(userId, { address, scopeKey, limit = 50 } = {}) {
       a.mine = r.user_id === userId;
       return a;
     });
+}
+
+export function getAsset(id) {
+  return db.prepare('SELECT * FROM customer_assets WHERE id = ?').get(Number(id));
+}
+
+/** 校验可读后返回行（含原邮件定位信息） */
+export function assertAssetReadable(userId, assetId) {
+  const r = getAsset(assetId);
+  if (!r) throw Object.assign(new Error('资料不存在'), { status: 404 });
+  assertScopeReadable(userId, r.scope_key);
+  return r;
+}
+
+/** 解析资料对应的邮件行（跨上传者邮箱，供 IMAP 取附件） */
+export function messageRowForAsset(asset) {
+  if (!asset) return null;
+  return db
+    .prepare(
+      `SELECT m.id, m.mailbox_id, m.folder, m.uid, m.subject
+       FROM messages m WHERE m.id = ?`
+    )
+    .get(asset.message_id);
 }
 
 export function addAsset(userId, body = {}) {

@@ -62,8 +62,16 @@ function notifyMailboxOwnerOnClaim({ db, emit, push, deal, claimer, body }) {
     .catch?.(() => {});
 }
 
+function assetContentDisposition(kind, name) {
+  const safe = String(name || 'file')
+    .replace(/[\r\n"\\]/g, '_')
+    .slice(0, 180);
+  const ascii = safe.replace(/[^\x20-\x7E]/g, '_') || 'file';
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
+}
+
 export function registerDealsRoutes(app, ctx) {
-  const { auth, wrap, rateLimit, deals, labels, emit, users, push, db, teamQueue, customerAssets, brands, threadNotes } = ctx;
+  const { auth, wrap, rateLimit, deals, labels, emit, users, push, db, teamQueue, customerAssets, brands, threadNotes, imap, repo } = ctx;
   const bump = () => broadcastDeal(emit, users, teamQueue);
 
   app.get(
@@ -323,6 +331,42 @@ export function registerDealsRoutes(app, ctx) {
           admin: req.user.role === 'admin',
         })
       );
+    })
+  );
+
+  /** 认领范围内代理取附件（上传者邮箱 → 当前用户可读） */
+  app.get(
+    '/api/customer-assets/:id/content',
+    auth,
+    wrap(async (req, res) => {
+      if (!imap || !repo) throw Object.assign(new Error('附件服务不可用'), { status: 503 });
+      const asset = customerAssets.assertAssetReadable(req.user.id, Number(req.params.id));
+      const msg = customerAssets.messageRowForAsset(asset);
+      if (!msg) throw Object.assign(new Error('原邮件已不存在'), { status: 404 });
+      const mb = repo.getMailboxById(msg.mailbox_id);
+      if (!mb) throw Object.assign(new Error('原邮箱不可用'), { status: 404 });
+      const a = await imap.getAttachment(mb, msg.folder, msg.uid, asset.att_index);
+      const name = a.filename || asset.filename || 'attachment';
+      const type = String(a.contentType || asset.content_type || 'application/octet-stream').toLowerCase();
+      const baseType = type.split(';')[0].trim();
+      const allowInline = /^(image\/(png|jpe?g|gif|webp|bmp)|application\/pdf|text\/(plain|csv))$/i.test(baseType);
+      const inline = !!(req.query.inline && allowInline);
+      const isPdf = baseType === 'application/pdf';
+      const isText = /^text\//i.test(baseType);
+      let contentType = type;
+      if (inline && isText && !/charset=/i.test(type)) contentType = `${baseType}; charset=utf-8`;
+      if (!inline && isText) contentType = 'application/octet-stream';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', assetContentDisposition(inline ? 'inline' : 'attachment', name));
+      if (!(inline && isPdf)) {
+        res.setHeader(
+          'Content-Security-Policy',
+          "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'"
+        );
+      }
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.send(a.content);
     })
   );
 

@@ -510,6 +510,8 @@ registerDealsRoutes(app, {
   customerAssets,
   brands,
   threadNotes,
+  imap,
+  repo,
 });
 
 app.patch(

@@ -787,6 +787,21 @@ export default function Reader({
   }
 
   useEffect(() => {
+    const onDeal = (e) => {
+      const deal = e.detail?.deal;
+      const mid = e.detail?.messageId;
+      if (!deal) return;
+      setDetails((s) => {
+        if (mid && s[mid]) return { ...s, [mid]: { ...s[mid], deal } };
+        if (id && s[id]) return { ...s, [id]: { ...s[id], deal } };
+        return s;
+      });
+    };
+    window.addEventListener('zm-deal', onDeal);
+    return () => window.removeEventListener('zm-deal', onDeal);
+  }, [id]);
+
+  useEffect(() => {
     if (!id) return;
     const token = ++alive.current;
     setThread(null);
@@ -1566,6 +1581,13 @@ export default function Reader({
                     onNotify={notify}
                     onDealChange={(mid, deal) => {
                       setDetails((s) => (s[mid] ? { ...s, [mid]: { ...s[mid], deal } } : s));
+                      try {
+                        window.dispatchEvent(
+                          new CustomEvent('zm-deal', { detail: { dealId: deal?.id, reason: 'reader', deal, messageId: mid } })
+                        );
+                      } catch {
+                        /* ignore */
+                      }
                     }}
                     viewers={it.id === id ? viewers : undefined}
                     onReloadBody={reloadBody}

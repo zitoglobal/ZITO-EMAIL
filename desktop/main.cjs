@@ -196,14 +196,53 @@ function openExternalUpdate() {
   shell.openExternal('https://github.com/zitoglobal/ZITO-EMAIL/releases');
 }
 
-function buildTray() {
-  tray = new Tray(loadTrayIcon());
-  tray.setToolTip('ZITO 智能邮箱');
+function dataHomePath() {
+  return process.env.ZITO_HOME
+    || path.join(process.env.APPDATA || path.join(require('os').homedir(), 'AppData', 'Roaming'), 'ZITO-EMAIL');
+}
+
+function isOpenAtLogin() {
+  try {
+    return !!app.getLoginItemSettings().openAtLogin;
+  } catch {
+    return false;
+  }
+}
+
+function setOpenAtLogin(enabled) {
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!enabled, openAsHidden: true });
+  } catch (e) {
+    console.warn('[desktop] setLoginItemSettings', e.message);
+  }
+}
+
+function rebuildTrayMenu() {
+  if (!tray) return;
+  const openLogin = isOpenAtLogin();
   const menu = Menu.buildFromTemplate([
     { label: '打开 ZITO 邮箱', click: () => createWindow() },
     {
       label: '在浏览器中打开',
       click: () => shell.openExternal(`http://127.0.0.1:${serverPort}/`),
+    },
+    { type: 'separator' },
+    {
+      label: '打开数据文件夹',
+      click: () => {
+        const home = dataHomePath();
+        fs.mkdirSync(home, { recursive: true });
+        shell.openPath(home);
+      },
+    },
+    {
+      label: openLogin ? '开机自启 ✓' : '开机自启',
+      type: 'checkbox',
+      checked: openLogin,
+      click: (item) => {
+        setOpenAtLogin(item.checked);
+        rebuildTrayMenu();
+      },
     },
     { type: 'separator' },
     {
@@ -231,6 +270,25 @@ function buildTray() {
     },
   ]);
   tray.setContextMenu(menu);
+}
+
+function buildTray() {
+  tray = new Tray(loadTrayIcon());
+  tray.setToolTip('ZITO 智能邮箱');
+  // 首次安装默认开启开机自启（可在托盘关掉）
+  try {
+    const settings = app.getLoginItemSettings();
+    if (!settings.openAtLogin && !settings.wasOpenedAtLogin) {
+      // 仅当用户从未配置过时：用本地标记
+      const flag = path.join(dataHomePath(), 'autostart-asked.json');
+      if (!fs.existsSync(flag)) {
+        setOpenAtLogin(true);
+        fs.mkdirSync(path.dirname(flag), { recursive: true });
+        fs.writeFileSync(flag, JSON.stringify({ at: Date.now(), enabled: true }));
+      }
+    }
+  } catch (_) {}
+  rebuildTrayMenu();
   tray.on('double-click', () => createWindow());
 }
 

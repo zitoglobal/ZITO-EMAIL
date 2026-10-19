@@ -131,6 +131,13 @@ export default function Focus({
         },
       });
       notify?.(`已认领 ${d.deal.scopeLabel}`, 'success');
+      try {
+        window.dispatchEvent(
+          new CustomEvent('zm-deal', { detail: { dealId: d.deal?.id, reason: 'claim', deal: d.deal, messageId: m.id } })
+        );
+      } catch {
+        /* ignore */
+      }
       onRefresh?.();
     } catch (e) {
       notify?.(e.message, 'error');
@@ -172,6 +179,11 @@ export default function Focus({
         r.claimedCount ? 'success' : 'info'
       );
       setChecked?.(new Set());
+      try {
+        window.dispatchEvent(new CustomEvent('zm-deal', { detail: { reason: 'claim-batch', count: r.claimedCount } }));
+      } catch {
+        /* ignore */
+      }
       onRefresh?.();
     } catch (e) {
       notify?.(e.message, 'error');

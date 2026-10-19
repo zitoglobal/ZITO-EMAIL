@@ -482,6 +482,17 @@ function canViewDealEvents(viewerId, scopeKeys, dealRow) {
   return false;
 }
 
+/** 按 scope_key 判断是否可读（资料库 / 备注等跨同事共享） */
+export function assertScopeReadable(userId, scopeKey) {
+  const sk = String(scopeKey || '');
+  if (!sk) throw Object.assign(new Error('无效范围'), { status: 400 });
+  const dealRow = db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(sk);
+  if (!canViewDealEvents(userId, [sk], dealRow)) {
+    throw Object.assign(new Error('无权查看该客户资料'), { status: 403 });
+  }
+  return true;
+}
+
 /** 最近认领/阶段变更（按 scope 或 deal；需有权查看） */
 export function listEvents(viewerId, { dealId, address, limit = 12 } = {}) {
   let dealRow = null;

@@ -2,6 +2,7 @@
  * 为 AI 回复/分诊注入业务状态（阶段、认领、SLA、信号）。
  */
 import * as deals from './deals.js';
+import { getBrand } from './brands.js';
 import { slaFor, tierOf, relationIndex } from './priority.js';
 
 const TIER_TEXT = { vip: 'VIP 客户', customer: '老客户', new: '新联系人', colleague: '同事' };
@@ -58,10 +59,18 @@ export function bizContextForRow(userId, row, settings = {}) {
   const styleLines = styles.map((s) => {
     const bits = [s.styleNo];
     if (s.colorway) bits.push(s.colorway);
+    if (s.sizeRange) bits.push(s.sizeRange);
     if (s.unitPrice != null) bits.push(`${s.currency || deal.currency || 'USD'} ${s.unitPrice}`);
     if (s.moq) bits.push(`MOQ ${s.moq}`);
     return bits.filter(Boolean).join(' / ');
   });
+  const samples = deal?.id ? deals.listSamples(deal.id).slice(0, 4) : [];
+  const sampleLines = samples.map((s) => {
+    const bits = [String(s.sampleType || 'sms').toUpperCase(), s.status || ''];
+    if (s.trackingNo) bits.push(s.trackingNo);
+    return bits.filter(Boolean).join(' · ');
+  });
+  const brandName = deal?.brandId ? getBrand(userId, deal.brandId)?.name || null : null;
   return {
     address: addr,
     tier,
@@ -85,6 +94,10 @@ export function bizContextForRow(userId, row, settings = {}) {
     incoterm: deal?.incoterm || '',
     quoteValidUntil: deal?.quoteValidUntil || null,
     styleLines,
+    sampleLines,
+    brandName,
+    nextFollowAt: deal?.nextFollowAt || null,
+    dealNote: deal?.note ? String(deal.note).slice(0, 160) : '',
   };
 }
 
@@ -102,8 +115,10 @@ export function formatBizContext(ctx) {
     lines.push(`已等待：${ctx.waitingHours}h（SLA ${ctx.slaHours}h）${ctx.overdue ? ' · 已超时，语气可更主动但仍专业' : ''}`);
   }
   if (ctx.signalLabels?.length) lines.push(`业务信号：${ctx.signalLabels.join('、')}`);
+  if (ctx.brandName) lines.push(`品牌：${ctx.brandName}`);
   if (ctx.styleLines?.length) lines.push(`款号报价：${ctx.styleLines.join('；')}`);
   else if (ctx.styleNo) lines.push(`主款号：${ctx.styleNo}`);
+  if (ctx.sampleLines?.length) lines.push(`样品：${ctx.sampleLines.join('；')}`);
   const commerceBits = [];
   if (ctx.amount != null) commerceBits.push(`${ctx.currency || 'USD'} ${ctx.amount}`);
   if (ctx.moq) commerceBits.push(`MOQ ${ctx.moq}`);
@@ -113,6 +128,10 @@ export function formatBizContext(ctx) {
     commerceBits.push(`有效至 ${new Date(ctx.quoteValidUntil).toLocaleDateString('en-CA')}`);
   }
   if (commerceBits.length) lines.push(`成交要点：${commerceBits.join(' · ')}`);
+  if (ctx.nextFollowAt) {
+    lines.push(`下次跟进：${new Date(ctx.nextFollowAt).toLocaleDateString('zh-CN')}`);
+  }
+  if (ctx.dealNote) lines.push(`成交备注：${ctx.dealNote}`);
   if (ctx.stageHint) lines.push(`阶段建议：${ctx.stageHint}`);
   return `\n\n【业务上下文 — 撰写时必须遵守，勿编造上下文中没有的事实】\n${lines.join('\n')}`;
 }

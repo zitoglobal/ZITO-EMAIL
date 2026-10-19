@@ -40,12 +40,19 @@ export default function DealBar({
   const [noteDraft, setNoteDraft] = useState('');
   const [showCommerce, setShowCommerce] = useState(false);
   const [commerce, setCommerce] = useState({
-    styleNo: '', currency: 'USD', amount: '', moq: '', leadDays: '', incoterm: '', quoteValidUntil: '',
+    styleNo: '', currency: 'USD', amount: '', moq: '', leadDays: '', incoterm: '', quoteValidUntil: '', brandId: '',
   });
   const [sampleDraft, setSampleDraft] = useState({ sampleType: 'sms', trackingNo: '', status: 'planned' });
-  const [styleQuick, setStyleQuick] = useState({ styleNo: '', colorway: '', unitPrice: '', moq: '', currency: 'USD' });
+  const [styleQuick, setStyleQuick] = useState({ styleNo: '', colorway: '', sizeRange: '', unitPrice: '', moq: '', currency: 'USD' });
+  const [brandList, setBrandList] = useState([]);
   const hasCompany = !!(scopes?.company || scope?.kind === 'company' || deal?.scopeKind === 'company');
   const visible = !!(scope || deal || scopes?.person);
+
+  useEffect(() => {
+    api('/brands')
+      .then((d) => setBrandList(d.brands || []))
+      .catch(() => setBrandList([]));
+  }, []);
 
   useEffect(() => {
     setNoteDraft(deal?.note || '');
@@ -60,8 +67,9 @@ export default function DealBar({
       quoteValidUntil: deal?.quoteValidUntil
         ? new Date(deal.quoteValidUntil).toISOString().slice(0, 10)
         : '',
+      brandId: deal?.brandId != null ? String(deal.brandId) : '',
     });
-  }, [deal?.id, deal?.note, deal?.styleNo, deal?.amount, deal?.moq, deal?.leadDays, deal?.incoterm, deal?.quoteValidUntil, deal?.currency]);
+  }, [deal?.id, deal?.note, deal?.styleNo, deal?.amount, deal?.moq, deal?.leadDays, deal?.incoterm, deal?.quoteValidUntil, deal?.currency, deal?.brandId]);
 
   useEffect(() => {
     const onHotkey = (e) => {
@@ -249,6 +257,7 @@ export default function DealBar({
         quoteValidUntil: commerce.quoteValidUntil
           ? new Date(commerce.quoteValidUntil + 'T12:00:00').getTime()
           : null,
+        brandId: commerce.brandId === '' ? null : Number(commerce.brandId),
       };
       const d = await api(`/deals/${deal.id}`, { method: 'PATCH', body });
       bumpDeal(d.deal, 'commerce');
@@ -269,12 +278,13 @@ export default function DealBar({
         body: {
           styleNo: styleQuick.styleNo.trim(),
           colorway: styleQuick.colorway.trim(),
+          sizeRange: styleQuick.sizeRange.trim(),
           unitPrice: styleQuick.unitPrice === '' ? null : Number(styleQuick.unitPrice),
           moq: styleQuick.moq.trim(),
           currency: styleQuick.currency || commerce.currency || 'USD',
         },
       });
-      setStyleQuick({ styleNo: '', colorway: '', unitPrice: '', moq: '', currency: styleQuick.currency || 'USD' });
+      setStyleQuick({ styleNo: '', colorway: '', sizeRange: '', unitPrice: '', moq: '', currency: styleQuick.currency || 'USD' });
       bumpDeal(deal, 'style');
       notify('已添加款号', 'success');
     } catch (e) {
@@ -438,6 +448,14 @@ export default function DealBar({
                   </select>
                 </label>
                 <label>报价有效期<input type="date" value={commerce.quoteValidUntil} onChange={(e) => setCommerce((c) => ({ ...c, quoteValidUntil: e.target.value }))} /></label>
+                <label>品牌
+                  <select value={commerce.brandId} onChange={(e) => setCommerce((c) => ({ ...c, brandId: e.target.value }))}>
+                    <option value="">—</option>
+                    {brandList.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </label>
               </div>
               <div className="deal-commerce-actions">
                 <button type="button" className="sl-btn vip" disabled={busy === 'commerce'} onClick={saveCommerce}>
@@ -469,6 +487,11 @@ export default function DealBar({
                   value={styleQuick.colorway}
                   onChange={(e) => setStyleQuick((s) => ({ ...s, colorway: e.target.value }))}
                   placeholder="色组"
+                />
+                <input
+                  value={styleQuick.sizeRange}
+                  onChange={(e) => setStyleQuick((s) => ({ ...s, sizeRange: e.target.value }))}
+                  placeholder="尺码"
                 />
                 <input
                   value={styleQuick.unitPrice}

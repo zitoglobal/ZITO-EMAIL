@@ -435,6 +435,27 @@ assert(
       stageHint: 'x',
     }).includes('成交要点：USD 12 · MOQ 300')
 );
+assert(
+  'formatBizContext brand sample follow',
+  (() => {
+    const block = formatBizContext({
+      stageLabel: '样品',
+      dealMine: true,
+      brandName: 'Elevia',
+      styleLines: ['ZS-2 / S-XL'],
+      sampleLines: ['SMS · shipped · SF123'],
+      nextFollowAt: Date.UTC(2026, 5, 15),
+      dealNote: '等 PP 意见',
+      stageHint: 'x',
+    });
+    return (
+      block.includes('品牌：Elevia')
+      && block.includes('样品：SMS · shipped · SF123')
+      && block.includes('下次跟进：')
+      && block.includes('成交备注：等 PP 意见')
+    );
+  })()
+);
 assert('ASSET_KIND techpack label', ASSET_KIND_LABEL.techpack === 'Tech pack');
 assert('apparel template has stage', APPAREL_EMAIL_TEMPLATES.some((t) => t.stage === 'quote'));
 assert('FOLLOW_SEQ force days sample', FOLLOW_SEQ_DAYS.sample === 7 && FOLLOW_SEQ_DAYS.bulk === 5);
