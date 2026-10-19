@@ -124,10 +124,10 @@ export function escapeHtml(s = '') {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
+import { linkifyPlainText } from '../../server/mail_links.js';
+
 export function textToHtml(text = '') {
-  return escapeHtml(text)
-    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1">$1</a>')
-    .replace(/\n/g, '<br>');
+  return linkifyPlainText(text);
 }
 
 export function sanitizeHtml(html = '') {

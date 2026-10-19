@@ -1,4 +1,5 @@
 import sanitizeHtml from 'sanitize-html';
+import { enrichAnchorAttribs } from './mail_links.js';
 
 /** 允许的邮件内联样式（禁 url()/expression 等外泄与脚本面） */
 const STYLE_SIZE = [/^\d+(?:\.\d+)?(?:px|em|rem|pt|%)?$/i];
@@ -104,7 +105,7 @@ const MAIL_OPTIONS = {
     'sup',
   ]),
   allowedAttributes: {
-    a: ['href', 'name', 'target', 'rel', 'title'],
+    a: ['href', 'name', 'target', 'rel', 'title', 'data-zm-tracked', 'data-zm-mismatch'],
     img: ['src', 'alt', 'title', 'width', 'height', 'border', 'align', 'hspace', 'vspace', 'style', 'class'],
     td: ['colspan', 'rowspan', 'width', 'height', 'align', 'valign', 'bgcolor', 'background', 'style', 'class'],
     th: ['colspan', 'rowspan', 'width', 'height', 'align', 'valign', 'bgcolor', 'background', 'style', 'class'],
@@ -120,18 +121,23 @@ const MAIL_OPTIONS = {
   allowedSchemes: ['http', 'https', 'mailto', 'cid', 'data'],
   allowedSchemesByTag: {
     img: ['http', 'https', 'cid', 'data'],
-    a: ['http', 'https', 'mailto'],
+    a: ['http', 'https', 'mailto', 'tel'],
   },
   /** background 属性也走 scheme 校验（表格背景图常见） */
   allowedSchemesAppliedToAttributes: ['href', 'src', 'cite', 'action', 'formaction', 'background'],
   allowProtocolRelative: false,
   disallowedTagsMode: 'discard',
   transformTags: {
-    '*': (tagName, attribs) => {
-      if (tagName === 'a') {
-        attribs.rel = 'noopener noreferrer';
-        attribs.target = '_blank';
+    a: (tagName, attribs) => {
+      const next = enrichAnchorAttribs(attribs);
+      if (next.style != null) {
+        const scrubbed = scrubStyleAttr(next.style);
+        if (scrubbed) next.style = scrubbed;
+        else delete next.style;
       }
+      return { tagName, attribs: next };
+    },
+    '*': (tagName, attribs) => {
       if (attribs.style != null) {
         const scrubbed = scrubStyleAttr(attribs.style);
         if (scrubbed) attribs.style = scrubbed;

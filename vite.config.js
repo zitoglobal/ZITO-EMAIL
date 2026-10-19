@@ -21,6 +21,7 @@ export default defineConfig({
   },
   server: {
     port: 5310,
+    fs: { allow: ['..'] },
     proxy: { '/api': 'http://localhost:3310' },
   },
 });
