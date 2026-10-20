@@ -586,7 +586,7 @@ export function claim(userId, { address, threadId, note, force = false, scopeKin
     const allow = force && user.role === 'admin';
     if (!allow) {
       const deal = publicDeal(existing, userId);
-      const err = Object.assign(new Error(`${deal.owner.name} 已认领 ${deal.scopeLabel}，请先沟通或请管理员接管`), {
+      const err = Object.assign(new Error(`${deal.owner?.name || '同事'} 已认领 ${deal.scopeLabel}，请先沟通或请管理员接管`), {
         status: 409,
         deal,
       });
@@ -716,7 +716,7 @@ export function splitToPerson(userId, dealId) {
   const existingPerson = db.prepare('SELECT * FROM deals WHERE scope_key = ?').get(person.key);
   if (existingPerson && existingPerson.owner_user_id !== row.owner_user_id) {
     throw Object.assign(
-      new Error(`${publicDeal(existingPerson, userId).owner.name} 已认领此联系人`),
+      new Error(`${publicDeal(existingPerson, userId).owner?.name || '同事'} 已认领此联系人`),
       { status: 409, deal: publicDeal(existingPerson, userId) }
     );
   }

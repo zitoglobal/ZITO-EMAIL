@@ -840,7 +840,8 @@ export default function Reader({
     const onDeal = (e) => {
       const deal = e.detail?.deal;
       const mid = e.detail?.messageId;
-      if (!deal) return;
+      // 同步旗标 deal:true 不是认领记录，写进去会在 DealBar 读 owner.name 时整页崩溃
+      if (!deal || typeof deal !== 'object') return;
       setDetails((s) => {
         if (mid && s[mid]) return { ...s, [mid]: { ...s[mid], deal } };
         if (id && s[id]) return { ...s, [id]: { ...s[id], deal } };

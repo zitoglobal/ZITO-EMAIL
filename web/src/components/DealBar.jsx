@@ -369,7 +369,7 @@ export default function DealBar({
           {deal && !deal.mine && (
             <>
               <b>
-                {deal.owner.name} 已认领 · {deal.scopeLabel}
+                {deal.owner?.name || '同事'} 已认领 · {deal.scopeLabel}
                 {deal.scopeKind === 'company' ? '（公司）' : ''}
               </b>
               <span>

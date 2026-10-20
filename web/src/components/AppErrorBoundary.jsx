@@ -50,6 +50,23 @@ export default class AppErrorBoundary extends Component {
             >
               刷新页面
             </button>
+            <button
+              type="button"
+              onClick={() => { window.location.href = '/?box=inbox'; }}
+              style={{
+                height: 36,
+                marginLeft: 8,
+                padding: '0 16px',
+                borderRadius: 8,
+                border: '1px solid #d5d9e2',
+                background: '#fff',
+                color: '#1f2330',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              回到收件箱
+            </button>
           </div>
         </div>
       );

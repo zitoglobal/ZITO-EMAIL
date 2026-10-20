@@ -52,7 +52,12 @@ export function useRealtimeMail({
     es.addEventListener('sync', (e) => {
       const d = parse(e);
       // Sent / 发信本地同步：更快刷新，稳住今日待办与等待
-      if (d?.deal) window.dispatchEvent(new CustomEvent('zm-deal', { detail: d }));
+      // deal:true 只是「认领有变、请刷新」；不能当成认领对象写进读信，否则 owner.name 会把整站打崩
+      if (d?.deal && typeof d.deal === 'object') {
+        window.dispatchEvent(new CustomEvent('zm-deal', { detail: d }));
+      } else if (d?.deal) {
+        window.dispatchEvent(new CustomEvent('zm-deal', { detail: { reason: 'sync' } }));
+      }
       if (d?.deal || d?.sent) bumpCollab(d);
       if (d?.flagRetryGaveUp) {
         notify('部分已读/星标未能同步到邮箱服务器，请稍后重试或点同步', 'info', null, 10_000);
