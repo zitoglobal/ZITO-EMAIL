@@ -38,7 +38,7 @@ import * as brands from './brands.js';
 import * as customerAssets from './customer_assets.js';
 import * as threadNotes from './thread_notes.js';
 import * as deliverability from './deliverability.js';
-import { foldersForDeepSearch, DEEP_PER_FOLDER } from './deep_search.js';
+import { foldersForDeepSearch, deepFolderCap, deepBudgetExceeded } from './deep_search.js';
 import { assertSafeMailHosts, assertSafeAiBaseUrl, isLoopbackIp } from './net_guard.js';
 import { sanitizeMailHtml } from './sanitize_mail.js';
 import { buildMessageDeepLink } from './mail_links.js';
@@ -964,15 +964,18 @@ app.get(
       });
     }
 
+    let historyPending = false;
     if (opts.box === 'folder' && opts.mailboxId !== 'all') {
       const f = repo.getFolder(opts.mailboxId, opts.folder);
       if (!f) throw httpError(404, '文件夹不存在');
-      if (!f.last_sync) await sync.ensure(opts.mailboxId).syncFolder(opts.folder);
+      if (!f.last_sync) {
+        historyPending = true;
+        sync.ensure(opts.mailboxId).syncFolder(opts.folder).catch(() => {});
+      }
     }
 
     let result = repo.queryMessages(req.user.id, { ...opts, excludePinned: !opts.q && opts.box === 'inbox' });
 
-    let historyPending = false;
     if (!result.nextCursor && !opts.q) {
       const targets = backfillTargets(req.user.id, opts);
       if (targets.length) {
@@ -1026,13 +1029,19 @@ function backfillTargets(userId, opts) {
 async function deepSearch(userId, opts) {
   const mbs = opts.mailboxId === 'all' ? repo.listMailboxes(userId) : [repo.getMailbox(userId, opts.mailboxId)];
   const ids = [];
-  const PER_FOLDER = DEEP_PER_FOLDER;
+  const PER_FOLDER = deepFolderCap(opts.box);
+  const startedAt = Date.now();
   let foldersSearched = 0;
   let foldersCapped = 0;
+  let foldersSkipped = 0;
   await Promise.allSettled(
     mbs.map(async (mb) => {
       const folders = foldersForDeepSearch(repo.listFolders(mb.id), { box: opts.box, folder: opts.folder });
       for (const f of folders) {
+        if (deepBudgetExceeded(startedAt)) {
+          foldersSkipped += 1;
+          continue;
+        }
         foldersSearched += 1;
         const q = opts.q;
         const allUids = (await imap.searchUids(mb, f.path, { or: [{ subject: q }, { from: q }, { to: q }, { body: q }] }))
@@ -1061,12 +1070,15 @@ async function deepSearch(userId, opts) {
       perFolderCap: PER_FOLDER,
       foldersSearched,
       foldersCapped,
+      foldersSkipped,
       hitCount: ids.length,
-      truncated: foldersCapped > 0,
+      truncated: foldersCapped > 0 || foldersSkipped > 0,
       hint:
-        foldersCapped > 0
-          ? `服务器搜索每文件夹最多 ${PER_FOLDER} 封，更早匹配可能未列出`
-          : '已搜索收件箱、已发送、归档，以及最近同步的客户文件夹',
+        foldersSkipped > 0
+          ? `服务器搜索已到时间上限，还有 ${foldersSkipped} 个文件夹没扫完`
+          : foldersCapped > 0
+            ? `服务器搜索每文件夹最多 ${PER_FOLDER} 封，更早匹配可能未列出`
+            : '已搜索收件箱、已发送、归档，以及最近同步的客户文件夹',
     },
   };
 }

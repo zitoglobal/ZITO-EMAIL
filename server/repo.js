@@ -1069,9 +1069,11 @@ function normalizeAttNames(input) {
   return names.join('\n');
 }
 
+const ATT_NAME_LIST_CAP = 80;
+
 /** 旧邮件 att_names 仍为 NULL 的有附件信，供后台补文件名 */
 export function listMissingAttNames(mailboxId, limit = 40) {
-  const n = Math.max(1, Math.min(80, Number(limit) || 40));
+  const n = Math.max(1, Math.min(ATT_NAME_LIST_CAP, Number(limit) || 40));
   return db
     .prepare(
       `SELECT id, folder, uid FROM messages

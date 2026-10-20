@@ -24,6 +24,13 @@ const SENT_IDLE = String(process.env.SENT_IDLE || '').trim() === '1';
 const DRAFTS_INTERVAL = 45_000;
 /** 热同步只对近期这么多个 UID 对账旗标；更早的邮件等全量周期 */
 export const FLAG_HOT_SPAN = 800;
+/** 旧附件名追赶：每轮这么多封；还有剩余就隔几秒再来一轮，补完回到 3 分钟巡检 */
+export const ATT_NAME_BURST = 80;
+export const ATT_NAME_GAP_MS = 8_000;
+
+export function attNameNextDelay(remaining) {
+  return remaining > 0 ? ATT_NAME_GAP_MS : null;
+}
 const FLAG_FULL_MS = 30 * 60_000;
 
 /** 旗标 FETCH 起点。小库（跨度不超过窗口）等价于全量。 */
@@ -53,6 +60,9 @@ class Engine {
     this.fullFlagsAt = new Map();
     /** 同一文件夹的历史回填进行中时不再排队第二次 */
     this.backfillBusy = new Set();
+    /** folder path → 正在进行的 syncFolder，避免列表刷新把同一夹排进队列多次 */
+    this.folderSync = new Map();
+    this.attNameSoon = null;
   }
 
   get mb() {
@@ -108,6 +118,7 @@ class Engine {
   stop() {
     this.stopped = true;
     this.timers.forEach(clearInterval);
+    clearTimeout(this.attNameSoon);
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.sentReconnectTimer);
     for (const t of this.debounce.values()) clearTimeout(t);
@@ -267,12 +278,20 @@ class Engine {
   }
 
   syncFolder(path) {
-    return this.enqueue(async () => {
-      const mb = this.mb;
-      if (!mb) return;
-      if (!repo.getFolder(mb.id, path)) return;
-      await this.syncFolderNow(mb, path);
+    const inflight = this.folderSync.get(path);
+    if (inflight) return inflight;
+    const job = this.enqueue(async () => {
+      try {
+        const mb = this.mb;
+        if (!mb) return;
+        if (!repo.getFolder(mb.id, path)) return;
+        await this.syncFolderNow(mb, path);
+      } finally {
+        this.folderSync.delete(path);
+      }
     });
+    this.folderSync.set(path, job);
+    return job;
   }
 
   async syncFolderNow(mb, path, { fullFlags = false } = {}) {
@@ -436,10 +455,10 @@ class Engine {
       try {
         const mb = this.mb;
         if (!mb || mb.provider === 'demo' || mb.status === 'error') return 0;
-        const rows = repo.listMissingAttNames(mb.id, 40);
+        const rows = repo.listMissingAttNames(mb.id, ATT_NAME_BURST);
         if (!rows.length) return 0;
         const folder = rows[0].folder;
-        const take = rows.filter((r) => r.folder === folder).slice(0, 25);
+        const take = rows.filter((r) => r.folder === folder).slice(0, ATT_NAME_BURST);
         const pending = new Map(take.map((r) => [Number(r.uid), r]));
         await imap.withBox(mb, folder, async (c) => {
           const found = await imap.fetchStructureNames(c, take.map((r) => r.uid).join(','));
@@ -451,6 +470,12 @@ class Engine {
           }
         });
         for (const row of pending.values()) repo.rememberAttachmentNames(row.id, []);
+        const more = repo.listMissingAttNames(mb.id, 1).length;
+        const wait = attNameNextDelay(more);
+        if (wait && !this.stopped) {
+          clearTimeout(this.attNameSoon);
+          this.attNameSoon = setTimeout(() => this.backfillAttNames().catch(() => {}), wait);
+        }
         return take.length;
       } finally {
         this.attNameBusy = false;

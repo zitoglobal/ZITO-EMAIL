@@ -35,8 +35,8 @@ import {
   getFtsStatus, backfillFtsChunk, SEARCH_EXCERPT,
 } from '../server/repo.js';
 import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER, collectAttachmentNames, indexableAttachmentNames } from '../server/imap.js';
-import { flagFetchStart, FLAG_HOT_SPAN } from '../server/sync.js';
-import { foldersForDeepSearch, DEEP_EXTRA_FOLDERS } from '../server/deep_search.js';
+import { flagFetchStart, FLAG_HOT_SPAN, attNameNextDelay, ATT_NAME_GAP_MS } from '../server/sync.js';
+import { foldersForDeepSearch, DEEP_EXTRA_FOLDERS, deepFolderCap, deepBudgetExceeded, DEEP_OPEN_FOLDER_CAP } from '../server/deep_search.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
@@ -976,6 +976,12 @@ assert('flag start rejects empty', flagFetchStart(0, 0, false) == null);
     { box: 'inbox' }
   );
   assert('deep search caps extra folders', many.length === DEEP_EXTRA_FOLDERS);
+  assert('deep cap stays wider inside one folder', deepFolderCap('folder') === DEEP_OPEN_FOLDER_CAP);
+  assert('deep cap stays tight across folders', deepFolderCap('inbox') === 200);
+  assert('deep budget stops after 12s', deepBudgetExceeded(1_000, 13_000) === true);
+  assert('deep budget allows the first folders', deepBudgetExceeded(1_000, 5_000) === false);
+  assert('attachment names keep bursting while some remain', attNameNextDelay(3) === ATT_NAME_GAP_MS);
+  assert('attachment names idle when caught up', attNameNextDelay(0) == null);
 }
 
 {

@@ -661,7 +661,7 @@ export default function MailList({
         {!loading && !all.length && !error && (
           <div className="empty">
             <Inbox size={42} strokeWidth={1.2} />
-            <p>{q ? '没有找到匹配的邮件' : view.box === 'snoozed' ? '没有稍后处理的邮件' : view.box === 'label' ? '这个标签下还没有邮件' : '这里空空如也'}</p>
+            <p>{q ? '没有找到匹配的邮件' : historyPending ? '正在从服务器同步这个文件夹…' : view.box === 'snoozed' ? '没有稍后处理的邮件' : view.box === 'label' ? '这个标签下还没有邮件' : '这里空空如也'}</p>
             {q && !deep && <button className="link-btn" onClick={() => onSearch(q, true)}>在服务器上搜索全文</button>}
           </div>
         )}

@@ -1,7 +1,24 @@
 /** 深搜每文件夹最多带回的新 UID（从新到旧） */
 export const DEEP_PER_FOLDER = 200;
+/** 人已经站在某个文件夹里时，这一夹可以多翻一些 */
+export const DEEP_OPEN_FOLDER_CAP = 500;
 /** 除收件箱 / 已发送 / 归档外，再带上最近同步的客户夹 */
 export const DEEP_EXTRA_FOLDERS = 8;
+/** 服务器全文的时间预算。到点就返回已搜到的，不再干等后面的夹 */
+export const DEEP_BUDGET_MS = 12_000;
+
+export function deepFolderCap(box) {
+  return box === 'folder' ? DEEP_OPEN_FOLDER_CAP : DEEP_PER_FOLDER;
+}
+
+/** 剩余毫秒。小于等于 0 表示这轮不要再开新文件夹 */
+export function deepBudgetLeft(startedAt, now = Date.now(), budget = DEEP_BUDGET_MS) {
+  return budget - (Number(now) - Number(startedAt));
+}
+
+export function deepBudgetExceeded(startedAt, now = Date.now(), budget = DEEP_BUDGET_MS) {
+  return deepBudgetLeft(startedAt, now, budget) <= 0;
+}
 
 const PRIMARY = new Set(['\\Inbox', '\\Sent', '\\Archive']);
 const SKIP_EXTRA = new Set(['\\Inbox', '\\Sent', '\\Archive', '\\Junk', '\\Trash', '\\Drafts']);
