@@ -15,6 +15,7 @@
     "desktop:dev": "electron desktop/main.cjs",
     "dist:win": "npm rebuild better-sqlite3 && npm run build && node scripts/gen-desktop-icon.mjs && node scripts/prepare-desktop-runtime.mjs && electron-builder --win --x64",
     "test": "node scripts/unit-test.mjs",
+    "test:e2e-lite": "node scripts/e2e-lite.mjs",
     "test:reply": "node scripts/test-expects-reply.mjs"
   },
   "dependencies": {
