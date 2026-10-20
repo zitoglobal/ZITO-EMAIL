@@ -1048,8 +1048,35 @@ export function saveBody(pk, { html, text, meta }) {
   }
   return true;
 }
+/** 成交客户最近这些封正文不跟普通信一起裁掉，重建索引后长报价仍可搜 */
+export const DEAL_BODY_KEEP = 800;
+
+export const PRUNE_BODIES_SQL = `
+DELETE FROM bodies
+WHERE message_pk NOT IN (SELECT message_pk FROM bodies ORDER BY fetched_at DESC LIMIT ?)
+  AND message_pk NOT IN (
+    SELECT id FROM (
+      SELECT m.id AS id, m.date AS date
+      FROM messages m
+      JOIN deals d ON d.last_thread_id IS NOT NULL AND d.last_thread_id != ''
+        AND (m.thread_id = d.last_thread_id OR m.message_id = d.last_thread_id)
+      UNION
+      SELECT m.id, m.date
+      FROM messages m
+      JOIN deals d ON d.last_address IS NOT NULL AND d.last_address != ''
+        AND m.from_addr = lower(d.last_address)
+    )
+    ORDER BY date DESC
+    LIMIT ?
+  )`;
+
 export function pruneBodies(keep = 3000) {
-  db.prepare('DELETE FROM bodies WHERE message_pk NOT IN (SELECT message_pk FROM bodies ORDER BY fetched_at DESC LIMIT ?)').run(keep);
+  db.prepare(PRUNE_BODIES_SQL).run(keep, DEAL_BODY_KEEP);
+}
+
+export function pruneBodiesSqlReady() {
+  db.prepare(PRUNE_BODIES_SQL);
+  return true;
 }
 
 function normalizeAttNames(input) {

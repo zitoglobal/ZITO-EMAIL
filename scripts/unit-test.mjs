@@ -32,7 +32,7 @@ import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
 import {
   conversationKey, ftsEscape, isSqliteCorrupt, reclaimStaleOutboxSending, claimOutboxSending,
-  getFtsStatus, backfillFtsChunk, SEARCH_EXCERPT,
+  getFtsStatus, backfillFtsChunk, SEARCH_EXCERPT, DEAL_BODY_KEEP, pruneBodiesSqlReady,
 } from '../server/repo.js';
 import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER, collectAttachmentNames, indexableAttachmentNames } from '../server/imap.js';
 import { flagFetchStart, FLAG_HOT_SPAN, attNameNextDelay, ATT_NAME_GAP_MS } from '../server/sync.js';
@@ -1009,6 +1009,7 @@ assert('flag start rejects empty', flagFetchStart(0, 0, false) == null);
   ]);
   assert('opened mail indexes real attachment names', opened.length === 1 && opened[0] === 'PO-88421.pdf');
   assert('search excerpt keeps a long quote', SEARCH_EXCERPT >= 12000);
+  assert('deal threads keep bodies past the normal cache', DEAL_BODY_KEEP >= 800 && pruneBodiesSqlReady());
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -74,3 +74,44 @@ export default class AppErrorBoundary extends Component {
     return this.props.children;
   }
 }
+
+/** 某一栏崩溃时留下列表和侧栏，不把整个邮箱换成全页错误 */
+export class PaneErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null };
+  }
+
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+
+  componentDidCatch(err, info) {
+    console.error('[pane]', this.props.pane || 'pane', err, info?.componentStack);
+  }
+
+  componentDidUpdate(prev) {
+    if (prev.resetKey !== this.props.resetKey && this.state.err) this.setState({ err: null });
+  }
+
+  render() {
+    if (!this.state.err) return this.props.children;
+    const pane = this.props.pane === 'list' ? 'list-pane' : 'reader-pane';
+    return (
+      <section className={`${pane} empty-reader pane-fallback`}>
+        <p>{this.props.title || '这一栏暂时打不开'}</p>
+        <p className="muted">{this.state.err.message || '未知错误'}。列表和侧栏仍可使用。</p>
+        <div className="qr-actions">
+          <button type="button" className="btn-ghost sm" onClick={() => this.setState({ err: null })}>
+            重试
+          </button>
+          {this.props.onClose ? (
+            <button type="button" className="btn-primary sm" onClick={this.props.onClose}>
+              {this.props.closeLabel || '回到列表'}
+            </button>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
+}

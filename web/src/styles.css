@@ -1838,6 +1838,8 @@ button.stat:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--bo
    阅读区
    ============================================================ */
 .reader-pane { background: var(--panel); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.pane-fallback { padding: 24px; text-align: center; gap: 8px; }
+.pane-fallback .qr-actions { justify-content: center; }
 .empty-reader {
   align-items: center; justify-content: center;
   background:

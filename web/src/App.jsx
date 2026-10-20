@@ -25,6 +25,7 @@ function queueLastErrorHint() {
   }
 }
 import Auth, { HeroBrand } from './components/Auth.jsx';
+import { PaneErrorBoundary } from './components/AppErrorBoundary.jsx';
 import { BrandIcon } from './components/Brand.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import MailList from './components/MailList.jsx';
@@ -1689,6 +1690,13 @@ export default function App() {
         </div>
       ) : null}
 
+      <PaneErrorBoundary
+        pane="list"
+        resetKey={`${view.box}:${view.folder || ''}:${view.labelId || ''}`}
+        title="列表暂时打不开"
+        closeLabel="回到收件箱"
+        onClose={() => setView({ mailboxId: 'all', box: 'inbox' })}
+      >
       {user.role === 'admin' && !mailboxes.length && ['today', 'waiting', 'inbox', 'unread', 'flagged', 'sent', 'deals', 'team', 'insights'].includes(view.box) ? (
         <LazyPane label="加载管理引导">
           <AdminEmpty
@@ -1858,8 +1866,15 @@ export default function App() {
           onUpdateSavedSearch={updateSavedSearchQuery}
         />
       )}
+      </PaneErrorBoundary>
 
       {view.box !== 'scheduled' && (
+        <PaneErrorBoundary
+          pane="reader"
+          resetKey={selectedId || 'none'}
+          title="这封邮件暂时打不开"
+          onClose={() => setSelectedId(null)}
+        >
         <Reader
           id={selectedId}
           listItem={selectedItem}
@@ -1909,11 +1924,19 @@ export default function App() {
             }
           }}
         />
+        </PaneErrorBoundary>
       )}
 
 
       {showCustomerRail && (
         <aside className="customer-rail" aria-label="客户栏">
+          <PaneErrorBoundary
+            pane="reader"
+            resetKey={selectedId || 'rail'}
+            title="客户栏暂时打不开"
+            closeLabel="关闭"
+            onClose={() => setSelectedId(null)}
+          >
           <LazyPane label="加载客户栏">
             <CustomerPanel
               mode="rail"
@@ -1936,6 +1959,7 @@ export default function App() {
               }}
             />
           </LazyPane>
+          </PaneErrorBoundary>
         </aside>
       )}
 
@@ -1943,6 +1967,13 @@ export default function App() {
         <>
           <div className="customer-drawer-mask" onClick={() => setCustomerOpen(false)} />
           <div className="customer-drawer" role="dialog" aria-modal="true" aria-label="客户">
+            <PaneErrorBoundary
+              pane="reader"
+              resetKey={customerCtx?.address || 'drawer'}
+              title="客户栏暂时打不开"
+              closeLabel="关闭"
+              onClose={() => setCustomerOpen(false)}
+            >
             <LazyPane label="加载客户">
               <CustomerPanel
                 mode="drawer"
@@ -1966,6 +1997,7 @@ export default function App() {
                 }}
               />
             </LazyPane>
+            </PaneErrorBoundary>
           </div>
         </>
       )}
