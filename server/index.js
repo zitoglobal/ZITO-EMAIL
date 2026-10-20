@@ -38,6 +38,7 @@ import * as brands from './brands.js';
 import * as customerAssets from './customer_assets.js';
 import * as threadNotes from './thread_notes.js';
 import * as deliverability from './deliverability.js';
+import { foldersForDeepSearch, DEEP_PER_FOLDER } from './deep_search.js';
 import { assertSafeMailHosts, assertSafeAiBaseUrl, isLoopbackIp } from './net_guard.js';
 import { sanitizeMailHtml } from './sanitize_mail.js';
 import { buildMessageDeepLink } from './mail_links.js';
@@ -971,14 +972,14 @@ app.get(
 
     let result = repo.queryMessages(req.user.id, { ...opts, excludePinned: !opts.q && opts.box === 'inbox' });
 
+    let historyPending = false;
     if (!result.nextCursor && !opts.q) {
       const targets = backfillTargets(req.user.id, opts);
       if (targets.length) {
-        await Promise.race([
-          Promise.allSettled(targets.map((t) => sync.ensure(t.mailbox_id).backfill(t.path))),
-          new Promise((r) => setTimeout(r, 20_000)),
-        ]);
-        result = repo.queryMessages(req.user.id, { ...opts, excludePinned: !opts.q && opts.box === 'inbox' });
+        historyPending = true;
+        for (const t of targets.slice(0, 6)) {
+          sync.ensure(t.mailbox_id).backfill(t.path).catch(() => {});
+        }
       }
     }
 
@@ -1005,7 +1006,7 @@ app.get(
           : '仅搜本地已同步邮件；更早询价请点「在服务器上搜索全文」',
       };
     }
-    res.json({ ...result, pinned: pinnedLabeled, searchMeta });
+    res.json({ ...result, pinned: pinnedLabeled, searchMeta, historyPending });
   })
 );
 
@@ -1025,20 +1026,19 @@ function backfillTargets(userId, opts) {
 async function deepSearch(userId, opts) {
   const mbs = opts.mailboxId === 'all' ? repo.listMailboxes(userId) : [repo.getMailbox(userId, opts.mailboxId)];
   const ids = [];
-  const PER_FOLDER = 100;
+  const PER_FOLDER = DEEP_PER_FOLDER;
   let foldersSearched = 0;
   let foldersCapped = 0;
   await Promise.allSettled(
     mbs.map(async (mb) => {
-      const folders = repo
-        .listFolders(mb.id)
-        .filter((f) => (opts.box === 'folder' ? f.path === opts.folder : ['\\Inbox', '\\Sent', '\\Archive'].includes(f.special_use)));
+      const folders = foldersForDeepSearch(repo.listFolders(mb.id), { box: opts.box, folder: opts.folder });
       for (const f of folders) {
         foldersSearched += 1;
         const q = opts.q;
-        const allUids = (await imap.searchUids(mb, f.path, { or: [{ subject: q }, { from: q }, { to: q }, { body: q }] })).sort(
-          (a, b) => b - a
-        );
+        const allUids = (await imap.searchUids(mb, f.path, { or: [{ subject: q }, { from: q }, { to: q }, { body: q }] }))
+          .map(Number)
+          .filter((u) => Number.isInteger(u) && u > 0)
+          .sort((a, b) => b - a);
         if (allUids.length > PER_FOLDER) foldersCapped += 1;
         const uids = allUids.slice(0, PER_FOLDER);
         if (!uids.length) continue;
@@ -1066,7 +1066,7 @@ async function deepSearch(userId, opts) {
       hint:
         foldersCapped > 0
           ? `服务器搜索每文件夹最多 ${PER_FOLDER} 封，更早匹配可能未列出`
-          : '已在邮件服务器搜索 Inbox / Sent / Archive',
+          : '已搜索收件箱、已发送、归档，以及最近同步的客户文件夹',
     },
   };
 }

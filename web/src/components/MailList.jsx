@@ -358,7 +358,7 @@ function RowImpl({ m, mb, showMailbox, selected, checked, onSelect, onToggleChec
 export const Row = React.memo(RowImpl);
 
 export default function MailList({
-  title, subtitle, view, mailboxMap, messages, pinned, loading, loadingMore, hasMore, onLoadMore, selectedId, onSelect,
+  title, subtitle, view, mailboxMap, messages, pinned, loading, loadingMore, historyPending, hasMore, onLoadMore, selectedId, onSelect,
   checked, setChecked, category, setCategory, showCategories, q, deep, onSearch, onRefresh, refreshing, onAction, moveFolders,
   labels = [], onToggleLabels, onCreateLabel,
   onSaveSearch, onUpdateSavedSearch, activeSavedSearch = null,
@@ -675,9 +675,15 @@ export default function MailList({
         {topPad > 0 && <div style={{ height: topPad }} aria-hidden />}
         {visibleMessages.map((m) => <Row key={m.id} {...rowProps(m)} />)}
         {botPad > 0 && <div style={{ height: botPad }} aria-hidden />}
-        {hasMore && (
-          <div ref={sentinel} className="load-more">
-            {loadingMore ? <><Loader2 size={14} className="spin" /> 正在加载更早的邮件…</> : ' '}
+        {(hasMore || historyPending) && (
+          <div ref={hasMore ? sentinel : undefined} className="load-more">
+            {loadingMore ? (
+              <><Loader2 size={14} className="spin" /> 正在加载更早的邮件…</>
+            ) : historyPending ? (
+              <><Loader2 size={14} className="spin" /> 正在从服务器补更早的邮件…</>
+            ) : (
+              ' '
+            )}
           </div>
         )}
       </div>

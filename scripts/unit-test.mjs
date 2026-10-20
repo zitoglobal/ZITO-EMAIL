@@ -36,6 +36,7 @@ import {
 } from '../server/repo.js';
 import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER, collectAttachmentNames } from '../server/imap.js';
 import { flagFetchStart, FLAG_HOT_SPAN } from '../server/sync.js';
+import { foldersForDeepSearch, DEEP_EXTRA_FOLDERS } from '../server/deep_search.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
@@ -957,6 +958,25 @@ assert('flag hot window skips ancient uid', flagFetchStart(10, 5000, false) === 
 assert('flag full starts at min', flagFetchStart(10, 5000, true) === 10);
 assert('flag small mailbox is full', flagFetchStart(10, 40, false) === 10);
 assert('flag start rejects empty', flagFetchStart(0, 0, false) == null);
+
+{
+  const folders = [
+    { path: 'INBOX', special_use: '\\Inbox', last_sync: 1 },
+    { path: 'Sent', special_use: '\\Sent', last_sync: 1 },
+    { path: 'Junk', special_use: '\\Junk', last_sync: 9 },
+    { path: '客户/A', special_use: '', last_sync: 50 },
+    { path: '客户/B', special_use: '', last_sync: 40 },
+  ];
+  const wide = foldersForDeepSearch(folders, { box: 'inbox' }).map((f) => f.path);
+  assert('deep search keeps inbox sent and recent customer folders', wide.includes('INBOX') && wide.includes('Sent') && wide.includes('客户/A') && !wide.includes('Junk'));
+  const only = foldersForDeepSearch(folders, { box: 'folder', folder: '客户/B' }).map((f) => f.path);
+  assert('deep search stays in the open folder', only.length === 1 && only[0] === '客户/B');
+  const many = foldersForDeepSearch(
+    Array.from({ length: 20 }, (_, i) => ({ path: 'C' + i, special_use: '', last_sync: i + 1 })),
+    { box: 'inbox' }
+  );
+  assert('deep search caps extra folders', many.length === DEEP_EXTRA_FOLDERS);
+}
 
 {
   const names = collectAttachmentNames({

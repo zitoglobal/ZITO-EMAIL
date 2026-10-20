@@ -119,6 +119,7 @@ export default function App() {
   const [list, setList] = useState({ messages: [], pinned: [], nextCursor: null });
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [historyPending, setHistoryPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [listError, setListError] = useState('');
   const [selectedId, setSelectedId] = useState(null);
@@ -413,6 +414,7 @@ export default function App() {
             })
         );
         if (id !== reqId.current) return;
+        setHistoryPending(!!data.historyPending);
         if (!append) setSearchMeta(data.searchMeta || (data.deep ? data.deepMeta : null) || null);
         setList((p) => {
           if (append) {
@@ -1812,6 +1814,7 @@ export default function App() {
           pinned={list.pinned}
           loading={loading}
           loadingMore={loadingMore}
+          historyPending={historyPending}
           hasMore={!!list.nextCursor}
           onLoadMore={() => loadList({ append: true })}
           selectedId={selectedId}

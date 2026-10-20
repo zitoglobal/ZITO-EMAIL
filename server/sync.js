@@ -51,6 +51,8 @@ class Engine {
     this.timers = [];
     /** folder path → 上次全量旗标对账时间 */
     this.fullFlagsAt = new Map();
+    /** 同一文件夹的历史回填进行中时不再排队第二次 */
+    this.backfillBusy = new Set();
   }
 
   get mb() {
@@ -424,25 +426,33 @@ class Engine {
     }
   }
 
-  /** 列表滚动到底部时，从服务器回填更早的邮件 */
+  /** 列表到底时后台回填更早的邮件，不占住本次列表请求 */
   backfill(path, count = 200) {
+    if (this.backfillBusy.has(path)) return Promise.resolve(0);
+    this.backfillBusy.add(path);
     return this.enqueue(async () => {
-      const mb = this.mb;
-      const folderRow = repo.getFolder(mb.id, path);
-      if (!folderRow) return 0;
-      if (!folderRow.last_sync) {
-        await this.syncFolderNow(mb, path);
-        return repo.countCached(mb.id, path);
+      try {
+        const mb = this.mb;
+        const folderRow = repo.getFolder(mb.id, path);
+        if (!folderRow) return 0;
+        if (!folderRow.last_sync) {
+          await this.syncFolderNow(mb, path);
+          return repo.countCached(mb.id, path);
+        }
+        const min = repo.minUid(mb.id, path);
+        if (min <= 1) return 0;
+        return await imap.withBox(mb, path, async (c) => {
+          const uids = ((await c.search({ uid: `1:${min - 1}` }, { uid: true })) || []).map(Number).sort((a, b) => a - b);
+          const take = uids.slice(-count);
+          if (!take.length) return 0;
+          const items = await imap.fetchEnvelopes(c, take.join(','), { uid: true });
+          const n = repo.upsertMessages(mb.id, path, items).length;
+          if (n) emit(mb.user_id, 'sync', { mailboxId: mb.id, folder: path, added: n, history: true });
+          return n;
+        });
+      } finally {
+        this.backfillBusy.delete(path);
       }
-      const min = repo.minUid(mb.id, path);
-      if (min <= 1) return 0;
-      return imap.withBox(mb, path, async (c) => {
-        const uids = ((await c.search({ uid: `1:${min - 1}` }, { uid: true })) || []).map(Number).sort((a, b) => a - b);
-        const take = uids.slice(-count);
-        if (!take.length) return 0;
-        const items = await imap.fetchEnvelopes(c, take.join(','), { uid: true });
-        return repo.upsertMessages(mb.id, path, items).length;
-      });
     });
   }
 }
