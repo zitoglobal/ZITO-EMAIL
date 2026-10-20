@@ -185,6 +185,35 @@ export function collectAttachmentNames(structure) {
   return walkStructure(structure).names || [];
 }
 
+/** 已打开邮件的附件元数据 → 可检索文件名（跳过内联图和「附件1」占位） */
+export function indexableAttachmentNames(attachments = []) {
+  const names = [];
+  for (const a of attachments || []) {
+    const name = String(a?.filename || '')
+      .replace(/[\r\n\0]/g, ' ')
+      .trim()
+      .slice(0, 180);
+    if (!name || /^附件\d+$/.test(name)) continue;
+    const isImg = /^image\//i.test(a?.contentType || '');
+    if (isImg && (a.inline || a.usedInBody)) continue;
+    if (names.includes(name)) continue;
+    names.push(name);
+    if (names.length >= 12) break;
+  }
+  return names;
+}
+
+/** 只拉 BODYSTRUCTURE，给历史附件名回填用 */
+export async function fetchStructureNames(client, range) {
+  const out = new Map();
+  const spec = String(range || '').trim();
+  if (!spec) return out;
+  for await (const msg of client.fetch(spec, { uid: true, bodyStructure: true }, { uid: true })) {
+    out.set(Number(msg.uid), collectAttachmentNames(msg.bodyStructure));
+  }
+  return out;
+}
+
 function walkStructure(node, out = { text: null, html: null, attachments: 0, names: [] }) {
   if (!node) return out;
   if (node.childNodes?.length) {

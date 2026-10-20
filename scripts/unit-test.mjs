@@ -32,9 +32,9 @@ import { assertPasswordStrength } from '../server/users.js';
 import { STAGE_TO_LABEL } from '../server/labels.js';
 import {
   conversationKey, ftsEscape, isSqliteCorrupt, reclaimStaleOutboxSending, claimOutboxSending,
-  getFtsStatus, backfillFtsChunk,
+  getFtsStatus, backfillFtsChunk, SEARCH_EXCERPT,
 } from '../server/repo.js';
-import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER, collectAttachmentNames } from '../server/imap.js';
+import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER, collectAttachmentNames, indexableAttachmentNames } from '../server/imap.js';
 import { flagFetchStart, FLAG_HOT_SPAN } from '../server/sync.js';
 import { foldersForDeepSearch, DEEP_EXTRA_FOLDERS } from '../server/deep_search.js';
 import { queueScore } from '../server/team_queue.js';
@@ -996,6 +996,13 @@ assert('flag start rejects empty', flagFetchStart(0, 0, false) == null);
     ],
   });
   assert('attachment name collected', names.length === 1 && names[0] === 'PO-88421.pdf');
+  const opened = indexableAttachmentNames([
+    { filename: 'PO-88421.pdf', contentType: 'application/pdf' },
+    { filename: 'image.png', contentType: 'image/png', inline: true, usedInBody: true },
+    { filename: '附件1', contentType: 'application/octet-stream' },
+  ]);
+  assert('opened mail indexes real attachment names', opened.length === 1 && opened[0] === 'PO-88421.pdf');
+  assert('search excerpt keeps a long quote', SEARCH_EXCERPT >= 12000);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

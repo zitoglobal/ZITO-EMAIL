@@ -87,6 +87,8 @@ class Engine {
         if (p) this.syncFolder(p).catch(() => {});
       }, DRAFTS_INTERVAL)
     );
+    this.timers.push(setTimeout(() => this.backfillAttNames().catch(() => {}), 20_000));
+    this.timers.push(setInterval(() => this.backfillAttNames().catch(() => {}), 3 * 60_000));
     this.connectWatcher();
     if (SENT_IDLE) this.connectSentWatcher();
     // 未识别 Sent 时「已回仍待办」会偏慢，打日志并给前端一次提示
@@ -424,6 +426,36 @@ class Engine {
         }
       }
     }
+  }
+
+  /** 有附件但还没文件名的旧邮件：每轮只问一个文件夹的 BODYSTRUCTURE */
+  backfillAttNames() {
+    if (this.attNameBusy) return Promise.resolve(0);
+    this.attNameBusy = true;
+    return this.enqueue(async () => {
+      try {
+        const mb = this.mb;
+        if (!mb || mb.provider === 'demo' || mb.status === 'error') return 0;
+        const rows = repo.listMissingAttNames(mb.id, 40);
+        if (!rows.length) return 0;
+        const folder = rows[0].folder;
+        const take = rows.filter((r) => r.folder === folder).slice(0, 25);
+        const pending = new Map(take.map((r) => [Number(r.uid), r]));
+        await imap.withBox(mb, folder, async (c) => {
+          const found = await imap.fetchStructureNames(c, take.map((r) => r.uid).join(','));
+          for (const [uid, names] of found) {
+            const row = pending.get(Number(uid));
+            if (!row) continue;
+            repo.rememberAttachmentNames(row.id, names);
+            pending.delete(Number(uid));
+          }
+        });
+        for (const row of pending.values()) repo.rememberAttachmentNames(row.id, []);
+        return take.length;
+      } finally {
+        this.attNameBusy = false;
+      }
+    });
   }
 
   /** 列表到底时后台回填更早的邮件，不占住本次列表请求 */

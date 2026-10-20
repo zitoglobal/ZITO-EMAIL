@@ -75,6 +75,9 @@ export function updateFolderState(mailboxId, path, patch) {
   });
 }
 
+/** 打开过的正文摘录上限。正文缓存被清后，重建全文索引仍能搜到这段 */
+export const SEARCH_EXCERPT = 12000;
+
 // ---------- 邮件 ----------
 export const upsertMessages = tx((mailboxId, folder, items) => {
   const mb = getMailboxById(mailboxId);
@@ -119,7 +122,7 @@ export const upsertMessages = tx((mailboxId, folder, items) => {
       // 入库即用正文预览算意图（不再只靠 200 字 snippet）
       signals: signalsOf(m.subject, preview).join(','),
       att_names: attNames,
-      search_excerpt: [attNames, preview].filter(Boolean).join('\n').slice(0, 4000),
+      search_excerpt: [attNames, preview].filter(Boolean).join('\n').slice(0, SEARCH_EXCERPT),
     });
     if (info.changes) {
       const id = Number(info.lastInsertRowid);
@@ -1017,7 +1020,14 @@ export function saveBody(pk, { html, text, meta }) {
   const row = db.prepare('SELECT subject, snippet, from_name, from_addr, att_names FROM messages WHERE id = ?').get(pk);
   if (row) {
     refreshSignals(pk, row.subject, fitted.text || row.snippet || '');
-    const excerpt = [row.att_names, fitted.text || ''].filter(Boolean).join('\n').slice(0, 4000);
+    const named =
+      meta && Object.prototype.hasOwnProperty.call(meta, 'indexableNames') ? meta.indexableNames : meta?.attachments;
+    const freshNames = normalizeAttNames(named);
+    const storedNames = freshNames || row.att_names || '';
+    if (freshNames && freshNames !== (row.att_names || '')) {
+      db.prepare('UPDATE messages SET att_names = ? WHERE id = ?').run(freshNames, pk);
+    }
+    const excerpt = [storedNames, fitted.text || ''].filter(Boolean).join('\n').slice(0, SEARCH_EXCERPT);
     try {
       db.prepare('UPDATE messages SET search_excerpt = ? WHERE id = ?').run(excerpt, pk);
     } catch {
@@ -1029,7 +1039,7 @@ export function saveBody(pk, { html, text, meta }) {
         snippet: row.snippet,
         fromName: row.from_name,
         fromAddr: row.from_addr,
-        attNames: row.att_names || '',
+        attNames: storedNames,
         body: fitted.text || '',
       });
     } catch {
@@ -1040,6 +1050,69 @@ export function saveBody(pk, { html, text, meta }) {
 }
 export function pruneBodies(keep = 3000) {
   db.prepare('DELETE FROM bodies WHERE message_pk NOT IN (SELECT message_pk FROM bodies ORDER BY fetched_at DESC LIMIT ?)').run(keep);
+}
+
+function normalizeAttNames(input) {
+  const list = Array.isArray(input)
+    ? input.map((a) => (typeof a === 'string' ? a : a?.filename))
+    : String(input || '').split('\n');
+  const names = [];
+  for (const raw of list) {
+    const name = String(raw || '')
+      .replace(/[\r\n\0]/g, ' ')
+      .trim()
+      .slice(0, 180);
+    if (!name || /^附件\d+$/.test(name) || names.includes(name)) continue;
+    names.push(name);
+    if (names.length >= 12) break;
+  }
+  return names.join('\n');
+}
+
+/** 旧邮件 att_names 仍为 NULL 的有附件信，供后台补文件名 */
+export function listMissingAttNames(mailboxId, limit = 40) {
+  const n = Math.max(1, Math.min(80, Number(limit) || 40));
+  return db
+    .prepare(
+      `SELECT id, folder, uid FROM messages
+       WHERE mailbox_id = ? AND has_att = 1 AND att_names IS NULL
+       ORDER BY date DESC LIMIT ?`
+    )
+    .all(mailboxId, n);
+}
+
+/**
+ * 写入附件文件名并刷新全文索引。已有文件名则不动。
+ * names 为空时只把 NULL 标成空串，避免反复去服务器问同一封。
+ */
+export function rememberAttachmentNames(pk, names) {
+  const attNames = normalizeAttNames(names);
+  const row = db
+    .prepare('SELECT id, subject, snippet, from_name, from_addr, att_names, search_excerpt FROM messages WHERE id = ?')
+    .get(pk);
+  if (!row) return false;
+  if (row.att_names != null && String(row.att_names).trim()) return false;
+  if (!attNames) {
+    db.prepare('UPDATE messages SET att_names = ? WHERE id = ? AND att_names IS NULL').run('', pk);
+    return false;
+  }
+  const bodyRow = db.prepare('SELECT text FROM bodies WHERE message_pk = ?').get(pk);
+  const body = bodyRow?.text || row.search_excerpt || '';
+  const excerpt = [attNames, body].filter(Boolean).join('\n').slice(0, SEARCH_EXCERPT);
+  db.prepare('UPDATE messages SET att_names = ?, search_excerpt = ? WHERE id = ?').run(attNames, excerpt, pk);
+  try {
+    upsertFts(pk, {
+      subject: row.subject,
+      snippet: row.snippet,
+      fromName: row.from_name,
+      fromAddr: row.from_addr,
+      attNames,
+      body,
+    });
+  } catch {
+    /* fts optional */
+  }
+  return true;
 }
 
 // ---------- 联系人（切片 D：委托 contacts 主数据，双写兼容） ----------

@@ -1095,6 +1095,11 @@ async function loadBody(row, { force = false } = {}) {
     // 仅 mediaVer 旧或占位符未展开时重拉；已 neutralize 的孤儿 cid 不再风暴式 IMAP
     const stale = meta.mediaVer !== imap.MEDIA_BODY_VER || /__ZM_CID_\d+__/.test(cached.html || '');
     if (!stale) {
+      try {
+        repo.rememberAttachmentNames(row.id, imap.indexableAttachmentNames(meta.attachments || []));
+      } catch {
+        /* 附件名补索引失败不挡读信 */
+      }
       const signals = repo.refreshSignals(row.id, row.subject, cached.text || row.snippet || '');
       let html = imap.resolveCidPlaceholders(cached.html, row.id);
       if (/cid:/i.test(html || '')) {
@@ -1113,7 +1118,11 @@ async function loadBody(row, { force = false } = {}) {
     body.html = imap.resolveCidPlaceholders(body.html, row.id, parsed.attachments || []);
     const neut = imap.neutralizeOrphanCids(body.html);
     body.html = neut.html;
-    body.meta = { ...body.meta, cidUnresolved: neut.replaced };
+    body.meta = {
+      ...body.meta,
+      cidUnresolved: neut.replaced,
+      indexableNames: imap.indexableAttachmentNames(body.meta?.attachments || []).join('\n'),
+    };
     repo.saveBody(row.id, body);
     const signals = repo.refreshSignals(row.id, row.subject, body.text || row.snippet || '');
     return { ...body, signals };
