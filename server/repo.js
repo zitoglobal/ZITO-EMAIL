@@ -80,13 +80,14 @@ export const upsertMessages = tx((mailboxId, folder, items) => {
   const mb = getMailboxById(mailboxId);
   const userId = mb?.user_id;
   const st = db.prepare(`INSERT INTO messages
-    (mailbox_id, folder, uid, message_id, thread_id, in_reply_to, subject, from_name, from_addr, to_json, cc_json, date, sort_ts, seen, flagged, answered, has_att, size, snippet, category, signals)
-    VALUES (@mailbox_id, @folder, @uid, @message_id, @thread_id, @in_reply_to, @subject, @from_name, @from_addr, @to_json, @cc_json, @date, @date, @seen, @flagged, @answered, @has_att, @size, @snippet, @category, @signals)
+    (mailbox_id, folder, uid, message_id, thread_id, in_reply_to, subject, from_name, from_addr, to_json, cc_json, date, sort_ts, seen, flagged, answered, has_att, size, snippet, category, signals, att_names, search_excerpt)
+    VALUES (@mailbox_id, @folder, @uid, @message_id, @thread_id, @in_reply_to, @subject, @from_name, @from_addr, @to_json, @cc_json, @date, @date, @seen, @flagged, @answered, @has_att, @size, @snippet, @category, @signals, @att_names, @search_excerpt)
     ON CONFLICT(mailbox_id, folder, uid) DO NOTHING`);
   const upd = db.prepare('UPDATE messages SET seen = ?, flagged = ?, answered = ? WHERE mailbox_id = ? AND folder = ? AND uid = ?');
   const inserted = [];
   for (const m of items) {
     const preview = m.preview || m.snippet || '';
+    const attNames = String(m.attachmentNames || '').slice(0, 2000);
     const threadId = userId
       ? resolveThreadId(userId, {
           messageId: m.messageId,
@@ -117,6 +118,8 @@ export const upsertMessages = tx((mailboxId, folder, items) => {
       category: m.category || 'people',
       // 入库即用正文预览算意图（不再只靠 200 字 snippet）
       signals: signalsOf(m.subject, preview).join(','),
+      att_names: attNames,
+      search_excerpt: [attNames, preview].filter(Boolean).join('\n').slice(0, 4000),
     });
     if (info.changes) {
       const id = Number(info.lastInsertRowid);
@@ -127,6 +130,7 @@ export const upsertMessages = tx((mailboxId, folder, items) => {
           snippet: m.snippet,
           fromName: m.from?.name,
           fromAddr: m.from?.address,
+          attNames,
           body: preview,
         });
       } catch {
@@ -425,9 +429,10 @@ function ftsWrite(fn) {
   }
 }
 
-export function upsertFts(messagePk, { subject = '', snippet = '', fromName = '', fromAddr = '', body = '' } = {}) {
+export function upsertFts(messagePk, { subject = '', snippet = '', fromName = '', fromAddr = '', body = '', attNames = '' } = {}) {
   const fromText = `${fromName} ${fromAddr}`.trim();
-  const row = [messagePk, subject || '', snippet || '', fromText, String(body || '').slice(0, 50000)];
+  const indexed = [attNames, body].filter(Boolean).join('\n').slice(0, 50000);
+  const row = [messagePk, subject || '', snippet || '', fromText, indexed];
   ftsWrite(() => {
     db.prepare('DELETE FROM messages_fts WHERE rowid = ?').run(messagePk);
     db.prepare(
@@ -519,7 +524,7 @@ export function backfillFtsChunk(limit = FTS_BACKFILL_CHUNK) {
   const n = Math.max(1, Math.min(Number(limit) || FTS_BACKFILL_CHUNK, 2000));
   const rows = db
     .prepare(
-      `SELECT m.id, m.subject, m.snippet, m.from_name, m.from_addr, b.text AS body
+      `SELECT m.id, m.subject, m.snippet, m.from_name, m.from_addr, m.att_names, m.search_excerpt, b.text AS body
        FROM messages m
        LEFT JOIN bodies b ON b.message_pk = m.id
        WHERE m.id NOT IN (SELECT rowid FROM messages_fts)
@@ -534,12 +539,13 @@ export function backfillFtsChunk(limit = FTS_BACKFILL_CHUNK) {
   const run = tx(() => {
     for (const r of rows) {
       const fromText = `${r.from_name || ''} ${r.from_addr || ''}`.trim();
+      const indexed = [r.att_names, r.body || r.search_excerpt || ''].filter(Boolean).join('\n').slice(0, 50000);
       try {
         del.run(r.id);
       } catch {
         /* ignore */
       }
-      ins.run(r.id, r.subject || '', r.snippet || '', fromText, String(r.body || '').slice(0, 50000));
+      ins.run(r.id, r.subject || '', r.snippet || '', fromText, indexed);
     }
   });
   run();
@@ -1008,15 +1014,22 @@ export function saveBody(pk, { html, text, meta }) {
     JSON.stringify(metaOut),
     now()
   );
-  const row = db.prepare('SELECT subject, snippet, from_name, from_addr FROM messages WHERE id = ?').get(pk);
+  const row = db.prepare('SELECT subject, snippet, from_name, from_addr, att_names FROM messages WHERE id = ?').get(pk);
   if (row) {
     refreshSignals(pk, row.subject, fitted.text || row.snippet || '');
+    const excerpt = [row.att_names, fitted.text || ''].filter(Boolean).join('\n').slice(0, 4000);
+    try {
+      db.prepare('UPDATE messages SET search_excerpt = ? WHERE id = ?').run(excerpt, pk);
+    } catch {
+      /* column optional on very old probe */
+    }
     try {
       upsertFts(pk, {
         subject: row.subject,
         snippet: row.snippet,
         fromName: row.from_name,
         fromAddr: row.from_addr,
+        attNames: row.att_names || '',
         body: fitted.text || '',
       });
     } catch {

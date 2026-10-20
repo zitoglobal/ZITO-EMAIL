@@ -168,6 +168,8 @@ for (const [name, def] of [
   ['reminded', 'INTEGER NOT NULL DEFAULT 0'],  // 提醒阶段 0→1→2→3（兼容旧的 0/1）
   ['reminded_at', 'INTEGER'],                 // 上次提醒时间，用于冷却
   ['in_reply_to', 'TEXT'],                     // 断链补会话
+  ['att_names', 'TEXT'],                       // 附件文件名，供全文检索
+  ['search_excerpt', 'TEXT'],                  // 正文摘录；重建索引时正文缓存被清仍可搜
 ]) {
   if (!msgCols.has(name)) db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${def}`);
 }

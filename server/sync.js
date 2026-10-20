@@ -22,6 +22,18 @@ const SENT_INTERVAL = 45_000;
 const SENT_IDLE = String(process.env.SENT_IDLE || '').trim() === '1';
 /** Drafts 无 IDLE，短轮询改善多端草稿 */
 const DRAFTS_INTERVAL = 45_000;
+/** 热同步只对近期这么多个 UID 对账旗标；更早的邮件等全量周期 */
+export const FLAG_HOT_SPAN = 800;
+const FLAG_FULL_MS = 30 * 60_000;
+
+/** 旗标 FETCH 起点。小库（跨度不超过窗口）等价于全量。 */
+export function flagFetchStart(minUid, maxUid, full) {
+  const min = Number(minUid) || 0;
+  const max = Number(maxUid) || min;
+  if (min <= 0) return null;
+  if (full) return min;
+  return Math.max(min, max - FLAG_HOT_SPAN + 1);
+}
 
 /** @type {Map<string, Engine>} */
 const engines = new Map();
@@ -37,6 +49,8 @@ class Engine {
     this.sentRetry = 0;
     this.debounce = new Map();
     this.timers = [];
+    /** folder path → 上次全量旗标对账时间 */
+    this.fullFlagsAt = new Map();
   }
 
   get mb() {
@@ -220,7 +234,11 @@ class Engine {
         // Inbox + Sent 优先：今日待办 / 已发未回都依赖两边线程对齐
         const syncRank = (u) => (u === '\\Inbox' ? 0 : u === '\\Sent' ? 1 : 2);
         targets.sort((a, b) => syncRank(a.special_use) - syncRank(b.special_use));
-        for (const f of targets) await this.syncFolderNow(mb, f.path);
+        for (const f of targets) {
+          const last = this.fullFlagsAt.get(f.path) || 0;
+          const fullFlags = !f.last_sync || Date.now() - last >= FLAG_FULL_MS;
+          await this.syncFolderNow(mb, f.path, { fullFlags });
+        }
         repo.setMailboxStatus(mb.id, 'ok');
         emit(mb.user_id, 'mailbox', { id: mb.id, status: 'ok' });
         if (!this.watcher && !this.reconnectTimer) this.connectWatcher();
@@ -253,7 +271,7 @@ class Engine {
     });
   }
 
-  async syncFolderNow(mb, path) {
+  async syncFolderNow(mb, path, { fullFlags = false } = {}) {
     const folderRow = repo.getFolder(mb.id, path);
     if (!folderRow) return;
     const firstSync = !folderRow.last_sync;
@@ -287,13 +305,17 @@ class Engine {
 
           const min = repo.minUid(mb.id, path);
           if (min) {
+            const localMax = repo.maxUid(mb.id, path) || min;
+            const doFull = fullFlags || firstSync;
+            const start = flagFetchStart(min, localMax, doFull);
             const server = new Map();
-            for await (const m of c.fetch(`${min}:*`, { uid: true, flags: true }, { uid: true })) server.set(m.uid, m.flags);
+            for await (const m of c.fetch(`${start}:*`, { uid: true, flags: true }, { uid: true })) server.set(m.uid, m.flags);
             const changes = [];
             const gone = [];
             let visibleMax = 0;
             for (const u of server.keys()) if (u > visibleMax) visibleMax = u;
             for (const r of repo.cachedUids(mb.id, path)) {
+              if (r.uid < start) continue;
               const f = server.get(r.uid);
               if (!f) {
                 // 其他连接刚移入的邮件可能尚未对本会话可见，不能据此判定为已删除
@@ -305,6 +327,7 @@ class Engine {
             }
             if (changes.length) repo.applyFlagChanges(mb.id, path, changes);
             if (gone.length) repo.deleteUids(mb.id, path, gone);
+            if (doFull) this.fullFlagsAt.set(path, Date.now());
           }
         } else {
           repo.clearFolderMessages(mb.id, path);

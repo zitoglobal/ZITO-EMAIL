@@ -175,17 +175,30 @@ export async function listServerFolders(mb) {
 }
 
 // ---------- 信封与预览 ----------
-function walkStructure(node, out = { text: null, html: null, attachments: 0 }) {
+function attachmentFileName(node) {
+  const raw = node?.dispositionParameters?.filename || node?.parameters?.name || '';
+  return String(raw).replace(/[\r\n\0]/g, ' ').trim().slice(0, 180);
+}
+
+/** 从 BODYSTRUCTURE 收集附件文件名（跳过纯内联 cid 图） */
+export function collectAttachmentNames(structure) {
+  return walkStructure(structure).names || [];
+}
+
+function walkStructure(node, out = { text: null, html: null, attachments: 0, names: [] }) {
   if (!node) return out;
   if (node.childNodes?.length) {
     for (const c of node.childNodes) walkStructure(c, out);
     return out;
   }
   const type = String(node.type || '').toLowerCase();
+  const named = attachmentFileName(node);
   const isAttachment =
-    node.disposition === 'attachment' || (!type.startsWith('text/') && (node.dispositionParameters?.filename || node.parameters?.name));
+    node.disposition === 'attachment' || (!type.startsWith('text/') && named);
   if (isAttachment) {
-    if (!(node.disposition === 'inline' && node.id)) out.attachments++;
+    const inlineCid = node.disposition === 'inline' && node.id;
+    if (named && !inlineCid && out.names.length < 12 && !out.names.includes(named)) out.names.push(named);
+    if (!inlineCid) out.attachments++;
     return out;
   }
   const part = node.part || '1';
@@ -348,6 +361,7 @@ export async function fetchEnvelopes(client, range, { uid = true } = {}) {
       flagged: msg.flags?.has('\\Flagged') || false,
       answered: msg.flags?.has('\\Answered') || false,
       hasAttachments: st.attachments > 0,
+      attachmentNames: (st.names || []).join('\n'),
       size: msg.size || 0,
       snippet: pv.snippet || '',
       preview: pv.preview || pv.snippet || '',

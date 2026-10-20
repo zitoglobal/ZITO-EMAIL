@@ -34,7 +34,8 @@ import {
   conversationKey, ftsEscape, isSqliteCorrupt, reclaimStaleOutboxSending, claimOutboxSending,
   getFtsStatus, backfillFtsChunk,
 } from '../server/repo.js';
-import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER } from '../server/imap.js';
+import { threadIdOf, inlineCidImages, resolveCidPlaceholders, neutralizeOrphanCids, isAuthFailure, isTransientFailure, CID_DATA_MAX, MEDIA_BODY_VER, collectAttachmentNames } from '../server/imap.js';
+import { flagFetchStart, FLAG_HOT_SPAN } from '../server/sync.js';
 import { queueScore } from '../server/team_queue.js';
 import { status as oauthStatus } from '../server/oauth.js';
 import { formatBizContext, normalizeTriageActions, triageContextLine } from '../server/ai_context.js';
@@ -950,6 +951,31 @@ assert('ftsEscape empty', ftsEscape('   ') === '');
     aiLocalRejected = true;
   }
   assert('reject AI loopback base', aiLocalRejected);
+}
+
+assert('flag hot window skips ancient uid', flagFetchStart(10, 5000, false) === 5000 - FLAG_HOT_SPAN + 1);
+assert('flag full starts at min', flagFetchStart(10, 5000, true) === 10);
+assert('flag small mailbox is full', flagFetchStart(10, 40, false) === 10);
+assert('flag start rejects empty', flagFetchStart(0, 0, false) == null);
+
+{
+  const names = collectAttachmentNames({
+    childNodes: [
+      { type: 'text/plain', part: '1' },
+      {
+        type: 'application/pdf',
+        disposition: 'attachment',
+        dispositionParameters: { filename: 'PO-88421.pdf' },
+      },
+      {
+        type: 'image/png',
+        disposition: 'inline',
+        id: 'img@x',
+        dispositionParameters: { filename: 'image.png' },
+      },
+    ],
+  });
+  assert('attachment name collected', names.length === 1 && names[0] === 'PO-88421.pdf');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
