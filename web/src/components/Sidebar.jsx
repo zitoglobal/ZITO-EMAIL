@@ -2,14 +2,14 @@ import React, { useState } from 'react';
 import {
   Inbox, Send, FileText, Trash2, Archive, ShieldAlert, Star, Folder, PenSquare, Settings, Sparkles, ChevronRight, Plus, LogOut,
   MailOpen, Clock, CalendarClock, AlertCircle, Loader2, FolderPlus, Layers, ListTodo, Search, LayoutPanelLeft,
-  Columns3,   Briefcase, BookOpen, Tag, Bookmark, MoreHorizontal, Pencil, Trash, ChevronDown, BarChart3, Users,
+  Columns3,   Briefcase, BookOpen, PanelLeft, Rows3, Tag, Bookmark, MoreHorizontal, Pencil, Trash, ChevronDown, BarChart3, Users,
 } from 'lucide-react';
 import { avatarColor, folderDepth, folderLabel, initials, sortFolders } from '../utils.js';
 import { ICON_LG, ICON_MD, ICON_SM, Icon, ip } from '../uiIcons.jsx';
 import { BrandIcon } from './Brand.jsx';
 import { LAYOUT_MODES } from '../layout.js';
 
-const MODE_ICONS = { standard: Columns3, sales: Briefcase, focus: BookOpen };
+const MODE_ICONS = { standard: Columns3, sales: Briefcase, focus: BookOpen, wide: PanelLeft, board: Rows3 };
 
 const ICONS = { '\\Inbox': Inbox, '\\Sent': Send, '\\Drafts': FileText, '\\Trash': Trash2, '\\Archive': Archive, '\\Junk': ShieldAlert, '\\Flagged': Star, '\\All': Layers };
 
@@ -442,7 +442,7 @@ export default function Sidebar({
                   onClick={() => onLayoutMode(m.id)}
                 >
                   <ModeIcon {...ip(iconRail ? 16 : 13)} />
-                  {!iconRail && <span>{m.label}</span>}
+                  {!iconRail && <span>{m.short || m.label}</span>}
                 </button>
               );
             })}

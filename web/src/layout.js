@@ -1,10 +1,34 @@
-/** 分栏宽度与布局模式（标准 / 销售台 / 专注读信） */
+/** 分栏宽度与布局模式（标准 / 销售台 / 专注 / 宽读信 / 宽列表） */
 
 export const LAYOUT_MODES = [
-  { id: 'standard', label: '标准', hint: '经典三栏，客户从抽屉打开', icon: 'columns' },
-  { id: 'sales', label: '销售台', hint: '右侧常驻客户栏（空间足够时）', icon: 'briefcase' },
-  { id: 'focus', label: '专注读信', hint: '侧栏收成图标轨，加宽读信区', icon: 'book' },
+  { id: 'standard', label: '标准', short: '标准', hint: '侧栏、列表、读信。客户从抽屉打开', icon: 'columns' },
+  { id: 'sales', label: '销售台', short: '销售', hint: '右侧常驻客户栏（窗口够宽时）', icon: 'briefcase' },
+  { id: 'focus', label: '专注', short: '专注', hint: '侧栏收成图标，读信更宽', icon: 'book' },
+  { id: 'wide', label: '宽读信', short: '读信', hint: '列表收窄，报价正文更宽', icon: 'wide' },
+  { id: 'board', label: '宽列表', short: '列表', hint: '列表加宽，方便扫大量询盘', icon: 'board' },
 ];
+
+/** 界面强调色。只改操作色，不改 LOGO */
+export const ACCENTS = [
+  { id: 'blue', label: '志拓蓝', swatch: '#0a66ff' },
+  { id: 'navy', label: '海军', swatch: '#123f73' },
+  { id: 'teal', label: '青绿', swatch: '#0f6e78' },
+  { id: 'ink', label: '石墨', swatch: '#3d4a5c' },
+];
+
+export const UI_SCALES = [
+  { id: 'sm', label: '紧凑' },
+  { id: 'md', label: '标准' },
+  { id: 'lg', label: '宽松' },
+];
+
+const MODE_LIST_PRESET = {
+  standard: 360,
+  sales: 320,
+  focus: 300,
+  wide: 280,
+  board: 460,
+};
 
 export const LAYOUT_LIMITS = {
   sidebar: { min: 180, max: 320, def: 252 },
@@ -12,9 +36,8 @@ export const LAYOUT_LIMITS = {
   customer: { min: 240, max: 380, def: 280 },
   focusSidebar: 64,
   focusListDef: 300,
-  /** 销售台下列表略收，给读信留可读宽度 */
+  /** 销售台双击分隔条时，列表回到略窄的默认 */
   salesListDef: 320,
-  salesListCap: 360,
   /** 销售台四栏所需最小视口宽度 */
   /** 销售台四栏；略降以便 13–14″ 笔记本也能常驻客户栏 */
   salesRailMinViewport: 1100,
@@ -30,6 +53,27 @@ export function clamp(n, min, max) {
 
 export function normalizeLayoutMode(mode) {
   return LAYOUT_MODES.some((m) => m.id === mode) ? mode : 'sales';
+}
+
+export function normalizeAccent(id) {
+  return ACCENTS.some((a) => a.id === id) ? id : 'blue';
+}
+
+export function normalizeUiScale(id) {
+  return UI_SCALES.some((s) => s.id === id) ? id : 'md';
+}
+
+/** 切到某布局时，若该布局还没被拖过，用它自己的列表宽度 */
+export function presetForMode(mode, base = {}) {
+  const id = normalizeLayoutMode(mode);
+  return normalizeWidths({ ...base, list: MODE_LIST_PRESET[id] || LAYOUT_LIMITS.list.def });
+}
+
+/** 双击分隔条：列表回到该布局的预设，其余回到全局默认 */
+export function defaultWidth(mode, key) {
+  if (key === 'list') return MODE_LIST_PRESET[normalizeLayoutMode(mode)] || LAYOUT_LIMITS.list.def;
+  const lim = LAYOUT_LIMITS[key];
+  return lim ? lim.def : 0;
 }
 
 export function normalizeWidths(raw = {}) {
@@ -48,28 +92,36 @@ export function widthsFromSettings(settings = {}) {
   });
 }
 
+function normalizeByMode(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const m of LAYOUT_MODES) {
+    if (raw[m.id]) out[m.id] = normalizeWidths(raw[m.id]);
+  }
+  return out;
+}
+
 export function loadLayoutLocal() {
   try {
     const raw = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
     if (!raw || typeof raw !== 'object') return null;
-    return {
-      mode: normalizeLayoutMode(raw.mode),
-      widths: normalizeWidths(raw.widths || raw),
-    };
+    const mode = normalizeLayoutMode(raw.mode);
+    const widths = normalizeWidths(raw.widths || raw);
+    const byMode = normalizeByMode(raw.byMode);
+    if (!byMode[mode]) byMode[mode] = widths;
+    return { mode, widths, byMode };
   } catch {
     return null;
   }
 }
 
-export function saveLayoutLocal(mode, widths) {
+export function saveLayoutLocal(mode, widths, byMode) {
   try {
-    localStorage.setItem(
-      LS_KEY,
-      JSON.stringify({
-        mode: normalizeLayoutMode(mode),
-        widths: normalizeWidths(widths),
-      })
-    );
+    const id = normalizeLayoutMode(mode);
+    const w = normalizeWidths(widths);
+    const saved = normalizeByMode(byMode);
+    saved[id] = w;
+    localStorage.setItem(LS_KEY, JSON.stringify({ mode: id, widths: w, byMode: saved }));
   } catch {
     // ignore quota
   }
@@ -79,23 +131,7 @@ export function saveLayoutLocal(mode, widths) {
 export function effectiveWidths(mode, widths) {
   const w = normalizeWidths(widths);
   if (mode === 'focus') {
-    return {
-      sidebar: LAYOUT_LIMITS.focusSidebar,
-      list: Math.min(w.list, 340),
-      customer: w.customer,
-    };
-  }
-  if (mode === 'sales') {
-    // 略收列表：未自定义时用销售台默认；已拖宽则封顶，保证读信可读
-    const list =
-      w.list === LAYOUT_LIMITS.list.def
-        ? LAYOUT_LIMITS.salesListDef
-        : Math.min(w.list, LAYOUT_LIMITS.salesListCap);
-    return {
-      sidebar: w.sidebar,
-      list,
-      customer: w.customer,
-    };
+    return { sidebar: LAYOUT_LIMITS.focusSidebar, list: w.list, customer: w.customer };
   }
   return w;
 }

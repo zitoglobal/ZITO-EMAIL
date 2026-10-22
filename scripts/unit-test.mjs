@@ -26,6 +26,7 @@ import {
   FOLLOW_SEQ_DAYS, quoteSnippet, scopeMailMatch,
 } from '../server/deals.js';
 import { APPAREL_EMAIL_TEMPLATES, ASSET_KIND_LABEL, FOLLOW_SEQ_DAYS as CLIENT_FOLLOW_SEQ } from '../web/src/apparelPresets.js';
+import { defaultWidth, effectiveWidths, normalizeAccent, normalizeLayoutMode, normalizeUiScale, presetForMode } from '../web/src/layout.js';
 import { isBlockedHostname, assertSafeAiBaseUrl, isLoopbackIp, pinSafeMailHost } from '../server/net_guard.js';
 import { sanitizeMailHtml, scrubStyleAttr } from '../server/sanitize_mail.js';
 import { assertPasswordStrength } from '../server/users.js';
@@ -1010,6 +1011,20 @@ assert('flag start rejects empty', flagFetchStart(0, 0, false) == null);
   assert('opened mail indexes real attachment names', opened.length === 1 && opened[0] === 'PO-88421.pdf');
   assert('search excerpt keeps a long quote', SEARCH_EXCERPT >= 12000);
   assert('deal threads keep bodies past the normal cache', DEAL_BODY_KEEP >= 800 && pruneBodiesSqlReady());
+}
+
+{
+  assert('layout keeps wide and board', normalizeLayoutMode('wide') === 'wide' && normalizeLayoutMode('board') === 'board');
+  assert('unknown layout falls back to sales', normalizeLayoutMode('nope') === 'sales');
+  assert('accent and scale stay on the allowlist', normalizeAccent('teal') === 'teal' && normalizeAccent('rainbow') === 'blue' && normalizeUiScale('lg') === 'lg' && normalizeUiScale('xl') === 'md');
+  const wide = presetForMode('wide', { sidebar: 252, list: 360, customer: 280 });
+  const board = presetForMode('board', { sidebar: 252, list: 360, customer: 280 });
+  assert('wide reading starts with a shorter list', wide.list === 280 && wide.sidebar === 252);
+  assert('board starts with a wider list', board.list === 460);
+  const dragged = effectiveWidths('sales', { sidebar: 252, list: 500, customer: 280 });
+  assert('sales list drag is not capped', dragged.list === 500);
+  assert('focus keeps the icon rail and the dragged list', effectiveWidths('focus', { sidebar: 252, list: 480, customer: 280 }).sidebar === 64 && effectiveWidths('focus', { list: 480 }).list === 480);
+  assert('double-click reset uses that layout list', defaultWidth('sales', 'list') === 320 && defaultWidth('board', 'list') === 460 && defaultWidth('standard', 'sidebar') === 252);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

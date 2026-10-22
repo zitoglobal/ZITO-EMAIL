@@ -37,9 +37,13 @@ import { SMART_VIEWS, dayStart, folderLabel, formatShortDateTime, orderFocus, re
 import { buildComposeState, signatureHtml, toForm } from './compose.js';
 import {
   LAYOUT_LIMITS,
+  defaultWidth,
   effectiveWidths,
   loadLayoutLocal,
+  normalizeAccent,
   normalizeLayoutMode,
+  normalizeUiScale,
+  presetForMode,
   saveLayoutLocal,
   widthsFromSettings,
 } from './layout.js';
@@ -159,6 +163,7 @@ export default function App() {
   const layoutSaveTimer = useRef(null);
   const layoutWidthsRef = useRef(layoutWidths);
   layoutWidthsRef.current = layoutWidths;
+  const layoutByModeRef = useRef(localLayout?.byMode || {});
   const groupRef = useRef(groupMode);
   groupRef.current = groupMode;
 
@@ -249,16 +254,23 @@ export default function App() {
 
   // ---------- 主题 ----------
   useEffect(() => {
+    const root = document.documentElement;
     const apply = () => {
       const t = settings.theme === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : settings.theme || 'light';
-      document.documentElement.dataset.theme = t;
+      root.dataset.theme = t;
     };
     apply();
+    const accent = normalizeAccent(settings.accent);
+    if (accent === 'blue') delete root.dataset.accent;
+    else root.dataset.accent = accent;
+    const ui = normalizeUiScale(settings.uiScale);
+    if (ui === 'md') delete root.dataset.ui;
+    else root.dataset.ui = ui;
     if (settings.theme !== 'system') return;
     const mq = matchMedia('(prefers-color-scheme: dark)');
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
-  }, [settings.theme]);
+  }, [settings.theme, settings.accent, settings.uiScale]);
   const dark = settings.theme === 'dark' || (settings.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
 
   useEffect(() => {
@@ -272,14 +284,17 @@ export default function App() {
     };
   }, []);
 
-  // 从用户设置恢复布局（与 localStorage 双写，设置优先）
+  // 从用户设置恢复布局（与 localStorage 双写，设置优先）。各布局自己的栏宽留在本机。
   useEffect(() => {
     if (!user?.settings) return;
     const s = user.settings;
-    if (s.layoutMode) setLayoutModeState(normalizeLayoutMode(s.layoutMode));
-    if (s.layoutSidebar != null || s.layoutList != null || s.layoutCustomer != null) {
-      setLayoutWidths(widthsFromSettings(s));
-    }
+    const mode = normalizeLayoutMode(s.layoutMode || 'sales');
+    const w = widthsFromSettings(s);
+    setLayoutModeState(mode);
+    layoutWidthsRef.current = w;
+    setLayoutWidths(w);
+    layoutByModeRef.current = { ...layoutByModeRef.current, [mode]: w };
+    saveLayoutLocal(mode, w, layoutByModeRef.current);
   }, [user?.id]); // 仅登录/切换用户时灌入
 
 
@@ -1161,25 +1176,46 @@ export default function App() {
   }
 
   // ---------- 账号 ----------
+  function rememberLayout(mode, widths) {
+    const id = normalizeLayoutMode(mode);
+    layoutByModeRef.current = { ...layoutByModeRef.current, [id]: widths };
+    saveLayoutLocal(id, widths, layoutByModeRef.current);
+  }
+
   async function saveSettings(patch) {
+    let nextPatch = patch;
     if ('layoutMode' in patch || 'layoutSidebar' in patch || 'layoutList' in patch || 'layoutCustomer' in patch) {
       const mode = normalizeLayoutMode(patch.layoutMode ?? layoutMode);
-      if ('layoutMode' in patch) setLayoutModeState(mode);
+      const widthKeys = 'layoutSidebar' in patch || 'layoutList' in patch || 'layoutCustomer' in patch;
       const prev = layoutWidthsRef.current;
-      const w = widthsFromSettings({
-        layoutSidebar: patch.layoutSidebar ?? prev.sidebar,
-        layoutList: patch.layoutList ?? prev.list,
-        layoutCustomer: patch.layoutCustomer ?? prev.customer,
-      });
-      if ('layoutSidebar' in patch || 'layoutList' in patch || 'layoutCustomer' in patch) {
+      let w = prev;
+      if (widthKeys) {
+        w = widthsFromSettings({
+          layoutSidebar: patch.layoutSidebar ?? prev.sidebar,
+          layoutList: patch.layoutList ?? prev.list,
+          layoutCustomer: patch.layoutCustomer ?? prev.customer,
+        });
+      } else if (mode !== layoutMode) {
+        rememberLayout(layoutMode, prev);
+        w = layoutByModeRef.current[mode] || presetForMode(mode, prev);
+      }
+      if ('layoutMode' in patch) setLayoutModeState(mode);
+      if (widthKeys || mode !== layoutMode) {
         layoutWidthsRef.current = w;
         setLayoutWidths(w);
+        rememberLayout(mode, w);
+        nextPatch = {
+          ...patch,
+          layoutMode: mode,
+          layoutSidebar: w.sidebar,
+          layoutList: w.list,
+          layoutCustomer: w.customer,
+        };
       }
-      saveLayoutLocal(mode, w);
     }
-    setUser((u) => ({ ...u, settings: { ...u.settings, ...patch } }));
+    setUser((u) => ({ ...u, settings: { ...u.settings, ...nextPatch } }));
     try {
-      const r = await api('/me/settings', { method: 'PUT', body: patch });
+      const r = await api('/me/settings', { method: 'PUT', body: nextPatch });
       setUser((u) => ({ ...u, settings: r.settings }));
       if ('aiCloudOk' in patch) {
         api('/me' + qs({ dayStart: dayStart() }))
@@ -1201,7 +1237,7 @@ export default function App() {
   function persistLayout(nextMode, nextWidths) {
     const mode = normalizeLayoutMode(nextMode);
     const widths = nextWidths || layoutWidthsRef.current;
-    saveLayoutLocal(mode, widths);
+    rememberLayout(mode, widths);
     if (layoutSaveTimer.current) clearTimeout(layoutSaveTimer.current);
     layoutSaveTimer.current = setTimeout(() => {
       saveSettings({
@@ -1215,22 +1251,27 @@ export default function App() {
 
   function setLayoutMode(mode) {
     const next = normalizeLayoutMode(mode);
+    if (next === layoutMode) return;
+    const prev = layoutWidthsRef.current;
+    rememberLayout(layoutMode, prev);
+    const widths = layoutByModeRef.current[next] || presetForMode(next, prev);
     setLayoutModeState(next);
-    persistLayout(next, layoutWidthsRef.current);
+    layoutWidthsRef.current = widths;
+    setLayoutWidths(widths);
+    persistLayout(next, widths);
   }
 
   function patchLayoutWidth(key, deltaOrReset) {
     setLayoutWidths((prev) => {
       const lim = LAYOUT_LIMITS[key];
+      if (!lim) return prev;
       let nextVal;
-      if (deltaOrReset === 'reset') {
-        // 销售台列表默认略窄，保证读信区可读
-        nextVal = key === 'list' && layoutMode === 'sales' ? LAYOUT_LIMITS.salesListDef : lim.def;
-      } else nextVal = prev[key] + deltaOrReset;
+      if (deltaOrReset === 'reset') nextVal = defaultWidth(layoutMode, key);
+      else nextVal = prev[key] + deltaOrReset;
       nextVal = Math.min(lim.max, Math.max(lim.min, Math.round(nextVal)));
       const next = { ...prev, [key]: nextVal };
       layoutWidthsRef.current = next;
-      saveLayoutLocal(layoutMode, next);
+      rememberLayout(layoutMode, next);
       return next;
     });
   }

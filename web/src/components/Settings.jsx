@@ -4,7 +4,7 @@ import {
   SlidersHorizontal, FileStack, User, Users, Pencil, LogOut, Image, Undo2, MessagesSquare, Rows3, KeyRound, ListTodo, Hourglass, Send,
   BellRing, Crown, BellOff, Languages, BookMarked, LayoutPanelLeft, Tag, ShieldCheck, Hand, Smartphone, Shield, Package,
 } from 'lucide-react';
-import { LAYOUT_MODES } from '../layout.js';
+import { ACCENTS, LAYOUT_MODES, UI_SCALES } from '../layout.js';
 import { api } from '../api.js';
 import {
   MAILBOX_COLORS, fileToInlineDataUrl, htmlToText, insertHtmlAtCursor, insertImageAtCursor, looksLikeHtml, relativeTime,
@@ -624,15 +624,38 @@ function Preferences({ settings, onSave, aiEnabled, aiMeta, notify, onAiCloudCha
         />
       )}
       <Choice icon={settings.theme === 'dark' ? Moon : Sun} label="外观" value={settings.theme} onChange={set('theme')} options={[['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']]} />
+      <div className="pref-block">
+        <div className="pref-label"><LayoutPanelLeft size={15} /> 强调色</div>
+        <div className="accent-picks" role="group" aria-label="强调色">
+          {ACCENTS.map((a) => {
+            const on = (settings.accent || 'blue') === a.id;
+            return (
+              <button key={a.id} type="button" className={on ? 'on' : ''} aria-pressed={on} onClick={() => set('accent')(a.id)}>
+                <i style={{ background: a.swatch }} />
+                {a.label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="hint-line">只改按钮和选中色，标志不变。</p>
+      </div>
+      <Choice icon={Rows3} label="界面大小" value={settings.uiScale || 'md'} onChange={set('uiScale')} options={UI_SCALES.map((s) => [s.id, s.label])} />
       <Choice icon={Rows3} label="列表密度" value={settings.density} onChange={set('density')} options={[['comfortable', '舒适'], ['compact', '紧凑']]} />
-      <Choice
-        icon={LayoutPanelLeft}
-        label="布局模式"
-        value={settings.layoutMode || 'sales'}
-        onChange={set('layoutMode')}
-        options={LAYOUT_MODES.map((m) => [m.id, m.label])}
-      />
-      <p className="hint-line">默认销售台（右侧常驻客户栏，窗口≥1100px）；标准：经典三栏；专注读信：侧栏收成图标轨。栏宽可拖拽，双击分隔条恢复默认。</p>
+      <div className="pref-block">
+        <div className="pref-label"><LayoutPanelLeft size={15} /> 布局</div>
+        <div className="layout-picks" role="group" aria-label="布局">
+          {LAYOUT_MODES.map((m) => {
+            const on = (settings.layoutMode || 'sales') === m.id;
+            return (
+              <button key={m.id} type="button" className={on ? 'on' : ''} aria-pressed={on} onClick={() => set('layoutMode')(m.id)}>
+                <b>{m.label}</b>
+                <span>{m.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="hint-line">每一栏都能拖。拖完会记住这个布局自己的宽度，双击分隔条恢复该布局的默认。销售台在窗口够宽时右侧常驻客户栏；专注模式侧栏收成图标。</p>
+      </div>
       <Choice icon={Image} label="外部图片" value={settings.remoteImages} onChange={set('remoteImages')} options={[['always', '总是显示'], ['contacts', '仅联系人'], ['never', '询问']]} />
       <Choice icon={Undo2} label="撤销发送时长" value={settings.undoSeconds} onChange={set('undoSeconds')} options={[[0, '关闭'], [5, '5 秒'], [10, '10 秒'], [20, '20 秒'], [30, '30 秒']]} />
       <Toggle icon={MessagesSquare} label="会话视图" desc="把同一主题的往来邮件合并展示" checked={settings.conversationView} onChange={set('conversationView')} />

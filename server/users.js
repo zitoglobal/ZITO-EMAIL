@@ -7,7 +7,9 @@ const SESSION_IDLE_TTL = Number(process.env.SESSION_IDLE_DAYS || 14) * 24 * 3600
 /** 绝对上限：自创建起最长存活，防止无限续期 */
 const SESSION_ABS_TTL = Number(process.env.SESSION_ABS_DAYS || 30) * 24 * 3600 * 1000;
 
-const LAYOUT_MODES = new Set(['standard', 'sales', 'focus']);
+const LAYOUT_MODES = new Set(['standard', 'sales', 'focus', 'wide', 'board']);
+const ACCENTS = new Set(['blue', 'navy', 'teal', 'ink']);
+const UI_SCALES = new Set(['sm', 'md', 'lg']);
 const clampInt = (n, min, max, fallback) => {
   const x = Number(n);
   if (!Number.isFinite(x)) return fallback;
@@ -45,18 +47,24 @@ const DEFAULT_SETTINGS = {
    */
   aiCloudOk: true,
   glossary: [],
-  /** 布局：standard 标准三栏 / sales 销售台 / focus 专注读信（成衣默认销售台） */
+  /** 布局：standard / sales / focus / wide 宽读信 / board 宽列表（成衣默认销售台） */
   layoutMode: 'sales',
   layoutSidebar: 252,
   layoutList: 360,
   layoutCustomer: 280,
+  /** 操作色：blue 志拓蓝 / navy / teal / ink。不改 LOGO */
+  accent: 'blue',
+  /** 界面缩放：sm / md / lg */
+  uiScale: 'md',
 };
 
 function sanitizeLayout(merged) {
-  if ('layoutMode' in merged) merged.layoutMode = LAYOUT_MODES.has(merged.layoutMode) ? merged.layoutMode : 'sales';
-  if ('layoutSidebar' in merged) merged.layoutSidebar = clampInt(merged.layoutSidebar, 180, 320, 252);
-  if ('layoutList' in merged) merged.layoutList = clampInt(merged.layoutList, 280, 520, 360);
-  if ('layoutCustomer' in merged) merged.layoutCustomer = clampInt(merged.layoutCustomer, 240, 380, 280);
+  merged.layoutMode = LAYOUT_MODES.has(merged.layoutMode) ? merged.layoutMode : 'sales';
+  merged.layoutSidebar = clampInt(merged.layoutSidebar, 180, 320, 252);
+  merged.layoutList = clampInt(merged.layoutList, 280, 520, 360);
+  merged.layoutCustomer = clampInt(merged.layoutCustomer, 240, 380, 280);
+  merged.accent = ACCENTS.has(merged.accent) ? merged.accent : 'blue';
+  merged.uiScale = UI_SCALES.has(merged.uiScale) ? merged.uiScale : 'md';
   if ('sendAutoClaim' in merged) merged.sendAutoClaim = merged.sendAutoClaim === 'off' ? 'off' : 'auto';
   if ('aiCloudOk' in merged) merged.aiCloudOk = merged.aiCloudOk !== false && merged.aiCloudOk !== 0;
   if ('teamQueueSla' in merged) merged.teamQueueSla = merged.teamQueueSla === 'viewer' ? 'viewer' : 'team';
